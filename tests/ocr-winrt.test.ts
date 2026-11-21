@@ -20,25 +20,37 @@ describe('Offline Windows 11 WinRT OCR & Smart Action Chips', () => {
     const imgPath = path.join(tmpDir, 'ocr-sample.png');
     const psScript = `
 Add-Type -AssemblyName System.Drawing
-$bmp = New-Object System.Drawing.Bitmap(900, 260)
+$bmp = New-Object System.Drawing.Bitmap(960, 280)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.Clear([System.Drawing.Color]::White)
 $font = New-Object System.Drawing.Font('Arial', 24, [System.Drawing.FontStyle]::Bold)
 $brush = [System.Drawing.Brushes]::Black
-$g.DrawString('Заказ оплачен Промокод: PROMO-7788', $font, $brush, 24, 38)
-$g.DrawString('Ссылка https://example.com/pay', $font, $brush, 24, 120)
+$g.DrawString('Заказ оплачен Промокод: PROMO-7788', $font, $brush, 24, 34)
+$g.DrawString('Order paid Link https://example.com/pay', $font, $brush, 24, 128)
 $g.Dispose()
 $bmp.Save('${imgPath.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
+[Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+$langs = [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | ForEach-Object { $_.LanguageTag }
+Write-Output ($langs -join ',')
 `;
-    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
-      windowsHide: true,
-    });
+    const langsOut = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', psScript],
+      {
+        windowsHide: true,
+        encoding: 'utf8',
+      }
+    );
+    const hasRussianOcrPack = /\bru(?:-|\b)/i.test(langsOut);
 
     const ocr = await runWinRtOcr(imgPath, tmpDir);
     expect(ocr.text.length).toBeGreaterThan(10);
     expect(ocr.text).toMatch(/PROMO[- ]?7788/i);
-    expect(ocr.text).toMatch(/Заказ|оплачен/i);
+    expect(ocr.text).toMatch(/Order|paid/i);
+    if (hasRussianOcrPack) {
+      expect(ocr.text).toMatch(/Заказ|оплачен/i);
+    }
 
     const actions = extractActionsFromText(ocr.text);
     expect(actions.some((a) => a.type === 'code' && /PROMO-7788/i.test(a.value))).toBe(true);
