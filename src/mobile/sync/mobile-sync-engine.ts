@@ -4,6 +4,7 @@ import {
   type SupabaseClient,
   type SupportedStorage,
 } from '@supabase/supabase-js';
+import { APP_VERSION } from '@shared/app-version';
 import {
   DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
   DEFAULT_SYNC_SUPABASE_URL,
@@ -30,6 +31,9 @@ import {
   type SyncStatus,
 } from '@shared/sync-contract';
 import type { SecretPayload } from '@shared/types';
+import type { AppLocale } from '@shared/i18n/core';
+import { hasCyrillicChars, isKnownLocalizedMobileMessage } from '@shared/i18n/mobile-dict';
+import { getRuntimeMobileLocale, tm } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 import type { MobileVaultStore } from '../storage/mobile-store';
 import {
@@ -92,36 +96,33 @@ function isAuthFatalError(err: unknown): boolean {
   );
 }
 
-function isRussianMessage(msg: string): boolean {
-  return /[а-яё]/i.test(msg);
-}
-
-export function translateMobileSyncError(err: unknown): string {
+export function translateMobileSyncError(err: unknown, locale?: AppLocale): string {
+  const activeLocale = locale ?? getRuntimeMobileLocale();
   const raw = err instanceof Error ? err.message : String(err ?? '');
   const lower = raw.toLowerCase();
   if (lower.includes('invalid login credentials')) {
-    return 'Неверная почта или пароль';
+    return tm('sync.errInvalidCredentials', undefined, activeLocale);
   }
   if (lower.includes('email not confirmed')) {
-    return 'Почта ещё не подтверждена — перейди по ссылке из письма и нажми «Войти»';
+    return tm('sync.errEmailNotConfirmed', undefined, activeLocale);
   }
   if (lower.includes('user already registered') || lower.includes('already been registered')) {
-    return 'Аккаунт с этой почтой уже существует — переключись на «Войти»';
+    return tm('sync.errAlreadyRegistered', undefined, activeLocale);
   }
   if (lower.includes('password should be at least')) {
-    return 'Пароль должен содержать не менее 6 символов';
+    return tm('sync.errPasswordMin6', undefined, activeLocale);
   }
   if (lower.includes('unable to validate email') || lower.includes('invalid email')) {
-    return 'Проверь формат электронной почты';
+    return tm('sync.errInvalidEmail', undefined, activeLocale);
   }
   if (lower.includes('rate limit') || lower.includes('too many requests')) {
-    return 'Слишком много попыток — подожди минуту и попробуй снова';
+    return tm('sync.errRateLimit', undefined, activeLocale);
   }
   if (lower.includes('provider is not enabled') || lower.includes('unsupported provider')) {
-    return 'Вход через Google временно недоступен на сервере — используй почту и пароль';
+    return tm('sync.errGoogleDisabled', undefined, activeLocale);
   }
   if (lower.includes('access_denied') || lower.includes('oauth cancel')) {
-    return 'Вход через Google отменён';
+    return tm('sync.errGoogleCancelled', undefined, activeLocale);
   }
   if (
     lower.includes('code verifier') ||
@@ -129,7 +130,7 @@ export function translateMobileSyncError(err: unknown): string {
     lower.includes('bad_oauth_state') ||
     lower.includes('pkce')
   ) {
-    return 'Сессия входа через Google устарела — нажми «Войти через Google» ещё раз';
+    return tm('sync.errOauthExpired', undefined, activeLocale);
   }
   if (
     lower.includes('jwt expired') ||
@@ -137,21 +138,26 @@ export function translateMobileSyncError(err: unknown): string {
     lower.includes('refresh_token_not_found') ||
     lower.includes('auth session missing')
   ) {
-    return 'Сессия синхронизации истекла — войди в аккаунт снова';
+    return tm('sync.errSessionExpired', undefined, activeLocale);
   }
   if (lower.includes('row-level security') || lower.includes('permission denied')) {
-    return 'Нет прав доступа к облачному хранилищу — попробуй перезайти в аккаунт';
+    return tm('sync.errAccessDenied', undefined, activeLocale);
   }
   if (lower.includes('duplicate key') || lower.includes('23505')) {
-    return 'Ключ шифрования для этого аккаунта уже создан на другом устройстве';
+    return tm('sync.errEnvelopeExists', undefined, activeLocale);
   }
   if (isNetworkLikeError(err)) {
-    return 'Нет связи с облаком — изменения сохранены на телефоне и уйдут при появлении сети';
+    return tm('sync.errOffline', undefined, activeLocale);
   }
-  if (raw && isRussianMessage(raw) && !/(?:postgrest|postgres|pgrst|sqlstate|jwt)/i.test(raw)) {
+  if (
+    raw &&
+    !/(?:postgrest|postgres|pgrst|sqlstate|jwt)/i.test(raw) &&
+    (isKnownLocalizedMobileMessage(raw, activeLocale) ||
+      (activeLocale === 'ru' && hasCyrillicChars(raw)))
+  ) {
     return raw;
   }
-  return 'Не удалось выполнить синхронизацию — попробуй повторить чуть позже';
+  return tm('sync.errGeneric', undefined, activeLocale);
 }
 
 function isNetworkLikeError(err: unknown): boolean {
@@ -181,6 +187,7 @@ function generateDeviceUuid(): string {
 export class MobileSyncEngine {
   private readonly store: MobileVaultStore;
   private readonly mediaManager: MobileSyncMediaManager;
+  private readonly hasExplicitAppVersion: boolean;
   private appVersion: string;
   private readonly platform: SyncPlatform;
   private readonly kdfIterations: number;
@@ -226,7 +233,8 @@ export class MobileSyncEngine {
   constructor(options: MobileSyncEngineOptions) {
     this.store = options.store;
     this.mediaManager = new MobileSyncMediaManager(this.store);
-    this.appVersion = options.appVersion ?? '1.0.0';
+    this.hasExplicitAppVersion = Boolean(options.appVersion);
+    this.appVersion = options.appVersion ?? APP_VERSION;
     this.platform = options.platform ?? 'android';
     this.deviceName = options.deviceName ?? 'Android Fold';
     this.kdfIterations = options.kdfIterationsOverride ?? SYNC_KDF_ITERATIONS;
@@ -332,7 +340,7 @@ export class MobileSyncEngine {
       }
     }
 
-    if (this.appVersion === '1.0.0' && mobileBridge.isNativeAndroid()) {
+    if (!this.hasExplicitAppVersion && mobileBridge.isNativeAndroid()) {
       try {
         const ver = await mobileBridge.getAppVersion();
         if (ver?.versionName) this.appVersion = ver.versionName;
@@ -619,11 +627,12 @@ export class MobileSyncEngine {
     const normalizedUrl = input.supabaseUrl.trim().replace(/\/+$/, '');
     const cleanKey = input.supabasePublishableKey.trim();
     if (normalizedUrl || cleanKey) {
+      const locale = this.store.getLocale();
       let parsed: URL;
       try {
         parsed = new URL(normalizedUrl);
       } catch {
-        throw new Error('Некорректный адрес облачного сервера');
+        throw new Error(tm('sync.invalidServerUrl', undefined, locale));
       }
       if (
         parsed.protocol !== 'https:' ||
@@ -632,10 +641,10 @@ export class MobileSyncEngine {
         parsed.password ||
         /\s/.test(normalizedUrl)
       ) {
-        throw new Error('Адрес сервера должен начинаться с https://');
+        throw new Error(tm('sync.serverHttpsRequired', undefined, locale));
       }
       if (cleanKey.length < 16) {
-        throw new Error('Укажи корректный публичный ключ сервера');
+        throw new Error(tm('sync.invalidServerKey', undefined, locale));
       }
     }
 
@@ -655,14 +664,15 @@ export class MobileSyncEngine {
   }
 
   public async signUp(email: string, password: string): Promise<SyncAuthResult> {
+    const locale = this.store.getLocale();
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      return { ok: false, error: 'Введи корректный адрес почты', status: this.getStatus() };
+      return { ok: false, error: tm('sync.enterValidEmail', undefined, locale), status: this.getStatus() };
     }
     if (password.length < 6) {
       return {
         ok: false,
-        error: 'Пароль должен содержать не менее 6 символов',
+        error: tm('sync.errPasswordMin6', undefined, locale),
         status: this.getStatus(),
       };
     }
@@ -672,7 +682,7 @@ export class MobileSyncEngine {
       const client = await this.ensureClient();
       const { data, error } = await client.auth.signUp({ email: cleanEmail, password });
       if (error) {
-        const msg = translateMobileSyncError(error);
+        const msg = translateMobileSyncError(error, locale);
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -707,7 +717,7 @@ export class MobileSyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -715,9 +725,10 @@ export class MobileSyncEngine {
   }
 
   public async signIn(email: string, password: string): Promise<SyncAuthResult> {
+    const locale = this.store.getLocale();
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
-      return { ok: false, error: 'Введи почту и пароль', status: this.getStatus() };
+      return { ok: false, error: tm('sync.enterEmailAndPassword', undefined, locale), status: this.getStatus() };
     }
 
     try {
@@ -728,7 +739,7 @@ export class MobileSyncEngine {
         password,
       });
       if (error || !data.session?.user) {
-        const msg = translateMobileSyncError(error ?? 'Не удалось войти');
+        const msg = translateMobileSyncError(error ?? tm('sync.signInFailed', undefined, locale), locale);
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -753,7 +764,7 @@ export class MobileSyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -761,6 +772,7 @@ export class MobileSyncEngine {
   }
 
   public async signInWithGoogle(): Promise<SyncAuthResult> {
+    const locale = this.store.getLocale();
     try {
       this.authGeneration += 1;
       const client = await this.ensureClient();
@@ -773,7 +785,10 @@ export class MobileSyncEngine {
         },
       });
       if (error || !data?.url) {
-        const msg = translateMobileSyncError(error ?? 'Не удалось запустить вход через Google');
+        const msg = translateMobileSyncError(
+          error ?? tm('sync.googleStartFailed', undefined, locale),
+          locale
+        );
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -783,7 +798,7 @@ export class MobileSyncEngine {
       await mobileBridge.openExternalUrl(data.url);
       return { ok: true, status: this.getStatus() };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -791,11 +806,12 @@ export class MobileSyncEngine {
   }
 
   public async completeOAuthCallback(url: string): Promise<SyncAuthResult> {
+    const locale = this.store.getLocale();
     let parsed: URL;
     try {
       parsed = new URL(url.trim());
     } catch {
-      const msg = 'Некорректная ссылка возврата после входа через Google';
+      const msg = tm('sync.googleBadCallback', undefined, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -808,7 +824,7 @@ export class MobileSyncEngine {
       hashParams.get('error_description') ||
       hashParams.get('error');
     if (oauthErr) {
-      const msg = translateMobileSyncError(oauthErr);
+      const msg = translateMobileSyncError(oauthErr, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -816,7 +832,7 @@ export class MobileSyncEngine {
 
     const code = parsed.searchParams.get('code');
     if (!code) {
-      const msg = 'Не удалось завершить вход через Google — попробуй ещё раз';
+      const msg = tm('sync.googleFinishFailed', undefined, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -827,7 +843,10 @@ export class MobileSyncEngine {
       const client = await this.ensureClient();
       const { data, error } = await client.auth.exchangeCodeForSession(code);
       if (error || !data?.session?.user) {
-        const msg = translateMobileSyncError(error ?? 'Не удалось подтвердить вход через Google');
+        const msg = translateMobileSyncError(
+          error ?? tm('sync.googleConfirmFailed', undefined, locale),
+          locale
+        );
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -853,7 +872,7 @@ export class MobileSyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -861,8 +880,9 @@ export class MobileSyncEngine {
   }
 
   public async setupPassphrase(passphrase: string): Promise<SyncSetupPassphraseResult> {
+    const locale = this.store.getLocale();
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return { ok: false, error: tm('sync.signInFirst', undefined, locale), status: this.getStatus() };
     }
 
     try {
@@ -872,7 +892,7 @@ export class MobileSyncEngine {
         this.emitStatus();
         return {
           ok: false,
-          error: 'Ключ шифрования уже создан на другом устройстве — введи существующую фразу',
+          error: tm('sync.envelopeCreatedElsewhere', undefined, locale),
           status: this.getStatus(),
         };
       }
@@ -892,7 +912,7 @@ export class MobileSyncEngine {
           this.emitStatus();
           return {
             ok: false,
-            error: 'Ключ шифрования только что создан на другом устройстве — введи фразу',
+            error: tm('sync.envelopeJustCreatedElsewhere', undefined, locale),
             status: this.getStatus(),
           };
         }
@@ -917,7 +937,7 @@ export class MobileSyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -925,8 +945,9 @@ export class MobileSyncEngine {
   }
 
   public async unlockWithPassphrase(passphrase: string): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return { ok: false, error: tm('sync.signInFirst', undefined, locale), status: this.getStatus() };
     }
 
     try {
@@ -936,7 +957,7 @@ export class MobileSyncEngine {
         this.emitStatus();
         return {
           ok: false,
-          error: 'Для этого аккаунта ещё не задана секретная фраза',
+          error: tm('sync.noPassphraseYet', undefined, locale),
           status: this.getStatus(),
         };
       }
@@ -959,7 +980,7 @@ export class MobileSyncEngine {
       this.startBackgroundLoops();
       return await this.syncNow();
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -970,8 +991,9 @@ export class MobileSyncEngine {
     recoveryKey: string,
     newPassphrase?: string
   ): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return { ok: false, error: tm('sync.signInFirst', undefined, locale), status: this.getStatus() };
     }
 
     try {
@@ -979,7 +1001,7 @@ export class MobileSyncEngine {
       if (!envelope) {
         return {
           ok: false,
-          error: 'Ключ шифрования для этого аккаунта ещё не создан',
+          error: tm('sync.keyNotCreated', undefined, locale),
           status: this.getStatus(),
         };
       }
@@ -1022,7 +1044,7 @@ export class MobileSyncEngine {
       this.startBackgroundLoops();
       return await this.syncNow();
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1030,10 +1052,11 @@ export class MobileSyncEngine {
   }
 
   public async regenerateRecoveryKey(): Promise<SyncSetupPassphraseResult> {
+    const locale = this.store.getLocale();
     if (!this.userId || !this.dek) {
       return {
         ok: false,
-        error: 'Сначала подключи и расшифруй синхронизацию на этом устройстве',
+        error: tm('sync.connectAndUnlockFirst', undefined, locale),
         status: this.getStatus(),
       };
     }
@@ -1041,7 +1064,7 @@ export class MobileSyncEngine {
     try {
       const envelope = await this.fetchRemoteEnvelope(this.userId);
       if (!envelope) {
-        return { ok: false, error: 'Ключ шифрования не найден в облаке', status: this.getStatus() };
+        return { ok: false, error: tm('sync.keyNotFoundCloud', undefined, locale), status: this.getStatus() };
       }
       const { recoveryKey, envelope: updated } = await rewrapEnvelopeRecoveryKey(
         this.userId,
@@ -1063,7 +1086,7 @@ export class MobileSyncEngine {
       this.emitStatus();
       return { ok: true, recoveryKey, status: this.getStatus() };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1074,13 +1097,14 @@ export class MobileSyncEngine {
     currentPassphrase: string,
     newPassphrase: string
   ): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return { ok: false, error: tm('sync.signInFirst', undefined, locale), status: this.getStatus() };
     }
     try {
       const envelope = await this.fetchRemoteEnvelope(this.userId);
       if (!envelope) {
-        return { ok: false, error: 'Ключ шифрования не найден', status: this.getStatus() };
+        return { ok: false, error: tm('sync.keyNotFound', undefined, locale), status: this.getStatus() };
       }
       const dek = await unwrapDekWithPassphrase(
         this.userId,
@@ -1118,7 +1142,7 @@ export class MobileSyncEngine {
       this.emitStatus();
       return { ok: true, status: this.getStatus() };
     } catch (err) {
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1289,8 +1313,9 @@ export class MobileSyncEngine {
   }
 
   public async syncNow(): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (this.disposed) {
-      return { ok: false, error: 'Синхронизация остановлена', status: this.getStatus() };
+      return { ok: false, error: tm('sync.stopped', undefined, locale), status: this.getStatus() };
     }
     if (this.inFlightSync) {
       this.pendingResync = true;
@@ -1317,8 +1342,9 @@ export class MobileSyncEngine {
   }
 
   public async reconcileFull(): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (this.disposed) {
-      return { ok: false, error: 'Синхронизация остановлена', status: this.getStatus() };
+      return { ok: false, error: tm('sync.stopped', undefined, locale), status: this.getStatus() };
     }
     if (this.inFlightSync) {
       try {
@@ -1395,13 +1421,14 @@ export class MobileSyncEngine {
   }
 
   private async executeSyncCycle(gen: number, fullReconcile = false): Promise<SyncActionResult> {
+    const locale = this.store.getLocale();
     if (!this.userId || !this.dek) {
       return {
         ok: false,
         error:
           this.state === 'needs_passphrase_unlock'
-            ? 'Введи секретную фразу шифрования для запуска синхронизации'
-            : 'Синхронизация не подключена',
+            ? tm('sync.enterPassphraseToSync', undefined, locale)
+            : tm('sync.notConnected', undefined, locale),
         status: this.getStatus(),
       };
     }
@@ -1424,13 +1451,13 @@ export class MobileSyncEngine {
       if (this.needsEnvelopeVerification) {
         const remoteEnv = await this.fetchRemoteEnvelope(userId);
         if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+          return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
         }
         if (!remoteEnv) {
           this.setDek(null);
           this.state = 'needs_passphrase_setup';
           this.emitStatus();
-          return { ok: false, error: 'Задай секретную фразу шифрования', status: this.getStatus() };
+          return { ok: false, error: tm('sync.setPassphraseFirst', undefined, locale), status: this.getStatus() };
         }
         if (!(await verifyKeyCheckToken(dek, userId, remoteEnv.key_check_token))) {
           await this.clearCachedDek(userId);
@@ -1439,7 +1466,7 @@ export class MobileSyncEngine {
           this.emitStatus();
           return {
             ok: false,
-            error: 'Ключ шифрования изменился — введи актуальную секретную фразу',
+            error: tm('sync.keyChangedEnterNew', undefined, locale),
             status: this.getStatus(),
           };
         }
@@ -1468,7 +1495,7 @@ export class MobileSyncEngine {
       try {
         while (true) {
           if (gen !== this.authGeneration || this.disposed) {
-            return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+            return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
           }
 
           const { data: rows, error: pullErr } = await client
@@ -1485,7 +1512,7 @@ export class MobileSyncEngine {
 
           for (const row of batch) {
             if (gen !== this.authGeneration || this.disposed) {
-              return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+              return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
             }
             const nextSeq = Number(row.server_seq) || queryCursor;
             const recordKey = `${row.entity_type}:${row.entity_id}`;
@@ -1579,7 +1606,7 @@ export class MobileSyncEngine {
       const attemptedInCycle = new Set<string>();
       while (true) {
         if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+          return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
         }
         const dirtyBatch = this.store
           .listDirtyEntities(PUSH_BATCH_SIZE)
@@ -1588,7 +1615,7 @@ export class MobileSyncEngine {
 
         for (const entry of dirtyBatch) {
           if (gen !== this.authGeneration || this.disposed) {
-            return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+            return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
           }
           attemptedInCycle.add(`${entry.key}:${entry.dirtySeq}`);
 
@@ -1739,7 +1766,7 @@ export class MobileSyncEngine {
               await this.store.clearDirtyByEntityType(entry.entityType);
               continue;
             }
-            const errMsg = translateMobileSyncError(recErr);
+            const errMsg = translateMobileSyncError(recErr, locale);
             await this.store.recordDirtyFailure(entry.entityType, entry.entityId, errMsg);
             this.emitStatus();
           }
@@ -1750,7 +1777,7 @@ export class MobileSyncEngine {
       await this.syncDeviceRoster(client, userId);
 
       if (gen !== this.authGeneration || this.disposed) {
-        return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+        return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
       }
 
       this.lastSyncAt = Date.now();
@@ -1773,9 +1800,9 @@ export class MobileSyncEngine {
       };
     } catch (err) {
       if (gen !== this.authGeneration || this.disposed) {
-        return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+        return { ok: false, error: tm('sync.cancelled', undefined, locale), status: this.getStatus() };
       }
-      const msg = translateMobileSyncError(err);
+      const msg = translateMobileSyncError(err, locale);
       this.lastError = msg;
       this.state = isNetworkLikeError(err) ? 'offline' : 'error';
       this.emitStatus();
@@ -1951,9 +1978,7 @@ export class MobileSyncEngine {
           item.encryptedSecretPayload
         );
       } catch {
-        throw new Error(
-          'Не удалось прочитать локальный секрет для отправки в облако — синхронизация приостановлена для защиты Сейфа'
-        );
+        throw new Error(tm('sync.secretReadFailedPaused', undefined, this.store.getLocale()));
       }
     }
 
@@ -2057,7 +2082,7 @@ export class MobileSyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность синхронизируемого раздела');
+        throw new Error(tm('sync.corruptOrbit', undefined, this.store.getLocale()));
       }
       const res = await this.store.applySyncedOrbit(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2072,7 +2097,7 @@ export class MobileSyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность синхронизируемого холста');
+        throw new Error(tm('sync.corruptBoard', undefined, this.store.getLocale()));
       }
       const res = await this.store.applySyncedBoard(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2087,7 +2112,7 @@ export class MobileSyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность события календаря');
+        throw new Error(tm('sync.corruptCalendar', undefined, this.store.getLocale()));
       }
       let blobsDownloaded = 0;
       if (!payload.deletedAt && payload.mediaRefs?.length) {
@@ -2111,7 +2136,7 @@ export class MobileSyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность версии заметки');
+        throw new Error(tm('sync.corruptRevision', undefined, this.store.getLocale()));
       }
       const res = await this.store.applySyncedRevision(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2126,7 +2151,7 @@ export class MobileSyncEngine {
         encFields
       );
       if (payload.v !== 1) {
-        throw new Error('Нарушена целостность настроек пространства');
+        throw new Error(tm('sync.corruptPrefs', undefined, this.store.getLocale()));
       }
       const res = await this.store.applySyncedWorkspacePrefs(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2144,7 +2169,7 @@ export class MobileSyncEngine {
       encFields
     );
     if (payload.v !== 1 || payload.id !== row.entity_id) {
-      throw new Error('Нарушена целостность синхронизируемой записи');
+      throw new Error(tm('sync.corruptItem', undefined, this.store.getLocale()));
     }
 
     let blobsDownloaded = 0;

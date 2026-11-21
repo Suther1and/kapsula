@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { ExtractedAction } from '@shared/types';
+import type { AppLocale, ExtractedAction } from '@shared/types';
 
 const execFileAsync = promisify(execFile);
 
@@ -11,10 +11,11 @@ export interface OcrResult {
   lines: string[];
 }
 
-export function extractActionsFromText(text: string): ExtractedAction[] {
+export function extractActionsFromText(text: string, locale: AppLocale = 'ru'): ExtractedAction[] {
   if (!text) return [];
   const actions: ExtractedAction[] = [];
   const seen = new Set<string>();
+  const codeLabelPrefix = locale === 'en' ? 'Code' : 'Код';
 
   const pushUnique = (item: ExtractedAction) => {
     const key = `${item.type}:${item.value}`;
@@ -58,7 +59,7 @@ export function extractActionsFromText(text: string): ExtractedAction[] {
       !/^(?:ERR|ERROR|WARN|BUG|HTTP|HTTPS|UTF|SHA|AES)-/i.test(code) &&
       !/^(?:ОШИБКИ|ДОСТУПА|ОТВЕТА|СТАТУСА|ERROR|HTTP|NULL|NONE)$/i.test(code)
     ) {
-      pushUnique({ type: 'code', label: `Код ${code}`, value: code });
+      pushUnique({ type: 'code', label: `${codeLabelPrefix} ${code}`, value: code });
     }
   }
 
@@ -92,7 +93,7 @@ export function extractActionsFromText(text: string): ExtractedAction[] {
       continue;
     }
     if (code.length >= 5 && !/^\d{4}-\d{2}$/.test(code)) {
-      pushUnique({ type: 'code', label: `Код ${code}`, value: code });
+      pushUnique({ type: 'code', label: `${codeLabelPrefix} ${code}`, value: code });
     }
   }
 

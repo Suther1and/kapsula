@@ -14,7 +14,8 @@ import { toast } from 'sonner';
 import { isAnyTextNote, isDedicatedNote } from '@shared/item-helpers';
 import { parseMarkdownTasks } from '@shared/task-helpers';
 import type { FocusBoard, ItemRevision, OrbitDef, VaultItem } from '@shared/types';
-import { formatDateCompact, stripLeadingTitle } from '@renderer/lib/format';
+import { stripLeadingTitle } from '@renderer/lib/format';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { filterItemsByQuery, stripMobileInlineMarkdown } from '../lib/mobile-helpers';
 import { mobileBridge } from '../native/bridge';
 import { ItemActionSheet, type ActionSheetEntry } from './ItemActionSheet';
@@ -153,6 +154,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
   onOpenExternalItem,
   onDeleteNote,
 }) => {
+  const { t, formatDateCompact } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const [scope, setScope] = useState<'dedicated' | 'all_text'>('dedicated');
   const [actionNote, setActionNote] = useState<VaultItem | null>(null);
@@ -200,34 +202,34 @@ export const NotesView: React.FC<NotesViewProps> = ({
   const buildNoteActions = (note: VaultItem): ActionSheetEntry[] => [
     {
       id: 'pin',
-      label: note.isPinned ? 'Открепить' : 'Закрепить сверху',
+      label: note.isPinned ? t('common.unpin') : t('common.pinTop'),
       icon: <PushPin weight={note.isPinned ? 'fill' : 'regular'} className="w-5 h-5" />,
       accent: note.isPinned,
       onSelect: () => {
         void onSaveNote(note.id, { isPinned: !note.isPinned });
-        toast(note.isPinned ? 'Откреплено' : 'Закреплено сверху');
+        toast(note.isPinned ? t('common.unpinnedToast') : t('common.pinnedToast'));
       },
     },
     {
       id: 'orbit',
-      label: 'Перенести в раздел',
-      subtitle: note.orbit ? orbitMap.get(note.orbit)?.name : 'Без раздела',
+      label: t('feed.moveToOrbit'),
+      subtitle: note.orbit ? orbitMap.get(note.orbit)?.name : t('common.noOrbit'),
       icon: <FolderSimple className="w-5 h-5" />,
       onSelect: () => setOrbitPickerNote(note),
     },
     {
       id: 'copy',
-      label: 'Скопировать текст',
+      label: t('feed.copyText'),
       icon: <Copy className="w-5 h-5" />,
       onSelect: () => {
         const text = [note.title, note.body].filter(Boolean).join('\n\n');
         void mobileBridge.copyPlain(text);
-        toast.success('Скопировано');
+        toast.success(t('common.copied'));
       },
     },
     {
       id: 'delete',
-      label: 'Удалить заметку',
+      label: t('notes.deleteNote'),
       icon: <Trash className="w-5 h-5" />,
       danger: true,
       onSelect: () => {
@@ -264,8 +266,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
             <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
               {(
                 [
-                  { id: 'dedicated', label: 'Заметки' },
-                  { id: 'all_text', label: 'Все тексты' },
+                  { id: 'dedicated', label: t('notes.modeDedicated') },
+                  { id: 'all_text', label: t('notes.modeAllText') },
                 ] as const
               ).map((s) => {
                 const active = scope === s.id;
@@ -305,7 +307,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
               className="k-tap inline-flex items-center gap-1 px-3 h-8 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold"
             >
               <Plus weight="bold" className="w-3.5 h-3.5" />
-              Новая
+              {t('notes.newShort')}
             </button>
           </div>
 
@@ -320,7 +322,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                     : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                 }`}
               >
-                Все
+                {t('notes.allOrbits')}
               </button>
               {orbits.map((orbit) => (
                 <button
@@ -346,10 +348,10 @@ export const NotesView: React.FC<NotesViewProps> = ({
             <div className="flex flex-col items-center justify-center text-center py-14 px-5">
               <NotePencil weight="duotone" className="w-8 h-8 text-[var(--k-ink-muted)] mb-2.5" />
               <div className="text-[14.5px] font-semibold text-[var(--k-ink-primary)]">
-                Заметок пока нет
+                {t('notes.emptyTitle')}
               </div>
               <p className="text-[12.5px] text-[var(--k-ink-muted)] mt-1">
-                Создай первую заметку — она сразу синхронизируется с компьютером.
+                {t('notes.emptyHint')}
               </p>
               <button
                 type="button"
@@ -357,7 +359,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 className="k-tap mt-4 inline-flex items-center gap-1.5 px-4 h-10 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold"
               >
                 <Plus weight="bold" className="w-4 h-4" />
-                Создать заметку
+                {t('notes.createNote')}
               </button>
             </div>
           ) : (
@@ -368,10 +370,10 @@ export const NotesView: React.FC<NotesViewProps> = ({
               const displayTitle =
                 explicitTitle ||
                 displayBody.trim().split('\n')[0]?.replace(/^#+\s*/, '').slice(0, 80) ||
-                'Заметка без названия';
+                t('common.untitledNote');
               const snippet = stripLeadingTitle(stripMobileInlineMarkdown(displayBody), displayTitle);
               const mdTasks = !snippet ? parseMarkdownTasks(displayBody) : [];
-              const mdDoneCount = mdTasks.filter((t) => t.done).length;
+              const mdDoneCount = mdTasks.filter((task) => task.done).length;
               const voiceActions = !snippet ? note.mediaMeta?.actionItems ?? [] : [];
               const voiceDoneCount = (note.mediaMeta?.checkedActionIndices ?? []).length;
               const totalTasksCount = mdTasks.length + voiceActions.length;
@@ -387,17 +389,17 @@ export const NotesView: React.FC<NotesViewProps> = ({
                   key={note.id}
                   onLongPress={() => setActionNote(note)}
                   leftAction={{
-                    label: note.isPinned ? 'Открепить' : 'Закрепить',
+                    label: note.isPinned ? t('common.unpin') : t('common.pin'),
                     icon: <PushPin weight="fill" className="w-4 h-4" />,
                     bgClass: 'bg-[var(--k-accent)]',
                     textClass: 'text-[var(--k-ink-on-accent)]',
                     onTrigger: () => {
                       void onSaveNote(note.id, { isPinned: !note.isPinned });
-                      toast(note.isPinned ? 'Откреплено' : 'Закреплено сверху');
+                      toast(note.isPinned ? t('common.unpinnedToast') : t('common.pinnedToast'));
                     },
                   }}
                   rightAction={{
-                    label: 'Удалить',
+                    label: t('common.delete'),
                     icon: <Trash weight="fill" className="w-4 h-4" />,
                     bgClass: 'bg-[var(--k-danger)]',
                     onTrigger: () => {
@@ -434,7 +436,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                         {note.isPinned ? (
                           <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)]" />
                         ) : null}
-                        {formatDateCompact(note.contentUpdatedAt || note.updatedAt)}
+                        {formatDateCompact(note.contentUpdatedAt || note.createdAt)}
                         <button
                           type="button"
                           data-testid={`note-row-more-${note.id}`}
@@ -443,7 +445,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                             mobileBridge.haptic('light');
                             setActionNote(note);
                           }}
-                          aria-label="Действия с заметкой"
+                          aria-label={t('notes.actionsAria')}
                           className="inline-flex items-center justify-center w-9 h-9 -mr-2 -my-1.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]"
                         >
                           <DotsThree weight="bold" className="w-4 h-4" />
@@ -461,15 +463,15 @@ export const NotesView: React.FC<NotesViewProps> = ({
                         <span>
                           {totalTasksCount === 1
                             ? doneTasksCount === 1
-                              ? 'Выполненная задача'
-                              : 'Задача'
-                            : `Задачи: ${doneTasksCount}/${totalTasksCount}`}
+                              ? t('notes.taskDone')
+                              : t('notes.taskOpen')
+                            : t('notes.tasksProgress', { done: doneTasksCount, total: totalTasksCount })}
                         </span>
                       </p>
                     ) : hasAttachment ? (
-                      <p className="text-[12px] text-[var(--k-ink-muted)]">Вложение</p>
+                      <p className="text-[12px] text-[var(--k-ink-muted)]">{t('common.attachment')}</p>
                     ) : (
-                      <p className="text-[12px] text-[var(--k-ink-muted)] italic">Пустая заметка</p>
+                      <p className="text-[12px] text-[var(--k-ink-muted)] italic">{t('notes.emptyNoteItalic')}</p>
                     )}
 
                     {orbit ? (
@@ -558,7 +560,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
           <div className="h-full flex flex-col items-center justify-center text-center p-8 text-[var(--k-ink-muted)]">
             <NotePencil weight="duotone" className="w-10 h-10 mb-3 opacity-70" />
             <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-              Выбери заметку слева или создай новую
+              {t('notes.selectPrompt')}
             </div>
             <button
               type="button"
@@ -566,7 +568,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
               className="k-tap mt-4 inline-flex items-center gap-1.5 px-4 h-10 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold"
             >
               <Plus weight="bold" className="w-4 h-4" />
-              Новая заметка
+              {t('notes.newFull')}
             </button>
           </div>
         )}
@@ -575,7 +577,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
       {/* Long-Press Action Sheet */}
       <ItemActionSheet
         open={Boolean(actionNote)}
-        title={actionNote?.title || 'Заметка'}
+        title={actionNote?.title || t('notes.fallbackTitle')}
         actions={actionNote ? buildNoteActions(actionNote) : []}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
@@ -585,15 +587,15 @@ export const NotesView: React.FC<NotesViewProps> = ({
       {/* Move to Section Sheet */}
       <MobilePickerSheet
         open={Boolean(orbitPickerNote)}
-        title="Перенести в раздел"
+        title={t('feed.moveToOrbit')}
         value={orbitPickerNote?.orbit || ''}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,
@@ -604,7 +606,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
         onSelect={(val) => {
           if (!orbitPickerNote) return;
           void onSaveNote(orbitPickerNote.id, { orbit: val });
-          toast.success('Раздел обновлён');
+          toast.success(t('common.orbitUpdated'));
         }}
         onClose={() => setOrbitPickerNote(null)}
       />

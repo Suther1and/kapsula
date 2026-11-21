@@ -1,5 +1,5 @@
 import { parseRussianEvent } from '@shared/russian-event-parser';
-import type { ContentDna, OrbitDef } from '@shared/types';
+import type { AppLocale, ContentDna, OrbitDef } from '@shared/types';
 import { redactSecrets } from '../security/secret-shield';
 import {
   postGeminiGenerateContent,
@@ -52,13 +52,16 @@ export async function classifyWithDecisionApi(params: {
   orbits: OrbitDef[];
   fallbackOrbit: string;
   fallbackDna: Exclude<ContentDna, 'secret'>;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<DecisionApiResult> {
   const sanitizedInput = redactSecrets(params.text).slice(0, 1400);
   const orbitLines =
     params.orbits.length > 0
       ? params.orbits.map((o) => `- ${o.id}: ${o.name} (${o.description})`).join('\n')
-      : '- (пока нет пользовательских разделов)';
+      : params.locale === 'en'
+        ? '- (no user sections yet)'
+        : '- (пока нет пользовательских разделов)';
 
   const systemPrompt = [
     'You are a fast JSON router for a personal knowledge vault.',

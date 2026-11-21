@@ -1,4 +1,4 @@
-import type { AccentPresetId, AppearanceConfig, BackgroundPresetId, ThemeMode } from './types';
+import type { AccentPresetId, AppLocale, AppearanceConfig, BackgroundPresetId, ThemeMode } from './types';
 
 export interface AccentPresetMeta {
   id: AccentPresetId;
@@ -693,4 +693,69 @@ export function computeThemeTokens(
     accentHex,
     inkOnAccent,
   };
+}
+
+const ACCENT_LABELS_EN: Record<AccentPresetId, string> = {
+  terracotta: 'Terracotta',
+  cobalt: 'Cobalt',
+  emerald: 'Emerald',
+  violet: 'Amethyst',
+  amber: 'Amber',
+  rose: 'Crimson',
+};
+
+const BG_LABELS_EN: Record<Exclude<BackgroundPresetId, 'custom'>, string> = {
+  obsidian: 'Obsidian',
+  midnight: 'Midnight',
+  espresso: 'Espresso',
+  pine: 'Pine',
+  graphite: 'Graphite',
+  oled: 'OLED',
+  porcelain: 'Porcelain',
+  paper: 'Paper',
+  ice: 'Ice',
+  sage: 'Sage',
+  sand: 'Sand',
+};
+
+export function getAccentPresetLabel(id: AccentPresetId, locale: AppLocale = 'ru'): string {
+  if (locale === 'en') {
+    return ACCENT_LABELS_EN[id] ?? id;
+  }
+  return ACCENT_PRESETS.find((p) => p.id === id)?.label ?? id;
+}
+
+export function getBackgroundPresetLabel(
+  id: Exclude<BackgroundPresetId, 'custom'>,
+  locale: AppLocale = 'ru'
+): string {
+  if (locale === 'en') {
+    return BG_LABELS_EN[id] ?? id;
+  }
+  return (
+    DARK_BG_PRESETS.find((p) => p.id === id)?.label ??
+    LIGHT_BG_PRESETS.find((p) => p.id === id)?.label ??
+    id
+  );
+}
+
+export function getAccentPresets(locale: AppLocale = 'ru'): AccentPresetMeta[] {
+  return ACCENT_PRESETS.map((preset) => ({
+    ...preset,
+    label: getAccentPresetLabel(preset.id, locale),
+  }));
+}
+
+export function getDarkBgPresets(locale: AppLocale = 'ru'): BackgroundPresetMeta[] {
+  return DARK_BG_PRESETS.map((preset) => ({
+    ...preset,
+    label: getBackgroundPresetLabel(preset.id, locale),
+  }));
+}
+
+export function getLightBgPresets(locale: AppLocale = 'ru'): BackgroundPresetMeta[] {
+  return LIGHT_BG_PRESETS.map((preset) => ({
+    ...preset,
+    label: getBackgroundPresetLabel(preset.id, locale),
+  }));
 }

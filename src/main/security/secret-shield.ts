@@ -1,5 +1,5 @@
 import { normalizeCardExpiry } from '@shared/russian-event-parser';
-import type { SecretMeta, SecretPayload } from '@shared/types';
+import type { AppLocale, SecretMeta, SecretPayload } from '@shared/types';
 
 export interface SecretAnalysis {
   isSecret: boolean;
@@ -142,8 +142,8 @@ export function passesLuhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-export function detectCardBrand(digits: string): string | null {
-  if (/^220[0-4]/.test(digits)) return 'МИР';
+export function detectCardBrand(digits: string, locale: AppLocale = 'ru'): string | null {
+  if (/^220[0-4]/.test(digits)) return locale === 'en' ? 'MIR' : 'МИР';
   if (digits.startsWith('4')) return 'Visa';
   const two = Number(digits.slice(0, 2));
   const four = Number(digits.slice(0, 4));
@@ -193,7 +193,10 @@ function resolveValidCardMatch(
   return null;
 }
 
-export function detectBankCard(rawText: string): DetectedBankCard | null {
+export function detectBankCard(
+  rawText: string,
+  locale: AppLocale = 'ru'
+): DetectedBankCard | null {
   const noUrls = rawText.replace(/https?:\/\/\S+/gi, ' ');
   const hasCardCue = CARD_KEYWORD_RE.test(noUrls);
 
@@ -205,7 +208,7 @@ export function detectBankCard(rawText: string): DetectedBankCard | null {
     if (!resolved) continue;
 
     const { matchedSpan, digits } = resolved;
-    const brand = detectCardBrand(digits);
+    const brand = detectCardBrand(digits, locale);
     if (!brand && !hasCardCue) continue;
 
     const stripped = `${noUrls.slice(0, matchStart)} ${noUrls.slice(matchStart + matchedSpan.length)}`;
@@ -234,7 +237,7 @@ export function detectBankCard(rawText: string): DetectedBankCard | null {
     );
     const cardHolder = holderMatch?.[1]?.trim() || undefined;
     const bankMatch = stripped.match(BANK_NAME_RE);
-    const finalBrand = brand ?? 'Банковская карта';
+    const finalBrand = brand ?? (locale === 'en' ? 'Bank Card' : 'Банковская карта');
     const service = bankMatch?.[1] ? `${bankMatch[1]} · ${finalBrand}` : finalBrand;
 
     return {
@@ -270,24 +273,31 @@ function isLikelySeedPhrase(text: string): boolean {
   return words.every((w) => /^[a-z]{3,8}$/.test(w));
 }
 
-function extractDomainService(text: string): string {
+function extractDomainService(text: string, locale: AppLocale = 'ru'): string {
   const m = text.match(/https?:\/\/([a-z0-9.-]+)/i);
   if (m?.[1]) return m[1].replace(/^www\./, '');
   const emailM = text.match(/[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
   if (emailM?.[1]) return emailM[1];
-  return 'Личный сейф';
+  return locale === 'en' ? 'Personal Vault' : 'Личный сейф';
 }
 
 export function analyzeForSecret(
   rawText: string,
-  options?: { forceSecret?: boolean; service?: string; login?: string; notes?: string }
+  options?: { forceSecret?: boolean; service?: string; login?: string; notes?: string; locale?: AppLocale }
 ): SecretAnalysis {
   const text = rawText.trim();
+  const locale: AppLocale = options?.locale === 'en' ? 'en' : 'ru';
+  const isEn = locale === 'en';
+  const personalVaultLabel = isEn ? 'Personal Vault' : 'Личный сейф';
   const empty: SecretAnalysis = { isSecret: false, reason: null, meta: null, payload: null };
   if (!text && !options?.forceSecret) return empty;
 
   const serviceMatch = text.match(LABELED_SERVICE_RE);
-  const detectedService = (options?.service || serviceMatch?.[1] || extractDomainService(text)).trim();
+  const detectedService = (
+    options?.service ||
+    serviceMatch?.[1] ||
+    extractDomainService(text, locale)
+  ).trim();
 
   // 1. Check API tokens / Private keys / JWTs
   for (const pat of API_TOKEN_PATTERNS) {
@@ -300,13 +310,13 @@ export function analyzeForSecret(
         isSecret: true,
         reason: pat.label,
         meta: {
-          service: detectedService !== 'Личный сейф' ? detectedService : pat.label,
+          service: detectedService !== personalVaultLabel ? detectedService : pat.label,
           loginHint:
             maskLoginHint(login) || (token.length > 8 ? `••••${token.slice(-4)}` : '••••'),
           kind: 'api_key',
         },
         payload: {
-          service: detectedService !== 'Личный сейф' ? detectedService : pat.label,
+          service: detectedService !== personalVaultLabel ? detectedService : pat.label,
           login,
           secretValue: token,
           notes: options?.notes ?? text,
@@ -317,12 +327,13 @@ export function analyzeForSecret(
 
   // 2. Check BIP-39 style 12/24 word seed phrases
   if (isLikelySeedPhrase(text)) {
+    const wordCount = text.split(/\s+/).length;
     return {
       isSecret: true,
-      reason: 'Seed-фраза (12/24 слова)',
+      reason: isEn ? 'Seed phrase (12/24 words)' : 'Seed-фраза (12/24 слова)',
       meta: {
         service: options?.service || 'Crypto / Wallet Seed',
-        loginHint: `${text.split(/\s+/).length} слов`,
+        loginHint: isEn ? `${wordCount} words` : `${wordCount} слов`,
         kind: 'seed',
       },
       payload: {
@@ -335,12 +346,12 @@ export function analyzeForSecret(
   }
 
   // 2.5 Check Luhn-valid Bank Cards (13-19 digits) before generic password matching
-  const bankCard = detectBankCard(text);
+  const bankCard = detectBankCard(text, locale);
   if (bankCard) {
     const svcName = options?.service?.trim() || bankCard.service;
     return {
       isSecret: true,
-      reason: `Банковская карта (${bankCard.brand})`,
+      reason: isEn ? `Bank card (${bankCard.brand})` : `Банковская карта (${bankCard.brand})`,
       meta: {
         service: svcName,
         loginHint: `•••• ${bankCard.last4}`,
@@ -379,7 +390,7 @@ export function analyzeForSecret(
     const finalLogin = options?.login || labeledLogin;
     return {
       isSecret: true,
-      reason: 'Логин / Пароль',
+      reason: isEn ? 'Login / Password' : 'Логин / Пароль',
       meta: {
         service: detectedService,
         loginHint: maskLoginHint(finalLogin),
@@ -401,14 +412,14 @@ export function analyzeForSecret(
     const login = options?.login || emailPair[1];
     return {
       isSecret: true,
-      reason: 'Пара почта : пароль',
+      reason: isEn ? 'Email : password pair' : 'Пара почта : пароль',
       meta: {
-        service: options?.service || extractDomainService(login),
+        service: options?.service || extractDomainService(login, locale),
         loginHint: maskLoginHint(login),
         kind: 'password',
       },
       payload: {
-        service: options?.service || extractDomainService(login),
+        service: options?.service || extractDomainService(login, locale),
         login,
         secretValue: emailPair[2],
         notes: options?.notes || '',
@@ -426,7 +437,7 @@ export function analyzeForSecret(
       const login = options?.login || userPair[1];
       return {
         isSecret: true,
-        reason: 'Пара логин : пароль',
+        reason: isEn ? 'Login : password pair' : 'Пара логин : пароль',
         meta: {
           service: detectedService,
           loginHint: maskLoginHint(login),
@@ -446,7 +457,7 @@ export function analyzeForSecret(
   if (options?.forceSecret) {
     return {
       isSecret: true,
-      reason: 'Сейф-режим',
+      reason: isEn ? 'Vault Mode' : 'Сейф-режим',
       meta: {
         service: detectedService,
         loginHint: maskLoginHint(options.login || ''),

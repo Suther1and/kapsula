@@ -10,12 +10,13 @@ import {
   Sun,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
-import type { AppearanceConfig, SettingsState, ThemeMode } from '@shared/types';
-import { ONBOARDING_PRESETS } from '@shared/note-templates';
+import type { AppearanceConfig, AppLocale, SettingsState, ThemeMode } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
+import { getOnboardingPresets } from '@shared/note-templates';
 import {
-  ACCENT_PRESETS,
-  DARK_BG_PRESETS,
-  LIGHT_BG_PRESETS,
+  getAccentPresets,
+  getDarkBgPresets,
+  getLightBgPresets,
   getSavedAppearance,
   hydrateAppearanceFromSettings,
   setSavedAppearance,
@@ -40,6 +41,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   onSettingsUpdated,
   onCompleted,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [step, setStep] = useState<0 | 1 | 2>(0);
   const [selectedOrbitIds, setSelectedOrbitIds] = useState<string[]>([
@@ -52,7 +54,20 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [busy, setBusy] = useState(false);
 
   const theme: ThemeMode = settings.theme;
-  const bgPresets = theme === 'dark' ? DARK_BG_PRESETS : LIGHT_BG_PRESETS;
+  const presets = getOnboardingPresets(locale);
+  const accentPresets = getAccentPresets(locale);
+  const bgPresets = theme === 'dark' ? getDarkBgPresets(locale) : getLightBgPresets(locale);
+
+  const handleLocaleChange = async (nextLocale: AppLocale) => {
+    if (nextLocale === locale) return;
+    onSettingsUpdated({ ...settings, locale: nextLocale });
+    try {
+      const updated = await window.kapsula.updateSettings({ locale: nextLocale });
+      onSettingsUpdated(updated);
+    } catch {
+      // ignore
+    }
+  };
 
   const toggleOrbit = (id: string) => {
     setSelectedOrbitIds((prev) =>
@@ -84,7 +99,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       onSettingsUpdated(updated);
       onCompleted({ openSync: false });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
       setBusy(false);
     }
@@ -94,7 +109,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     if (busy) return;
     setBusy(true);
     try {
-      const chosenOrbits = ONBOARDING_PRESETS.orbits.filter((o) =>
+      const chosenOrbits = presets.orbits.filter((o) =>
         selectedOrbitIds.includes(o.id)
       );
       for (const orb of chosenOrbits) {
@@ -107,7 +122,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       }
 
       if (createWelcomeNote) {
-        const w = ONBOARDING_PRESETS.welcomeNote;
+        const w = presets.welcomeNote;
         await window.kapsula.capture({
           title: w.title,
           text: w.body,
@@ -123,7 +138,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       onSettingsUpdated(updated);
       onCompleted({ openSync });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось завершить настройку'));
+      toast.error(friendlyErrorMessage(err, t('onboarding.finishErr'), locale));
     } finally {
       setBusy(false);
     }
@@ -140,23 +155,34 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       maxWidthClass="max-w-[600px]"
     >
       <div data-testid="onboarding-modal" className="p-6 flex flex-col gap-5">
-        {/* Top brand bar + step dots + Skip */}
+        {/* Top brand bar + instant language switcher + step dots + Skip */}
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] flex items-center justify-center">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] flex items-center justify-center shrink-0">
               <KapsulaEmblem size={18} />
             </div>
-            <div>
-              <div className="k-display text-[15px] font-semibold leading-tight text-[var(--k-ink-primary)]">
-                Добро пожаловать в Kapsula
+            <div className="min-w-0">
+              <div className="k-display text-[15px] font-semibold leading-tight text-[var(--k-ink-primary)] truncate">
+                {t('onboarding.title')}
               </div>
               <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-                Шаг {step + 1} из 3
+                {t('onboarding.stepOf', { current: step + 1, total: 3 })}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div data-testid="onboarding-language-switcher">
+              <SegmentedControl<AppLocale>
+                size="sm"
+                value={locale}
+                onChange={(nextLocale) => void handleLocaleChange(nextLocale)}
+                options={[
+                  { value: 'ru', label: t('lang.name.ru') },
+                  { value: 'en', label: t('lang.name.en') },
+                ]}
+              />
+            </div>
             <div className="flex items-center gap-1.5" aria-hidden="true">
               {[0, 1, 2].map((i) => (
                 <span
@@ -178,7 +204,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               onClick={() => void handleSkip()}
               className="k-interactive text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] rounded-md px-1.5 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--k-accent)] cursor-pointer disabled:opacity-50"
             >
-              Пропустить
+              {t('common.skip')}
             </button>
           </div>
         </div>
@@ -198,10 +224,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-[14.5px] font-semibold text-[var(--k-ink-primary)]">
-                      Собери стартовые разделы
+                      {t('onboarding.step1.title')}
                     </div>
                     <div className="text-[12.5px] text-[var(--k-ink-secondary)] mt-0.5">
-                      Выбери нужные разделы или начни с чистого листа — потом всё легко поменять
+                      {t('onboarding.step1.subtitle')}
                     </div>
                   </div>
                   <button
@@ -214,12 +240,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
                     }`}
                   >
-                    Чистый лист
+                    {t('onboarding.step1.blankBtn')}
                   </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {ONBOARDING_PRESETS.orbits.map((orb) => {
+                  {presets.orbits.map((orb) => {
                     const selected = selectedOrbitIds.includes(orb.id);
                     return (
                       <button
@@ -268,10 +294,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <Sparkle weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)] shrink-0" />
                     <div className="min-w-0">
                       <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
-                        Создать вводную заметку с задачами
+                        {t('onboarding.step1.welcomeTitle')}
                       </div>
                       <div className="text-[11.5px] text-[var(--k-ink-secondary)]">
-                        Короткий чек-лист сразу появится в «Заметках» и на Канбан-доске
+                        {t('onboarding.step1.welcomeDesc')}
                       </div>
                     </div>
                   </div>
@@ -292,31 +318,31 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               >
                 <div>
                   <div className="text-[14.5px] font-semibold text-[var(--k-ink-primary)]">
-                    Выбери визуальный стиль
+                    {t('onboarding.step2.title')}
                   </div>
                   <div className="text-[12.5px] text-[var(--k-ink-secondary)] mt-0.5">
-                    Изменения применяются сразу — в Настройках доступны и тонкие ползунки цветов
+                    {t('onboarding.step2.subtitle')}
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
-                  <span className="text-[13px] font-medium">Тема интерфейса</span>
+                  <span className="text-[13px] font-medium">{t('onboarding.step2.themeLabel')}</span>
                   <SegmentedControl<ThemeMode>
                     value={theme}
                     onChange={(nextTheme) => void handleThemeChange(nextTheme)}
                     options={[
-                      { value: 'dark', label: 'Тёмная', icon: <Moon className="w-3.5 h-3.5" /> },
-                      { value: 'light', label: 'Светлая', icon: <Sun className="w-3.5 h-3.5" /> },
+                      { value: 'dark', label: t('onboarding.step2.dark'), icon: <Moon className="w-3.5 h-3.5" /> },
+                      { value: 'light', label: t('onboarding.step2.light'), icon: <Sun className="w-3.5 h-3.5" /> },
                     ]}
                   />
                 </div>
 
                 <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 space-y-2.5">
                   <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
-                    Акцентный цвет
+                    {t('onboarding.step2.accent')}
                   </div>
                   <div className="grid grid-cols-3 gap-2">
-                    {ACCENT_PRESETS.map((preset) => {
+                    {accentPresets.map((preset) => {
                       const active =
                         appearance.accentMode === 'preset' && appearance.accentPreset === preset.id;
                       const swatch = theme === 'light' ? preset.swatchLight : preset.swatchDark;
@@ -351,12 +377,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                 <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 space-y-2.5">
                   <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
-                    Палитра фона
+                    {t('onboarding.step2.bgPalette')}
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     {bgPresets.map((preset) => {
                       const active = appearance.bgPreset === preset.id;
-                      const label = preset.id === 'paper' ? 'Тёплая бумага' : preset.label;
+                      const label = preset.id === 'paper' ? t('onboarding.step2.paperWarm') : preset.label;
                       return (
                         <button
                           key={preset.id}
@@ -401,10 +427,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
                 <div className="space-y-1.5 max-w-[440px]">
                   <div className="text-[16px] font-semibold text-[var(--k-ink-primary)]">
-                    Синхронизируй между всеми устройствами
+                    {t('onboarding.step3.title')}
                   </div>
                   <p className="m-0 text-[13px] leading-relaxed text-[var(--k-ink-secondary)]">
-                    Заметки, задачи, календарь, картинки и Сейф шифруются на твоём устройстве перед отправкой в облако. Можно подключить сейчас или спокойно работать полностью локально.
+                    {t('onboarding.step3.subtitle')}
                   </p>
                 </div>
 
@@ -417,7 +443,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     className="k-interactive h-10 px-5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 w-full sm:w-auto"
                   >
                     <CloudCheck className="w-4 h-4" />
-                    <span>Подключить облачную синхронизацию</span>
+                    <span>{t('onboarding.step3.connectSync')}</span>
                   </button>
                   <button
                     type="button"
@@ -426,7 +452,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     onClick={() => void handleFinish(false)}
                     className="k-interactive h-10 px-5 rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] text-[var(--k-ink-primary)] text-[13px] font-medium cursor-pointer disabled:opacity-60 w-full sm:w-auto"
                   >
-                    Начать локально
+                    {t('onboarding.step3.startLocal')}
                   </button>
                 </div>
               </motion.div>
@@ -443,13 +469,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               className="k-interactive inline-flex items-center gap-1.5 h-9 px-3 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Назад</span>
+              <span>{t('common.back')}</span>
             </button>
           ) : (
             <span className="text-[11.5px] text-[var(--k-ink-muted)]">
               {selectedOrbitIds.length > 0
-                ? `Выбрано разделов: ${selectedOrbitIds.length}`
-                : 'Начнём с чистого листа'}
+                ? t('onboarding.step1.selectedCount', { count: selectedOrbitIds.length })
+                : t('onboarding.step1.blankStatus')}
             </span>
           )}
 
@@ -461,7 +487,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               onClick={() => setStep((s) => (s === 0 ? 1 : 2))}
               className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--k-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--k-bg-surface-1)] cursor-pointer"
             >
-              <span>Далее</span>
+              <span>{t('common.next')}</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           ) : null}

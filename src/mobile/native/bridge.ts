@@ -1,4 +1,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import { APP_VERSION, computeVersionCodeFromSemver } from '@shared/app-version';
+import { tm } from '../lib/mobile-i18n';
 
 export interface NativeDeviceInfo {
   model: string;
@@ -186,7 +188,7 @@ function blobToBase64(blob: Blob): Promise<string> {
       const comma = res.indexOf(',');
       resolve(comma >= 0 ? res.slice(comma + 1) : res);
     };
-    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    reader.onerror = () => reject(new Error(tm('bridge.fileReadErr')));
     reader.readAsDataURL(blob);
   });
 }
@@ -281,7 +283,7 @@ export const mobileBridge = {
 
   async keystoreEncrypt(plainText: string): Promise<string> {
     if (!isNativeAndroid()) {
-      throw new Error('Системное хранилище ключей недоступно вне устройства');
+      throw new Error(tm('bridge.keystoreDeviceOnly'));
     }
     const res = await KapsulaNative.keystoreEncrypt({ plainText });
     return res.cipherText;
@@ -289,7 +291,7 @@ export const mobileBridge = {
 
   async keystoreDecrypt(cipherText: string): Promise<string> {
     if (!isNativeAndroid()) {
-      throw new Error('Системное хранилище ключей недоступно вне устройства');
+      throw new Error(tm('bridge.keystoreDeviceOnly'));
     }
     const res = await KapsulaNative.keystoreDecrypt({ cipherText });
     return res.plainText;
@@ -315,13 +317,13 @@ export const mobileBridge = {
         return await KapsulaNative.authenticateBiometric({
           title,
           subtitle,
-          negativeButtonText: 'Отмена',
+          negativeButtonText: tm('common.cancel'),
         });
       } catch (err) {
         return {
           ok: false,
           reason: 'error',
-          error: err instanceof Error ? err.message : 'Не удалось пройти проверку биометрии',
+          error: err instanceof Error ? err.message : tm('bridge.biometricFailed'),
         };
       }
     }
@@ -443,13 +445,13 @@ export const mobileBridge = {
       } catch (err) {
         return {
           ok: false,
-          error: err instanceof Error ? err.message : 'Нет доступа к микрофону',
+          error: err instanceof Error ? err.message : tm('bridge.micDenied'),
         };
       }
     }
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      return { ok: false, error: 'Микрофон недоступен в этом браузере' };
+      return { ok: false, error: tm('bridge.micUnavailable') };
     }
     try {
       cleanupWebRecorder();
@@ -496,7 +498,7 @@ export const mobileBridge = {
       return { ok: true };
     } catch {
       cleanupWebRecorder();
-      return { ok: false, error: 'Разреши доступ к микрофону для записи голоса' };
+      return { ok: false, error: tm('bridge.micPermissionVoice') };
     }
   },
 
@@ -507,13 +509,13 @@ export const mobileBridge = {
       } catch (err) {
         return {
           ok: false,
-          error: err instanceof Error ? err.message : 'Не удалось сохранить голосовую запись',
+          error: err instanceof Error ? err.message : tm('bridge.voiceSaveErr'),
         };
       }
     }
 
     if (!webMediaRecorder) {
-      return { ok: false, error: 'Запись не активна' };
+      return { ok: false, error: tm('bridge.recordingInactive') };
     }
     const recorder = webMediaRecorder;
     const durationSec = Math.max(1, Math.round((Date.now() - webVoiceStartedAt) / 1000));
@@ -529,14 +531,14 @@ export const mobileBridge = {
           resolve({ ok: true, base64, mime, durationSec, peaks });
         } catch {
           cleanupWebRecorder();
-          resolve({ ok: false, error: 'Не удалось обработать запись' });
+          resolve({ ok: false, error: tm('bridge.recordingProcessErr') });
         }
       };
       try {
         recorder.stop();
       } catch {
         cleanupWebRecorder();
-        resolve({ ok: false, error: 'Не удалось остановить запись' });
+        resolve({ ok: false, error: tm('bridge.recordingStopErr') });
       }
     });
   },
@@ -830,8 +832,8 @@ export const mobileBridge = {
       }
     }
     return {
-      versionName: '1.0.0',
-      versionCode: 100000000,
+      versionName: APP_VERSION,
+      versionCode: computeVersionCodeFromSemver(APP_VERSION),
     };
   },
 
@@ -845,14 +847,13 @@ export const mobileBridge = {
       } catch (err) {
         return {
           ok: false,
-          error:
-            err instanceof Error ? err.message : 'Не удалось загрузить и установить обновление',
+          error: err instanceof Error ? err.message : tm('bridge.apkInstallErr'),
         };
       }
     }
     return {
       ok: false,
-      error: 'Автоматическая установка обновлений доступна в приложении на Android',
+      error: tm('bridge.apkAndroidOnly'),
     };
   },
 

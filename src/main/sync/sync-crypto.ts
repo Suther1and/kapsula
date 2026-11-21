@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { AppLocale } from '@shared/types';
 import {
   buildBlobAad,
   buildRecordAad,
@@ -14,6 +15,16 @@ import {
   type SyncEntityType,
   type SyncKeyEnvelopeRow,
 } from '@shared/sync-contract';
+
+let syncCryptoLocale: AppLocale = 'ru';
+
+export function setSyncCryptoLocale(locale: AppLocale): void {
+  syncCryptoLocale = locale === 'en' ? 'en' : 'ru';
+}
+
+function msg(ruText: string, enText: string): string {
+  return syncCryptoLocale === 'en' ? enText : ruText;
+}
 
 const KEY_CHECK_PREFIX = 'kapsula-key-check-v1:';
 const EXPECTED_BASE32_LEN = 32; // 160 bits / 5 = exactly 32 chars
@@ -65,7 +76,7 @@ function decodeBase32(raw: string): Buffer {
     cleaned = cleaned.slice(4);
   }
   if (cleaned.length !== EXPECTED_BASE32_LEN) {
-    throw new Error('Неверная длина резервного ключа восстановления');
+    throw new Error(msg('Неверная длина резервного ключа восстановления', 'Invalid recovery key length'));
   }
 
   let bits = 0;
@@ -74,7 +85,7 @@ function decodeBase32(raw: string): Buffer {
   for (const ch of cleaned) {
     const idx = SYNC_RECOVERY_ALPHABET.indexOf(ch);
     if (idx === -1) {
-      throw new Error('Неверный формат резервного ключа восстановления');
+      throw new Error(msg('Неверный формат резервного ключа восстановления', 'Invalid recovery key format'));
     }
     value = (value << 5) | idx;
     bits += 5;
@@ -84,7 +95,7 @@ function decodeBase32(raw: string): Buffer {
     }
   }
   if (bits !== 0 || out.length !== SYNC_RECOVERY_BYTE_LENGTH) {
-    throw new Error('Неверная длина резервного ключа восстановления');
+    throw new Error(msg('Неверная длина резервного ключа восстановления', 'Invalid recovery key length'));
   }
   return Buffer.from(out);
 }
@@ -107,11 +118,11 @@ export async function derivePassphraseKek(
     iterations < minAllowedIterations ||
     iterations > SYNC_MAX_KDF_ITERATIONS
   ) {
-    throw new Error('Недопустимые параметры защиты ключа синхронизации');
+    throw new Error(msg('Недопустимые параметры защиты ключа синхронизации', 'Invalid sync key protection parameters'));
   }
   const salt = Buffer.from(saltBase64, 'base64');
   if (salt.length < 16) {
-    throw new Error('Некорректные параметры соли ключа синхронизации');
+    throw new Error(msg('Некорректные параметры соли ключа синхронизации', 'Invalid sync key salt parameters'));
   }
   const normalized = passphrase.normalize('NFKC');
   return new Promise<Buffer>((resolve, reject) => {
@@ -126,7 +137,7 @@ export function deriveRecoveryKek(recoveryKey: string, saltBase64: string): Buff
   const rawBytes = decodeBase32(recoveryKey);
   const salt = Buffer.from(saltBase64, 'base64');
   if (salt.length < 16) {
-    throw new Error('Некорректные параметры резервного ключа');
+    throw new Error(msg('Некорректные параметры резервного ключа', 'Invalid recovery key parameters'));
   }
   try {
     return Buffer.from(
@@ -143,7 +154,7 @@ function aesGcmEncryptRaw(
   aad?: string
 ): { iv: Buffer; tag: Buffer; data: Buffer } {
   if (key.length !== 32) {
-    throw new Error('Некорректная длина ключа шифрования');
+    throw new Error(msg('Некорректная длина ключа шифрования', 'Invalid encryption key length'));
   }
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
@@ -163,7 +174,7 @@ function aesGcmDecryptRaw(
   aad?: string
 ): Buffer {
   if (key.length !== 32 || iv.length !== 12 || tag.length !== 16) {
-    throw new Error('Повреждённый зашифрованный блок');
+    throw new Error(msg('Повреждённый зашифрованный блок', 'Corrupted encrypted payload'));
   }
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   if (aad) {
@@ -191,10 +202,10 @@ function unwrapDek(kek: Buffer, serialized: string, aad: string): Buffer {
   try {
     blob = JSON.parse(serialized) as WrappedKeyBlob;
   } catch {
-    throw new Error('Повреждённый конверт ключа шифрования');
+    throw new Error(msg('Повреждённый конверт ключа шифрования', 'Corrupted encryption key envelope'));
   }
   if (!blob || blob.v !== 1 || blob.alg !== 'aes-256-gcm') {
-    throw new Error('Неподдерживаемый формат ключа шифрования');
+    throw new Error(msg('Неподдерживаемый формат ключа шифрования', 'Unsupported encryption key format'));
   }
   const dek = aesGcmDecryptRaw(
     kek,
@@ -204,7 +215,7 @@ function unwrapDek(kek: Buffer, serialized: string, aad: string): Buffer {
     aad
   );
   if (dek.length !== 32) {
-    throw new Error('Повреждённый ключ шифрования');
+    throw new Error(msg('Повреждённый ключ шифрования', 'Corrupted encryption key'));
   }
   return dek;
 }
@@ -249,7 +260,12 @@ export async function createKeyEnvelope(
   iterations: number = SYNC_KDF_ITERATIONS
 ): Promise<{ dek: Buffer; recoveryKey: string; envelope: SyncKeyEnvelopeRow }> {
   if (passphrase.trim().length < SYNC_NEW_PASSPHRASE_MIN_LEN) {
-    throw new Error(`Секретная фраза должна содержать не менее ${SYNC_NEW_PASSPHRASE_MIN_LEN} символов`);
+    throw new Error(
+      msg(
+        `Секретная фраза должна содержать не менее ${SYNC_NEW_PASSPHRASE_MIN_LEN} символов`,
+        `Passphrase must be at least ${SYNC_NEW_PASSPHRASE_MIN_LEN} characters`
+      )
+    );
   }
   const dek = generateDek();
   const recoveryKey = generateRecoveryKey();
@@ -285,7 +301,7 @@ export async function unwrapDekWithPassphrase(
   minAllowedIterations: number = SYNC_MIN_KDF_ITERATIONS
 ): Promise<Buffer> {
   if (envelope.kdf_alg !== SYNC_KDF_ALG) {
-    throw new Error('Неподдерживаемый алгоритм деривации ключа');
+    throw new Error(msg('Неподдерживаемый алгоритм деривации ключа', 'Unsupported key derivation algorithm'));
   }
   const kek = await derivePassphraseKek(
     passphrase,
@@ -298,11 +314,11 @@ export async function unwrapDekWithPassphrase(
     try {
       dek = unwrapDek(kek, envelope.wrapped_dek_passphrase, `kapsula:wrap:pass:v1:${userId}`);
     } catch {
-      throw new Error('Неверная секретная фраза шифрования');
+      throw new Error(msg('Неверная секретная фраза шифрования', 'Incorrect encryption passphrase'));
     }
     if (!verifyKeyCheckToken(dek, userId, envelope.key_check_token)) {
       dek.fill(0);
-      throw new Error('Проверка ключа шифрования не пройдена');
+      throw new Error(msg('Проверка ключа шифрования не пройдена', 'Encryption key check failed'));
     }
     return dek;
   } finally {
@@ -319,7 +335,7 @@ export function unwrapDekWithRecoveryKey(
   try {
     parsed = JSON.parse(envelope.wrapped_dek_recovery) as WrappedKeyBlob;
   } catch {
-    throw new Error('Повреждённый конверт резервного ключа');
+    throw new Error(msg('Повреждённый конверт резервного ключа', 'Corrupted recovery key envelope'));
   }
   const recoverySalt = parsed.salt || envelope.kdf_salt;
   const kek = deriveRecoveryKek(recoveryKey, recoverySalt);
@@ -328,11 +344,11 @@ export function unwrapDekWithRecoveryKey(
     try {
       dek = unwrapDek(kek, envelope.wrapped_dek_recovery, `kapsula:wrap:rec:v1:${userId}`);
     } catch {
-      throw new Error('Неверный резервный ключ восстановления');
+      throw new Error(msg('Неверный резервный ключ восстановления', 'Invalid recovery key'));
     }
     if (!verifyKeyCheckToken(dek, userId, envelope.key_check_token)) {
       dek.fill(0);
-      throw new Error('Проверка резервного ключа не пройдена');
+      throw new Error(msg('Проверка резервного ключа не пройдена', 'Recovery key check failed'));
     }
     return dek;
   } finally {
@@ -348,7 +364,12 @@ export async function rewrapEnvelopePassphrase(
   iterations: number = SYNC_KDF_ITERATIONS
 ): Promise<SyncKeyEnvelopeRow> {
   if (newPassphrase.trim().length < SYNC_NEW_PASSPHRASE_MIN_LEN) {
-    throw new Error(`Новая секретная фраза должна содержать не менее ${SYNC_NEW_PASSPHRASE_MIN_LEN} символов`);
+    throw new Error(
+      msg(
+        `Новая секретная фраза должна содержать не менее ${SYNC_NEW_PASSPHRASE_MIN_LEN} символов`,
+        `New passphrase must be at least ${SYNC_NEW_PASSPHRASE_MIN_LEN} characters`
+      )
+    );
   }
   const newPassSalt = crypto.randomBytes(16).toString('base64');
   const minFloor = Math.min(iterations, SYNC_MIN_KDF_ITERATIONS);
@@ -458,11 +479,16 @@ export function decryptMediaBlob(
   encrypted: Buffer
 ): Buffer {
   if (encrypted.length < SYNC_BLOB_HEADER_BYTES) {
-    throw new Error('Зашифрованный медиафайл повреждён (слишком малый размер)');
+    throw new Error(
+      msg(
+        'Зашифрованный медиафайл повреждён (слишком малый размер)',
+        'Encrypted media file is corrupted (file too small)'
+      )
+    );
   }
   const magic = encrypted.subarray(0, 5).toString('ascii');
   if (magic !== SYNC_BLOB_MAGIC) {
-    throw new Error('Неизвестный формат зашифрованного медиафайла');
+    throw new Error(msg('Неизвестный формат зашифрованного медиафайла', 'Unknown encrypted media format'));
   }
   const iv = encrypted.subarray(5, 17);
   const tag = encrypted.subarray(17, 33);

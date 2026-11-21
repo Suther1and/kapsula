@@ -3,6 +3,7 @@ import { CircleNotch, Microphone, Sparkle } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { filterDistinctKeyPoints } from '@shared/item-helpers';
 import type { VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import {
   friendlyErrorMessage,
   getMediaUrl,
@@ -25,6 +26,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
   onToggleVoiceAction,
   onItemUpdated,
 }) => {
+  const { t, locale } = useI18n();
   const [transcribing, setTranscribing] = useState(false);
 
   const mediaUrl = getMediaUrl(item.mediaPath);
@@ -48,17 +50,17 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
       const res = await transcribeItemWithWavFallback(item);
       if (res.ok && res.item) {
         onItemUpdated?.(res.item);
-        toast.success('Голосовая заметка расшифрована');
+        toast.success(t('cards.transcribed'));
       } else if (res.ok && res.transcript) {
-        toast.success('Голосовая заметка расшифрована');
+        toast.success(t('cards.transcribed'));
       } else {
         toast.error(
-          res.error || 'Не удалось расшифровать запись. Проверь настройки ИИ.'
+          res.error || t('cards.transcribeFailed')
         );
       }
     } catch (err) {
       toast.error(
-        friendlyErrorMessage(err, 'Не удалось расшифровать запись. Проверь настройки ИИ.')
+        friendlyErrorMessage(err, t('cards.transcribeFailed'), locale)
       );
     } finally {
       setTranscribing(false);
@@ -72,7 +74,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
           <div className="flex items-center gap-2 min-w-0">
             <Microphone weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
             <span className="text-[13.5px] font-semibold truncate">
-              {item.title || 'Голосовая заметка'}
+              {item.title || t('dna.voiceMemo')}
             </span>
           </div>
           {!hasTranscript && item.mediaPath ? (
@@ -90,7 +92,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
               ) : (
                 <Sparkle weight="fill" className="w-3 h-3 shrink-0" />
               )}
-              <span>{transcribing ? 'Расшифровываю…' : 'Расшифровать через ИИ'}</span>
+              <span>{transcribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
             </button>
           ) : null}
         </div>
@@ -114,7 +116,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
           <Microphone weight="duotone" className="w-3.5 h-3.5" />
         </span>
         <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] leading-snug truncate">
-          {item.title || 'Голосовая заметка'}
+          {item.title || t('dna.voiceMemo')}
         </div>
       </div>
 
@@ -144,7 +146,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
             ) : (
               <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
             )}
-            <span>{transcribing ? 'Расшифровываю…' : 'Расшифровать через ИИ'}</span>
+            <span>{transcribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
           </button>
         </div>
       ) : null}

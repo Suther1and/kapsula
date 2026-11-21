@@ -38,7 +38,8 @@ import type {
   VaultItem,
   VaultTaskEntry,
 } from '@shared/types';
-import { formatReminderStamp } from '@renderer/lib/format';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
 import { ItemActionSheet, type ActionSheetEntry } from './ItemActionSheet';
@@ -101,18 +102,18 @@ const COLUMN_ICON_MAP: Record<string, React.ComponentType<{ className?: string; 
   sparkles: Sparkle,
 };
 
-const COLUMN_ICON_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: 'tray', label: 'Входящие' },
-  { id: 'flame', label: 'В работе' },
-  { id: 'clock', label: 'Ожидание' },
-  { id: 'check', label: 'Готово' },
-  { id: 'star', label: 'Важно' },
-  { id: 'flag', label: 'Приоритет' },
-  { id: 'lightning', label: 'Срочно' },
-  { id: 'folder', label: 'Проект' },
-  { id: 'bookmark', label: 'Идея' },
-  { id: 'sparkles', label: 'Фокус' },
-  { id: 'none', label: 'Точка' },
+const COLUMN_ICON_OPTIONS: Array<{ id: string; labelKey: MobileDictKey }> = [
+  { id: 'tray', labelKey: 'tasks.colIconInbox' },
+  { id: 'flame', labelKey: 'tasks.colIconInProgress' },
+  { id: 'clock', labelKey: 'tasks.colIconWaiting' },
+  { id: 'check', labelKey: 'tasks.colIconDone' },
+  { id: 'star', labelKey: 'tasks.colIconStar' },
+  { id: 'flag', labelKey: 'tasks.colIconFlag' },
+  { id: 'lightning', labelKey: 'tasks.colIconUrgent' },
+  { id: 'folder', labelKey: 'tasks.colIconProject' },
+  { id: 'bookmark', labelKey: 'tasks.colIconIdea' },
+  { id: 'sparkles', labelKey: 'tasks.colIconFocus' },
+  { id: 'none', labelKey: 'tasks.colIconDot' },
 ];
 
 function readInitialViewMode(): 'list' | 'board' {
@@ -152,30 +153,30 @@ function normalizeTaskCompare(raw: string): string {
 
 const PRIORITY_META: Record<
   TaskPriority,
-  { label: string; short: string; color: string; bg: string }
+  { labelKey: MobileDictKey; shortKey: MobileDictKey | null; color: string; bg: string }
 > = {
-  none: { label: 'Без приоритета', short: '', color: 'var(--k-ink-muted)', bg: 'transparent' },
+  none: { labelKey: 'tasks.prioNone', shortKey: null, color: 'var(--k-ink-muted)', bg: 'transparent' },
   low: {
-    label: 'Низкий',
-    short: 'Низкий',
+    labelKey: 'tasks.prioLow',
+    shortKey: 'tasks.prioLow',
     color: 'var(--k-ink-secondary)',
     bg: 'color-mix(in srgb, var(--k-ink-secondary) 13%, transparent)',
   },
   medium: {
-    label: 'Средний',
-    short: 'Средний',
+    labelKey: 'tasks.prioMedium',
+    shortKey: 'tasks.prioMedium',
     color: 'var(--k-info)',
     bg: 'var(--k-info-soft)',
   },
   high: {
-    label: 'Высокий',
-    short: 'Высокий',
+    labelKey: 'tasks.prioHigh',
+    shortKey: 'tasks.prioHigh',
     color: 'var(--k-amber)',
     bg: 'var(--k-amber-soft)',
   },
   urgent: {
-    label: 'Срочно',
-    short: 'Срочно',
+    labelKey: 'tasks.prioUrgent',
+    shortKey: 'tasks.prioUrgent',
     color: 'var(--k-danger)',
     bg: 'var(--k-danger-soft)',
   },
@@ -262,6 +263,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   onOpenNote,
   onCreateOrbit,
 }) => {
+  const { t, formatReminderStamp, getColumnTitle } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const [viewMode, setViewMode] = useState<'list' | 'board'>(readInitialViewMode);
   const [filter, setFilter] = useState<'active' | 'all' | 'done'>('active');
@@ -462,7 +464,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const groups = useMemo(() => {
     if (filter === 'done') {
       return filteredTasks.length > 0
-        ? [{ key: 'done', label: 'Выполненные', color: 'var(--k-emerald)', items: filteredTasks }]
+        ? [{ key: 'done', label: t('tasks.groupDone'), color: 'var(--k-emerald)', items: filteredTasks }]
         : [];
     }
     const todayStart = startOfTodayMs();
@@ -472,24 +474,24 @@ export const TasksView: React.FC<TasksViewProps> = ({
     const upcoming: VaultTaskEntry[] = [];
     const nodate: VaultTaskEntry[] = [];
 
-    for (const t of filteredTasks) {
-      const due = getEffectiveDueAt(t);
-      if (!due) nodate.push(t);
-      else if (due < todayStart && !t.done) overdue.push(t);
-      else if (due < tomorrowStart) today.push(t);
-      else upcoming.push(t);
+    for (const itemTask of filteredTasks) {
+      const due = getEffectiveDueAt(itemTask);
+      if (!due) nodate.push(itemTask);
+      else if (due < todayStart && !itemTask.done) overdue.push(itemTask);
+      else if (due < tomorrowStart) today.push(itemTask);
+      else upcoming.push(itemTask);
     }
 
     const out: Array<{ key: string; label: string; color?: string; items: VaultTaskEntry[] }> = [];
     if (overdue.length > 0)
-      out.push({ key: 'overdue', label: 'Просрочено', color: 'var(--k-danger)', items: overdue });
+      out.push({ key: 'overdue', label: t('tasks.groupOverdue'), color: 'var(--k-danger)', items: overdue });
     if (today.length > 0)
-      out.push({ key: 'today', label: 'Сегодня', color: 'var(--k-accent)', items: today });
+      out.push({ key: 'today', label: t('tasks.groupToday'), color: 'var(--k-accent)', items: today });
     if (upcoming.length > 0)
-      out.push({ key: 'upcoming', label: 'Скоро', color: 'var(--k-amber)', items: upcoming });
-    if (nodate.length > 0) out.push({ key: 'nodate', label: 'Без срока', items: nodate });
+      out.push({ key: 'upcoming', label: t('tasks.groupUpcoming'), color: 'var(--k-amber)', items: upcoming });
+    if (nodate.length > 0) out.push({ key: 'nodate', label: t('tasks.groupNoDate'), items: nodate });
     return out;
-  }, [filteredTasks, filter]);
+  }, [filteredTasks, filter, t]);
 
   const selectedTask = useMemo(() => {
     if (selectedTaskId) {
@@ -517,7 +519,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       );
       setNewTaskText('');
       mobileBridge.haptic('success');
-      toast.success('Задача добавлена');
+      toast.success(t('tasks.added'));
     } finally {
       setAdding(false);
     }
@@ -533,7 +535,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       setInlineAddText('');
       setInlineAddColId(null);
       mobileBridge.haptic('success');
-      toast.success('Задача добавлена в колонку');
+      toast.success(t('tasks.addedToCol'));
     } finally {
       setAdding(false);
     }
@@ -576,10 +578,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
       });
 
     if (!wasDone) {
-      toast('Задача выполнена', {
+      toast(t('tasks.completedToast'), {
         duration: 4500,
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             const undoSeq = ++toggleSeqCounterRef.current;
             inFlightToggleSeqRef.current.set(task.id, undoSeq);
@@ -623,12 +625,12 @@ export const TasksView: React.FC<TasksViewProps> = ({
       dueAt: nextDue,
     });
     mobileBridge.haptic('light');
-    toast(nextDue ? 'Срок задачи обновлён' : 'Срок снят');
+    toast(nextDue ? t('tasks.dueUpdated') : t('tasks.dueCleared'));
   };
 
   const handleMoveToColumn = async (task: VaultTaskEntry, targetColId: string) => {
     const colTasks = tasksByColumn.get(targetColId) ?? [];
-    const maxOrder = colTasks.reduce((m, t) => Math.max(m, t.boardOrder ?? 0), 0);
+    const maxOrder = colTasks.reduce((m, itemTask) => Math.max(m, itemTask.boardOrder ?? 0), 0);
     await onMoveTaskOnBoard({
       itemId: task.itemId,
       taskKey: getTaskKey(task),
@@ -636,8 +638,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
       boardOrder: maxOrder + 1000,
     });
     mobileBridge.haptic('success');
-    const colName = colMap.get(targetColId)?.title ?? 'колонку';
-    toast.success(`Перенесено: ${colName}`);
+    const colObj = colMap.get(targetColId);
+    const colName = colObj ? getColumnTitle(colObj) : t('tasks.colFallback');
+    toast.success(t('tasks.movedToCol', { title: colName }));
   };
 
   const getNextColumnId = (currentColId?: string): string | null => {
@@ -750,7 +753,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   const openColumnEdit = (col: ColumnWithIcon) => {
     setEditingColumn(col);
-    setColTitleDraft(col.title);
+    setColTitleDraft(getColumnTitle(col));
     setColColorDraft(col.color);
     setColIconDraft(resolveColumnIconId(col));
     setColumnSheetOpen(true);
@@ -767,7 +770,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
           : c
       );
       await onSaveColumns(next);
-      toast.success('Колонка обновлена');
+      toast.success(t('tasks.colUpdated'));
     } else {
       const id = `col_${Date.now().toString(36)}`;
       const doneIdx = columns.findIndex((c) => c.isDone || c.id === 'done');
@@ -783,77 +786,80 @@ export const TasksView: React.FC<TasksViewProps> = ({
       else next.push(newCol as TaskBoardColumn);
       await onSaveColumns(next.map((c, idx) => ({ ...c, order: idx })));
       setActiveBoardColId(id);
-      toast.success('Колонка добавлена');
+      toast.success(t('tasks.colAdded'));
     }
     setColumnSheetOpen(false);
   };
 
   const handleDeleteColumn = async (col: TaskBoardColumn) => {
     if (col.isDone || col.id === 'done' || columns.length <= 2) {
-      toast.error('Нельзя удалить эту базовую колонку');
+      toast.error(t('tasks.colProtectedErr'));
       return;
     }
     const next = columns.filter((c) => c.id !== col.id).map((c, idx) => ({ ...c, order: idx }));
     await onSaveColumns(next);
     setColumnSheetOpen(false);
-    toast('Колонка удалена · задачи перенесены во «Входящие»');
+    toast(t('tasks.colDeletedToast'));
   };
 
-  const buildTaskActions = (task: VaultTaskEntry): ActionSheetEntry[] => [
-    {
-      id: 'toggle',
-      label: task.done ? 'Вернуть в активные' : 'Отметить выполненной',
-      icon: <Check weight="bold" className="w-5 h-5" />,
-      accent: !task.done,
-      onSelect: () => handleToggleWithToast(task),
-    },
-    {
-      id: 'move-column',
-      label: 'Перенести в колонку',
-      subtitle: colMap.get(task.columnId ?? '')?.title || 'Входящие',
-      icon: <Columns className="w-5 h-5" />,
-      onSelect: () => setMoveColumnTask(task),
-    },
-    {
-      id: 'edit',
-      label: 'Редактировать текст',
-      icon: <PencilSimple className="w-5 h-5" />,
-      onSelect: () => {
-        onSelectTask(task.id);
-        setEditDraft(task.text);
-        setEditingText(true);
+  const buildTaskActions = (task: VaultTaskEntry): ActionSheetEntry[] => {
+    const taskCol = colMap.get(task.columnId ?? '');
+    return [
+      {
+        id: 'toggle',
+        label: task.done ? t('tasks.actionReopen') : t('tasks.actionDone'),
+        icon: <Check weight="bold" className="w-5 h-5" />,
+        accent: !task.done,
+        onSelect: () => handleToggleWithToast(task),
       },
-    },
-    {
-      id: 'today',
-      label: 'Перенести на сегодня',
-      icon: <CalendarBlank className="w-5 h-5" />,
-      onSelect: () => void handleQuickSchedule(task, 'today'),
-    },
-    {
-      id: 'tomorrow',
-      label: 'Перенести на завтра',
-      icon: <Bell className="w-5 h-5" />,
-      onSelect: () => void handleQuickSchedule(task, 'tomorrow'),
-    },
-    {
-      id: 'open-note',
-      label: 'Открыть заметку',
-      subtitle: task.itemTitle,
-      icon: <ArrowSquareOut className="w-5 h-5" />,
-      onSelect: () => onOpenNote(task.itemId),
-    },
-    {
-      id: 'delete',
-      label: 'Удалить задачу',
-      icon: <Trash className="w-5 h-5" />,
-      danger: true,
-      onSelect: () => {
-        if (selectedTaskId === task.id) onSelectTask(null);
-        void onDeleteTask(task);
+      {
+        id: 'move-column',
+        label: t('tasks.actionMoveCol'),
+        subtitle: taskCol ? getColumnTitle(taskCol) : t('tasks.colDefaultInbox'),
+        icon: <Columns className="w-5 h-5" />,
+        onSelect: () => setMoveColumnTask(task),
       },
-    },
-  ];
+      {
+        id: 'edit',
+        label: t('tasks.actionEditText'),
+        icon: <PencilSimple className="w-5 h-5" />,
+        onSelect: () => {
+          onSelectTask(task.id);
+          setEditDraft(task.text);
+          setEditingText(true);
+        },
+      },
+      {
+        id: 'today',
+        label: t('tasks.actionDueToday'),
+        icon: <CalendarBlank className="w-5 h-5" />,
+        onSelect: () => void handleQuickSchedule(task, 'today'),
+      },
+      {
+        id: 'tomorrow',
+        label: t('tasks.actionDueTomorrow'),
+        icon: <Bell className="w-5 h-5" />,
+        onSelect: () => void handleQuickSchedule(task, 'tomorrow'),
+      },
+      {
+        id: 'open-note',
+        label: t('tasks.actionOpenNote'),
+        subtitle: task.itemTitle,
+        icon: <ArrowSquareOut className="w-5 h-5" />,
+        onSelect: () => onOpenNote(task.itemId),
+      },
+      {
+        id: 'delete',
+        label: t('tasks.actionDelete'),
+        icon: <Trash className="w-5 h-5" />,
+        danger: true,
+        onSelect: () => {
+          if (selectedTaskId === task.id) onSelectTask(null);
+          void onDeleteTask(task);
+        },
+      },
+    ];
+  };
 
   const renderTaskDetail = (task: VaultTaskEntry) => {
     const parentItem = itemMap.get(task.itemId);
@@ -869,7 +875,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             type="button"
             onClick={() => handleToggleWithToast(task)}
             className="inline-flex items-center justify-center w-9 h-9 -m-1.5 shrink-0"
-            aria-label={task.done ? 'Снять отметку' : 'Отметить выполненной'}
+            aria-label={task.done ? t('tasks.actionUncheck') : t('tasks.actionDone')}
           >
             <AnimatedTaskCheck done={task.done} />
           </button>
@@ -882,7 +888,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   if (!clean) return;
                   await onEditTaskText(task, clean);
                   setEditingText(false);
-                  toast.success('Задача обновлена');
+                  toast.success(t('tasks.updated'));
                 }}
                 className="space-y-2"
               >
@@ -898,7 +904,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     type="submit"
                     className="k-tap px-3 h-8 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold"
                   >
-                    Сохранить
+                    {t('common.save')}
                   </button>
                   <button
                     type="button"
@@ -908,7 +914,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     }}
                     className="k-tap px-3 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[12.5px] text-[var(--k-ink-secondary)]"
                   >
-                    Отмена
+                    {t('common.cancel')}
                   </button>
                 </div>
               </form>
@@ -929,7 +935,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     setEditDraft(task.text);
                     setEditingText(true);
                   }}
-                  aria-label="Редактировать текст задачи"
+                  aria-label={t('tasks.editTextAria')}
                   className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] shrink-0"
                 >
                   <PencilSimple className="w-3.5 h-3.5" />
@@ -973,10 +979,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
           <div className="flex items-center justify-between text-[12px]">
             <span className="font-medium text-[var(--k-ink-secondary)] inline-flex items-center gap-1.5">
               <Columns className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-              Колонка доски
+              {t('tasks.boardColumnLabel')}
             </span>
             <span className="text-[var(--k-ink-primary)] font-medium">
-              {currentCol?.title || 'Входящие'}
+              {currentCol ? getColumnTitle(currentCol) : t('tasks.colDefaultInbox')}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -994,7 +1000,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   }`}
                 >
                   {renderColumnGlyph(col as ColumnWithIcon, 'w-3.5 h-3.5')}
-                  {col.title}
+                  {getColumnTitle(col)}
                 </button>
               );
             })}
@@ -1006,10 +1012,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
           <div className="flex items-center justify-between text-[12px]">
             <span className="font-medium text-[var(--k-ink-secondary)] inline-flex items-center gap-1.5">
               <Flag className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-              Приоритет
+              {t('tasks.priorityLabel')}
             </span>
             <span className="text-[var(--k-ink-primary)] font-medium">
-              {PRIORITY_META[priority].label}
+              {t(PRIORITY_META[priority].labelKey)}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1035,7 +1041,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   }`}
                   style={active && p !== 'none' ? { background: meta.bg, color: meta.color } : undefined}
                 >
-                  {p === 'none' ? 'Нет' : meta.short}
+                  {p === 'none' || !meta.shortKey ? t('tasks.prioNoneShort') : t(meta.shortKey)}
                 </button>
               );
             })}
@@ -1047,20 +1053,20 @@ export const TasksView: React.FC<TasksViewProps> = ({
           <div className="flex items-center justify-between text-[12px]">
             <span className="font-medium text-[var(--k-ink-secondary)] inline-flex items-center gap-1.5">
               <Bell className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-              Срок этой задачи
+              {t('tasks.dueLabel')}
             </span>
             <span className="text-[var(--k-ink-primary)] font-medium">
-              {due ? formatReminderStamp(due) : 'Не задан'}
+              {due ? formatReminderStamp(due) : t('tasks.dueNotSet')}
             </span>
           </div>
 
           <div className="grid grid-cols-2 gap-1.5">
             {(
               [
-                { id: 'today', label: 'Сегодня' },
-                { id: 'tomorrow', label: 'Завтра' },
-                { id: 'week', label: 'Через 3 дня' },
-                { id: 'clear', label: 'Снять срок' },
+                { id: 'today', label: t('tasks.duePresetToday') },
+                { id: 'tomorrow', label: t('tasks.duePresetTomorrow') },
+                { id: 'week', label: t('tasks.duePresetIn3Days') },
+                { id: 'clear', label: t('tasks.duePresetClear') },
               ] as const
             ).map((btn) => (
               <button
@@ -1078,7 +1084,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         {parentItem?.body ? (
           <div className="rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] p-3.5 space-y-1.5">
             <div className="text-[11.5px] font-medium text-[var(--k-ink-muted)]">
-              Контекст заметки
+              {t('tasks.noteContextLabel')}
             </div>
             <p className="text-[13px] leading-relaxed text-[var(--k-ink-secondary)] whitespace-pre-wrap line-clamp-6">
               {parentItem.body
@@ -1097,7 +1103,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             className="k-tap flex-1 inline-flex items-center justify-center gap-2 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13.5px] font-semibold"
           >
             <ArrowSquareOut className="w-4 h-4" />
-            Открыть заметку
+            {t('tasks.actionOpenNote')}
           </button>
           <button
             type="button"
@@ -1105,7 +1111,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
               onSelectTask(null);
               void onDeleteTask(task);
             }}
-            aria-label="Удалить задачу"
+            aria-label={t('tasks.actionDelete')}
             className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-danger)]"
           >
             <Trash className="w-4 h-4" />
@@ -1132,7 +1138,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         leftAction={
           nextCol
             ? {
-                label: nextCol.title,
+                label: getColumnTitle(nextCol),
                 icon: <ArrowRight weight="bold" className="w-4 h-4" />,
                 bgClass: 'bg-[var(--k-accent)]',
                 textClass: 'text-[var(--k-ink-on-accent)]',
@@ -1141,7 +1147,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             : undefined
         }
         rightAction={{
-          label: 'Удалить',
+          label: t('common.delete'),
           icon: <Trash weight="fill" className="w-4 h-4" />,
           bgClass: 'bg-[var(--k-danger)]',
           onTrigger: () => {
@@ -1169,7 +1175,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 e.stopPropagation();
                 handleToggleWithToast(task);
               }}
-              aria-label={task.done ? 'Снять отметку' : 'Отметить выполненной'}
+              aria-label={task.done ? t('tasks.actionUncheck') : t('tasks.actionDone')}
               className="inline-flex items-center justify-center w-9 h-9 -ml-2 -my-1.5 shrink-0"
             >
               <AnimatedTaskCheck done={task.done} compact />
@@ -1190,7 +1196,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 mobileBridge.haptic('light');
                 setActionTask(task);
               }}
-              aria-label="Действия с задачей"
+              aria-label={t('tasks.actionsAria')}
               className="inline-flex items-center justify-center w-9 h-9 -mr-2 -my-1.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] shrink-0"
             >
               <DotsThree weight="bold" className="w-4 h-4" />
@@ -1204,7 +1210,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 style={{ background: priMeta.bg, color: priMeta.color }}
               >
                 <Flag weight="fill" className="w-2.5 h-2.5" />
-                {priMeta.short}
+                {priMeta.shortKey ? t(priMeta.shortKey) : ''}
               </span>
             ) : null}
 
@@ -1257,7 +1263,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
               className="k-tap inline-flex items-center gap-1 px-2 h-6 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[10.5px] font-medium text-[var(--k-ink-secondary)] shrink-0"
             >
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: col.color }} />
-              <span>Перенести</span>
+              <span>{t('tasks.moveShort')}</span>
             </button>
           </div>
         </div>
@@ -1265,21 +1271,21 @@ export const TasksView: React.FC<TasksViewProps> = ({
     );
   };
 
-  const activeCount = tasks.filter((t) => !t.done).length;
+  const activeCount = tasks.filter((itemTask) => !itemTask.done).length;
   const doneCount = tasks.length - activeCount;
 
   return (
     <div data-testid="mobile-tasks-view" className="flex h-full min-h-0">
       <div className="flex-1 min-w-0 flex flex-col h-full min-h-0">
-        {/* Top Controls: View Mode Toggle (Список | Доска) + Quick Add + Filters */}
+        {/* Top Controls: View Mode Toggle (List | Board) + Quick Add + Filters */}
         <div className="px-4 pt-3 pb-2.5 space-y-2 border-b border-[var(--k-border-hairline)] shrink-0">
           <div className="flex items-center justify-between gap-1.5 flex-wrap">
             {/* Persisted List | Board Segmented Toggle */}
             <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] shrink-0">
               {(
                 [
-                  { id: 'list', label: 'Список', icon: ListBullets, testId: 'tasks-view-list' },
-                  { id: 'board', label: 'Доска', icon: Columns, testId: 'tasks-view-board' },
+                  { id: 'list', label: t('tasks.modeList'), icon: ListBullets, testId: 'tasks-view-list' },
+                  { id: 'board', label: t('tasks.modeBoard'), icon: Columns, testId: 'tasks-view-board' },
                 ] as const
               ).map((m) => {
                 const active = viewMode === m.id;
@@ -1325,8 +1331,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     toggleShowColumnIcons();
                   }}
                   aria-pressed={showColumnIcons}
-                  aria-label="Иконки колонок"
-                  title="Иконки колонок"
+                  aria-label={t('tasks.iconsAria')}
+                  title={t('tasks.iconsAria')}
                   className={`k-tap inline-flex items-center justify-center gap-1 px-2 min-[390px]:px-2.5 h-8 rounded-xl border text-[11.5px] font-medium transition-colors ${
                     showColumnIcons
                       ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
@@ -1334,7 +1340,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   }`}
                 >
                   <Sparkle weight={showColumnIcons ? 'duotone' : 'regular'} className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden min-[390px]:inline">Иконки</span>
+                  <span className="hidden min-[390px]:inline">{t('tasks.iconsShort')}</span>
                 </button>
                 <button
                   type="button"
@@ -1343,12 +1349,12 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[12px] font-medium text-[var(--k-ink-primary)] whitespace-nowrap"
                 >
                   <Plus weight="bold" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
-                  Колонка
+                  {t('tasks.columnShort')}
                 </button>
               </div>
             ) : (
               <span className="text-[11.5px] text-[var(--k-ink-muted)] k-tabular">
-                Активных: {activeCount}
+                {t('tasks.activeCountLabel', { count: activeCount })}
               </span>
             )}
           </div>
@@ -1361,8 +1367,12 @@ export const TasksView: React.FC<TasksViewProps> = ({
               onChange={(e) => setNewTaskText(e.target.value)}
               placeholder={
                 viewMode === 'board'
-                  ? `Новая задача в «${colMap.get(activeBoardColId)?.title ?? 'Входящие'}»…`
-                  : 'Новая задача…'
+                  ? t('tasks.newTaskInColPlaceholder', {
+                      title: colMap.get(activeBoardColId)
+                        ? getColumnTitle(colMap.get(activeBoardColId)!)
+                        : t('tasks.colDefaultInbox'),
+                    })
+                  : t('tasks.newTaskPlaceholder')
               }
               className="flex-1 h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
@@ -1370,7 +1380,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
               type="submit"
               data-testid="tasks-quick-add-submit"
               disabled={!newTaskText.trim() || adding}
-              aria-label="Добавить задачу"
+              aria-label={t('tasks.addTaskAria')}
               className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] disabled:opacity-40 shrink-0"
             >
               <Plus weight="bold" className="w-5 h-5" />
@@ -1383,9 +1393,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
               <div className="flex items-center gap-1 flex-wrap">
                 {(
                   [
-                    { id: 'none', label: 'Без срока' },
-                    { id: 'today', label: 'Сегодня' },
-                    { id: 'tomorrow', label: 'Завтра' },
+                    { id: 'none', label: t('tasks.groupNoDate') },
+                    { id: 'today', label: t('tasks.groupToday') },
+                    { id: 'tomorrow', label: t('tasks.duePresetTomorrow') },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -1406,7 +1416,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   compact
                   colorDot={selectedQuickOrbit?.color}
                   icon={<FolderSimple className="w-3 h-3 text-[var(--k-accent)] shrink-0" />}
-                  label={selectedQuickOrbit?.name || 'Раздел'}
+                  label={selectedQuickOrbit?.name || t('tasks.orbitBtnFallback')}
                   placeholder={!selectedQuickOrbit}
                   onClick={() => setOrbitPickerOpen(true)}
                   className="shrink-0 max-w-[124px]"
@@ -1417,9 +1427,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
                   {(
                     [
-                      { id: 'active', label: `Активные · ${activeCount}` },
-                      { id: 'all', label: `Все · ${tasks.length}` },
-                      { id: 'done', label: `Готовые · ${doneCount}` },
+                      { id: 'active', label: t('tasks.filterActiveCount', { count: activeCount }) },
+                      { id: 'all', label: t('tasks.filterAllCount', { count: tasks.length }) },
+                      { id: 'done', label: t('tasks.filterDoneCount', { count: doneCount }) },
                     ] as const
                   ).map((tab) => {
                     const active = filter === tab.id;
@@ -1475,7 +1485,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     }`}
                   >
                     {renderColumnGlyph(col as ColumnWithIcon, 'w-3.5 h-3.5')}
-                    <span>{col.title}</span>
+                    <span>{getColumnTitle(col)}</span>
                     <span className="text-[11px] text-[var(--k-ink-muted)] k-tabular">{count}</span>
                   </button>
                 );
@@ -1520,7 +1530,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     <div className="flex items-center gap-2 min-w-0">
                       {renderColumnGlyph(col as ColumnWithIcon, 'w-4 h-4')}
                       <h3 className="text-[13.5px] font-bold text-[var(--k-ink-primary)] truncate">
-                        {col.title}
+                        {getColumnTitle(col)}
                       </h3>
                       <span className="px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[11px] font-semibold text-[var(--k-ink-muted)] k-tabular">
                         {colTasks.length}
@@ -1533,7 +1543,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                           setInlineAddColId(col.id);
                           setInlineAddText('');
                         }}
-                        aria-label={`Добавить задачу в ${col.title}`}
+                        aria-label={t('tasks.addToColAria', { title: getColumnTitle(col) })}
                         className="k-tap inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-accent)]"
                       >
                         <Plus weight="bold" className="w-3.5 h-3.5" />
@@ -1541,7 +1551,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                       <button
                         type="button"
                         onClick={() => openColumnEdit(col)}
-                        aria-label={`Настроить колонку ${col.title}`}
+                        aria-label={t('tasks.editColAria', { title: getColumnTitle(col) })}
                         className="k-tap inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)]"
                       >
                         <DotsThree weight="bold" className="w-4 h-4" />
@@ -1561,7 +1571,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                           autoFocus
                           value={inlineAddText}
                           onChange={(e) => setInlineAddText(e.target.value)}
-                          placeholder="Текст задачи…"
+                          placeholder={t('tasks.taskTextPlaceholder')}
                           className="w-full h-9 px-2.5 rounded-xl bg-[var(--k-bg-surface-2)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
                         />
                         <div className="flex items-center gap-1.5">
@@ -1570,14 +1580,14 @@ export const TasksView: React.FC<TasksViewProps> = ({
                             disabled={!inlineAddText.trim() || adding}
                             className="k-tap px-3 h-8 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-semibold disabled:opacity-40"
                           >
-                            Добавить
+                            {t('common.add')}
                           </button>
                           <button
                             type="button"
                             onClick={() => setInlineAddColId(null)}
                             className="k-tap px-2.5 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-secondary)]"
                           >
-                            Отмена
+                            {t('common.cancel')}
                           </button>
                         </div>
                       </form>
@@ -1586,8 +1596,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
                     {colTasks.length === 0 && inlineAddColId !== col.id ? (
                       <div className="py-10 px-4 text-center text-[12.5px] text-[var(--k-ink-muted)]">
                         {isDoneColumn(col.id, columns)
-                          ? 'Выполненные задачи появятся здесь'
-                          : 'Пока пусто — добавь задачу или перенеси сюда'}
+                          ? t('tasks.emptyDoneCol')
+                          : t('tasks.emptyCol')}
                       </div>
                     ) : (
                       colTasks.map((task) => renderBoardCard(task, col))
@@ -1604,10 +1614,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
               <div className="flex flex-col items-center justify-center text-center py-14 px-6">
                 <CheckSquare weight="duotone" className="w-9 h-9 text-[var(--k-ink-muted)] mb-2.5" />
                 <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-                  {filter === 'done' ? 'Завершённых задач пока нет' : 'Все задачи выполнены'}
+                  {filter === 'done' ? t('tasks.emptyDoneTitle') : t('tasks.emptyAllDoneTitle')}
                 </div>
                 <p className="text-[13px] text-[var(--k-ink-muted)] mt-1">
-                  Сюда автоматически попадают все чек-листы из заметок и голосовых записей.
+                  {t('tasks.emptyHint')}
                 </p>
               </div>
             ) : (
@@ -1641,13 +1651,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
                           key={task.id}
                           onLongPress={() => setActionTask(task)}
                           leftAction={{
-                            label: task.done ? 'Вернуть' : 'Готово',
+                            label: task.done ? t('tasks.swipeReopen') : t('tasks.swipeDone'),
                             icon: <Check weight="bold" className="w-4 h-4" />,
                             bgClass: 'bg-[var(--k-emerald)]',
                             onTrigger: () => handleToggleWithToast(task),
                           }}
                           rightAction={{
-                            label: 'Удалить',
+                            label: t('common.delete'),
                             icon: <Trash weight="fill" className="w-4 h-4" />,
                             bgClass: 'bg-[var(--k-danger)]',
                             onTrigger: () => {
@@ -1672,7 +1682,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                                 e.stopPropagation();
                                 handleToggleWithToast(task);
                               }}
-                              aria-label={task.done ? 'Снять отметку' : 'Отметить выполненной'}
+                              aria-label={task.done ? t('tasks.actionUncheck') : t('tasks.actionDone')}
                               className="inline-flex items-center justify-center w-9 h-9 -ml-1.5 -my-1.5 shrink-0"
                             >
                               <AnimatedTaskCheck done={task.done} />
@@ -1698,7 +1708,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                                       className="w-1.5 h-1.5 rounded-full"
                                       style={{ background: col.color }}
                                     />
-                                    {col.title}
+                                    {getColumnTitle(col)}
                                   </span>
                                 ) : null}
                                 {priority !== 'none' ? (
@@ -1706,7 +1716,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                                     className="px-1.5 py-0.5 rounded font-semibold text-[10.5px]"
                                     style={{ background: priMeta.bg, color: priMeta.color }}
                                   >
-                                    {priMeta.short}
+                                    {priMeta.shortKey ? t(priMeta.shortKey) : ''}
                                   </span>
                                 ) : null}
                                 {due ? (
@@ -1739,7 +1749,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                                 mobileBridge.haptic('light');
                                 setActionTask(task);
                               }}
-                              aria-label="Действия с задачей"
+                              aria-label={t('tasks.actionsAria')}
                               className="inline-flex items-center justify-center w-9 h-9 -mr-2 -my-1.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] shrink-0"
                             >
                               <DotsThree weight="bold" className="w-4 h-4" />
@@ -1777,7 +1787,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
           </div>
           {draggingTask.overColumnId ? (
             <div className="text-[11px] text-[var(--k-accent)] mt-1">
-              → {colMap.get(draggingTask.overColumnId)?.title}
+              → {colMap.get(draggingTask.overColumnId)
+                ? getColumnTitle(colMap.get(draggingTask.overColumnId)!)
+                : ''}
             </div>
           ) : null}
         </div>
@@ -1794,12 +1806,12 @@ export const TasksView: React.FC<TasksViewProps> = ({
               {viewMode === 'board' ? (
                 <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--k-border-hairline)]">
                   <span className="text-[13px] font-semibold text-[var(--k-ink-secondary)]">
-                    Детали задачи
+                    {t('tasks.detailsTitle')}
                   </span>
                   <button
                     type="button"
                     onClick={() => onSelectTask(null)}
-                    aria-label="Закрыть панель"
+                    aria-label={t('common.closePanel')}
                     className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
                   >
                     <X className="w-4 h-4" />
@@ -1811,7 +1823,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-[var(--k-ink-muted)]">
               <CheckSquare weight="duotone" className="w-8 h-8 mb-2 opacity-60" />
-              <div className="text-[14px]">Выбери задачу слева для настройки срока и приоритета</div>
+              <div className="text-[14px]">{t('tasks.selectPrompt')}</div>
             </div>
           )}
         </aside>
@@ -1820,7 +1832,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       {!isExpanded ? (
         <BottomSheet
           open={Boolean(selectedTaskId && selectedTask)}
-          title="Детали задачи"
+          title={t('tasks.detailsTitle')}
           isExpanded={false}
           onClose={() => onSelectTask(null)}
         >
@@ -1831,13 +1843,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
       {/* Move to Column Picker Sheet */}
       <MobilePickerSheet
         open={Boolean(moveColumnTask)}
-        title="Перенести в колонку"
+        title={t('tasks.actionMoveCol')}
         value={moveColumnTask?.columnId || columns[0]?.id || 'inbox'}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         options={columns.map((c) => ({
           value: c.id,
-          label: c.title,
+          label: getColumnTitle(c),
           color: c.color,
           count: tasksByColumn.get(c.id)?.length ?? 0,
         }))}
@@ -1852,7 +1864,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       {/* Create / Edit Column Sheet */}
       <BottomSheet
         open={columnSheetOpen}
-        title={editingColumn ? 'Настройка колонки' : 'Новая колонка доски'}
+        title={editingColumn ? t('tasks.editColSheetTitle') : t('tasks.newColSheetTitle')}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         maxWidthClass="max-w-sm"
@@ -1866,7 +1878,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             data-testid="kanban-column-title-input"
             value={colTitleDraft}
             onChange={(e) => setColTitleDraft(e.target.value)}
-            placeholder="Название колонки (напр. Проверка)…"
+            placeholder={t('tasks.colNamePlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)]"
           />
 
@@ -1889,7 +1901,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
           </div>
 
           <div className="space-y-2">
-            <div className="text-[12px] font-medium text-[var(--k-ink-secondary)]">Иконка колонки</div>
+            <div className="text-[12px] font-medium text-[var(--k-ink-secondary)]">
+              {t('tasks.colIconLabel')}
+            </div>
             <div className="grid grid-cols-6 gap-1.5" data-testid="kanban-column-icon-picker">
               {COLUMN_ICON_OPTIONS.map((opt) => {
                 const active = colIconDraft === opt.id;
@@ -1898,8 +1912,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   <button
                     key={opt.id}
                     type="button"
-                    title={opt.label}
-                    aria-label={opt.label}
+                    title={t(opt.labelKey)}
+                    aria-label={t(opt.labelKey)}
                     onClick={() => {
                       mobileBridge.haptic('light');
                       setColIconDraft(opt.id);
@@ -1933,13 +1947,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
               type="submit"
               className="k-tap flex-1 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold"
             >
-              {editingColumn ? 'Сохранить' : 'Создать колонку'}
+              {editingColumn ? t('common.save') : t('tasks.createColBtn')}
             </button>
             {editingColumn && !editingColumn.isDone && editingColumn.id !== 'done' && columns.length > 2 ? (
               <button
                 type="button"
                 onClick={() => void handleDeleteColumn(editingColumn)}
-                aria-label="Удалить колонку"
+                aria-label={t('tasks.deleteColAria')}
                 className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-danger-soft)] text-[var(--k-danger)]"
               >
                 <Trash className="w-4 h-4" />
@@ -1952,7 +1966,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       {/* Long-Press Action Sheet */}
       <ItemActionSheet
         open={Boolean(actionTask)}
-        title={actionTask?.text || 'Задача'}
+        title={actionTask?.text || t('tasks.fallbackTitle')}
         subtitle={actionTask?.itemTitle}
         actions={actionTask ? buildTaskActions(actionTask) : []}
         isExpanded={isExpanded}
@@ -1963,15 +1977,15 @@ export const TasksView: React.FC<TasksViewProps> = ({
       {/* Quick-add Orbit Picker */}
       <MobilePickerSheet
         open={orbitPickerOpen}
-        title="Раздел для задачи"
+        title={t('tasks.orbitTitle')}
         value={quickOrbit}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { SECTION_COLOR_PALETTE } from '@shared/constants';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import type {
+  AppLocale,
   ContentDna,
   ExportResult,
   ImportResult,
@@ -153,12 +154,12 @@ export function stripNotionIdSuffix(name: string): string {
   return stripped || trimmed;
 }
 
-function deriveTitleFromMarkdown(body: string, fallbackName: string): string {
+function deriveTitleFromMarkdown(body: string, fallbackName: string, locale: AppLocale = 'ru'): string {
   const h1 = /^#\s+(.+)$/m.exec(body);
   if (h1?.[1]?.trim()) {
     return h1[1].trim().slice(0, 120);
   }
-  return fallbackName.trim().slice(0, 120) || 'Импортированная заметка';
+  return fallbackName.trim().slice(0, 120) || (locale === 'en' ? 'Imported note' : 'Импортированная заметка');
 }
 
 function sanitizeExportSegment(name: string, fallback: string): string {
@@ -199,9 +200,10 @@ function resolveOrCreateImportOrbit(
   }
 
   const color = SECTION_COLOR_PALETTE[(orbitCache.size + state.created) % SECTION_COLOR_PALETTE.length]!;
+  const isEn = repo.getLocale() === 'en';
   const created = repo.createOrbit({
     name: cleanName,
-    description: `Импортировано из раздела «${cleanName}»`,
+    description: isEn ? `Imported from "${cleanName}"` : `Импортировано из раздела «${cleanName}»`,
     color,
     icon: 'Folder',
   });
@@ -276,13 +278,14 @@ export async function importMarkdownFolder(
   folderPath: string,
   deps: MarkdownIoDeps
 ): Promise<ImportResult> {
+  const isEn = deps.repo.getLocale() === 'en';
   const errors: string[] = [];
   if (!folderPath || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
     return {
       importedCount: 0,
       skippedCount: 0,
       orbitsCreated: 0,
-      errors: ['Выбранная папка не найдена.'],
+      errors: [isEn ? 'Selected folder was not found.' : 'Выбранная папка не найдена.'],
     };
   }
 
@@ -429,7 +432,7 @@ export async function importMarkdownFolder(
         ? resolveOrCreateImportOrbit(deps.repo, orbitCache, targetSectionName, orbitState)
         : '';
 
-      const title = fm.title || deriveTitleFromMarkdown(body, baseTitle);
+      const title = fm.title || deriveTitleFromMarkdown(body, baseTitle, isEn ? 'en' : 'ru');
       const stat = fs.statSync(mdAbs);
       const createdAt = fm.createdAt ?? Math.floor(stat.birthtimeMs || stat.mtimeMs || Date.now());
 
@@ -455,7 +458,8 @@ export async function importMarkdownFolder(
       deps.broadcastUpsert?.(created);
       importedCount += 1;
     } catch (err) {
-      errors.push(`${path.basename(mdAbs)}: ${err instanceof Error ? err.message : 'ошибка импорта'}`);
+      const isEn = deps.repo.getLocale() === 'en';
+      errors.push(`${path.basename(mdAbs)}: ${err instanceof Error ? err.message : isEn ? 'import error' : 'ошибка импорта'}`);
     }
   }
 
@@ -482,13 +486,14 @@ export async function importNotionZip(
   deps: MarkdownIoDeps,
   options?: { maxTotalUncompressedBytes?: number }
 ): Promise<ImportResult> {
+  const isEn = deps.repo.getLocale() === 'en';
   const errors: string[] = [];
   if (!zipPath || !fs.existsSync(zipPath)) {
     return {
       importedCount: 0,
       skippedCount: 0,
       orbitsCreated: 0,
-      errors: ['ZIP-архив Notion не найден.'],
+      errors: [isEn ? 'Notion ZIP archive not found.' : 'ZIP-архив Notion не найден.'],
     };
   }
 
@@ -526,7 +531,7 @@ export async function importNotionZip(
       importedCount: 0,
       skippedCount: 0,
       orbitsCreated: 0,
-      errors: [err instanceof Error ? err.message : 'Не удалось прочитать ZIP-архив.'],
+      errors: [err instanceof Error ? err.message : isEn ? 'Could not read ZIP archive.' : 'Не удалось прочитать ZIP-архив.'],
     };
   }
 
@@ -668,7 +673,7 @@ export async function importNotionZip(
           .trim();
       }
 
-      const title = fm.title || deriveTitleFromMarkdown(body, cleanFileTitle);
+      const title = fm.title || deriveTitleFromMarkdown(body, cleanFileTitle, isEn ? 'en' : 'ru');
       const orbitId =
         fm.orbit || topFolderClean
           ? resolveOrCreateImportOrbit(deps.repo, orbitCache, fm.orbit || topFolderClean, orbitState)
@@ -696,7 +701,7 @@ export async function importNotionZip(
       deps.broadcastUpsert?.(created);
       importedCount += 1;
     } catch (err) {
-      errors.push(`${ent.name}: ${err instanceof Error ? err.message : 'ошибка импорта'}`);
+      errors.push(`${ent.name}: ${err instanceof Error ? err.message : isEn ? 'import error' : 'ошибка импорта'}`);
     }
   }
 
@@ -722,6 +727,7 @@ export async function exportMarkdownZip(
   deps: MarkdownIoDeps
 ): Promise<ExportResult> {
   try {
+    const isEn = deps.repo.getLocale() === 'en';
     const items = deps.repo
       .queryItems({ includeArchived: true, includeSecrets: false, limit: 10_000 })
       .filter((it) => it.dna !== 'secret' && !it.deletedAt);
@@ -729,7 +735,7 @@ export async function exportMarkdownZip(
     const orbits = deps.repo.listOrbits();
     const orbitNameMap = new Map<string, string>();
     for (const o of orbits) {
-      orbitNameMap.set(o.id, sanitizeExportSegment(o.name, 'Раздел'));
+      orbitNameMap.set(o.id, sanitizeExportSegment(o.name, isEn ? 'Section' : 'Раздел'));
     }
 
     const mediaDir = deps.pipeline.getMediaDir();
@@ -753,10 +759,12 @@ export async function exportMarkdownZip(
       return safe;
     };
 
+    const noSecLabel = isEn ? 'No Section' : 'Без раздела';
+    const untitledLabel = isEn ? 'Untitled' : 'Без названия';
     for (const item of items) {
       const folderName = item.orbit
-        ? orbitNameMap.get(item.orbit) ?? sanitizeExportSegment(item.orbit, 'Без раздела')
-        : 'Без раздела';
+        ? orbitNameMap.get(item.orbit) ?? sanitizeExportSegment(item.orbit, noSecLabel)
+        : noSecLabel;
 
       const baseSlug = sanitizeExportSegment(item.title, `note-${item.id.slice(0, 8)}`);
       let candidatePath = `${folderName}/${baseSlug}.md`;
@@ -789,12 +797,14 @@ export async function exportMarkdownZip(
         exportedBody = item.summary;
       }
       if (item.url && !exportedBody.includes(item.url)) {
-        exportedBody = exportedBody ? `${exportedBody}\n\nИсточник: ${item.url}` : item.url;
+        exportedBody = exportedBody
+          ? `${exportedBody}\n\n${isEn ? 'Source' : 'Источник'}: ${item.url}`
+          : item.url;
       }
 
       const fmLines: string[] = [
         '---',
-        `title: ${escapeYamlString(item.title || 'Без названия')}`,
+        `title: ${escapeYamlString(item.title || untitledLabel)}`,
         `id: ${item.id}`,
         `type: ${item.dna}`,
         `section: ${escapeYamlString(folderName)}`,
@@ -809,7 +819,7 @@ export async function exportMarkdownZip(
       }
       fmLines.push('---');
 
-      const mdContent = `${fmLines.join('\n')}\n\n# ${item.title || 'Без названия'}\n\n${exportedBody}\n`;
+      const mdContent = `${fmLines.join('\n')}\n\n# ${item.title || untitledLabel}\n\n${exportedBody}\n`;
       zipEntries.push({
         name: candidatePath,
         data: Buffer.from(mdContent, 'utf8'),
@@ -826,9 +836,10 @@ export async function exportMarkdownZip(
       count: items.length,
     };
   } catch (err) {
+    const isEn = deps.repo.getLocale() === 'en';
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Не удалось создать архив Markdown.',
+      error: err instanceof Error ? err.message : isEn ? 'Could not build Markdown archive.' : 'Не удалось создать архив Markdown.',
     };
   }
 }
@@ -878,13 +889,14 @@ export async function importJsonBackup(
   filePath: string,
   deps: MarkdownIoDeps
 ): Promise<ImportResult> {
+  const isEn = deps.repo.getLocale() === 'en';
   const errors: string[] = [];
   if (!filePath || !fs.existsSync(filePath)) {
     return {
       importedCount: 0,
       skippedCount: 0,
       orbitsCreated: 0,
-      errors: ['Файл резервной копии не найден.'],
+      errors: [isEn ? 'Backup file not found.' : 'Файл резервной копии не найден.'],
     };
   }
 
@@ -897,14 +909,14 @@ export async function importJsonBackup(
     } else if (json && typeof json === 'object') {
       parsed = json as JsonBackupPayload;
     } else {
-      throw new Error('Некорректная структура JSON.');
+      throw new Error(isEn ? 'Invalid JSON structure.' : 'Некорректная структура JSON.');
     }
   } catch (err) {
     return {
       importedCount: 0,
       skippedCount: 0,
       orbitsCreated: 0,
-      errors: [err instanceof Error ? err.message : 'Не удалось прочитать файл резервной копии.'],
+      errors: [err instanceof Error ? err.message : isEn ? 'Could not read backup file.' : 'Не удалось прочитать файл резервной копии.'],
     };
   }
 
@@ -1003,7 +1015,7 @@ export async function importJsonBackup(
 
     const dna: ContentDna =
       rawItem.dna && VALID_IMPORT_DNA.has(rawItem.dna) ? rawItem.dna : 'note';
-    const title = (rawItem.title || 'Без названия').trim();
+    const title = (rawItem.title || (isEn ? 'Untitled' : 'Без названия')).trim();
     const body = typeof rawItem.body === 'string' ? rawItem.body : '';
     const summary = typeof rawItem.summary === 'string' ? rawItem.summary : '';
     const url = typeof rawItem.url === 'string' ? rawItem.url : null;
@@ -1102,7 +1114,7 @@ export async function importJsonBackup(
       deps.broadcastUpsert?.(finalItem);
       importedCount += 1;
     } catch (err) {
-      errors.push(`${title}: ${err instanceof Error ? err.message : 'ошибка восстановления'}`);
+      errors.push(`${title}: ${err instanceof Error ? err.message : isEn ? 'restore error' : 'ошибка восстановления'}`);
     }
   }
 

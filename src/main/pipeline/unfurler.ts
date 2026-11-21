@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { cleanInstagramText, decodeHtmlEntities, truncateAtWordBoundary } from '@shared/html-entities';
-import type { ExtractedAction } from '@shared/types';
+import type { AppLocale, ExtractedAction } from '@shared/types';
 import {
   domNodeToMarkdown,
   extractDocumentMeta,
@@ -373,7 +373,11 @@ function normalizeForTitleMatch(text: string): string {
  * Pure DOM-based parser for Telegram embed (`?embed=1&mode=tme`) or `t.me/s/` public channel post HTML.
  * Extracts post title, full body markdown, embedded links, author, timestamp, photos, and MP4 video stream.
  */
-export function parseTelegramPostHtml(html: string, postUrl: string): Partial<UnfurlResult> {
+export function parseTelegramPostHtml(
+  html: string,
+  postUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> {
   const baseUrl = new URL(postUrl);
   const doc = parseHtmlDocument(html);
 
@@ -450,12 +454,13 @@ export function parseTelegramPostHtml(html: string, postUrl: string): Partial<Un
     })
     .filter(Boolean);
 
+  const isEn = locale === 'en';
   const title =
     parsedText.firstBoldTitle ||
     (rawParagraphs.length > 0
-      ? deriveHeadlineFromText(rawParagraphs.join('\n\n'), author || 'Пост в Telegram')
+      ? deriveHeadlineFromText(rawParagraphs.join('\n\n'), author || (isEn ? 'Telegram post' : 'Пост в Telegram'))
       : null) ||
-    (author ? `${author} · пост` : null);
+    (author ? `${author} · ${isEn ? 'post' : 'пост'}` : null);
 
   // Strip duplicate standalone bold headline paragraph while keeping unbolded lead-in prose intact
   const normTitle = parsedText.firstBoldTitle ? normalizeForTitleMatch(parsedText.firstBoldTitle) : '';
@@ -494,7 +499,12 @@ export function parseTelegramPostHtml(html: string, postUrl: string): Partial<Un
   };
 }
 
-export function parseFxTwitterResponse(json: unknown, postUrl: string): Partial<UnfurlResult> | null {
+export function parseFxTwitterResponse(
+  json: unknown,
+  postUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  const isEn = locale === 'en';
   if (!json || typeof json !== 'object') return null;
   const root = json as {
     code?: number;
@@ -527,7 +537,10 @@ export function parseFxTwitterResponse(json: unknown, postUrl: string): Partial<
     if (safeThumb) galleryUrls.push(safeThumb);
   }
 
-  const title = deriveHeadlineFromText(text, handle ? `Пост ${handle}` : 'Пост в X');
+  const title = deriveHeadlineFromText(
+    text,
+    handle ? (isEn ? `Post by ${handle}` : `Пост ${handle}`) : isEn ? 'Post on X' : 'Пост в X'
+  );
   const bodyMarkdown = [text, author ? `— *${author}*` : '', postUrl].filter(Boolean).join('\n\n');
 
   return {
@@ -638,7 +651,8 @@ export function parseGenericHtmlPage(html: string, finalUrl: URL): Partial<Unfur
   };
 }
 
-export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
+export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promise<UnfurlResult> {
+  const isEn = locale === 'en';
   const fallback = emptyUnfurl(rawUrl);
   try {
     const initial = new URL(rawUrl);
@@ -659,7 +673,7 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
       const embedFetch = await safeFetchWithRedirects(embedUrl, { timeoutMs: 7000 });
       if (embedFetch && embedFetch.resp.ok) {
         const html = await readUpToBytes(embedFetch.resp, 260_000);
-        const parsed = parseTelegramPostHtml(html, rawUrl);
+        const parsed = parseTelegramPostHtml(html, rawUrl, locale);
         if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
           return {
             ...fallback,
@@ -684,7 +698,7 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
             break;
           }
         }
-        const parsed = parseTelegramPostHtml(targetOuterHtml, rawUrl);
+        const parsed = parseTelegramPostHtml(targetOuterHtml, rawUrl, locale);
         if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
           return {
             ...fallback,
@@ -703,7 +717,7 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
       const fx = await safeFetchWithRedirects(apiUrl, { accept: 'application/json', timeoutMs: 6500 });
       if (fx && fx.resp.ok) {
         const json = await fx.resp.json().catch(() => null);
-        const parsed = parseFxTwitterResponse(json, rawUrl);
+        const parsed = parseFxTwitterResponse(json, rawUrl, locale);
         if (parsed) {
           return {
             ...fallback,
@@ -742,7 +756,7 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
             (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null) ||
             sanitizeSafeExternalUrl(oe.thumbnail_url);
           const bodyParts = [
-            oe.author_name ? `Канал: **${oe.author_name}**` : '',
+            oe.author_name ? `${isEn ? 'Channel' : 'Канал'}: **${oe.author_name}**` : '',
             rawUrl,
           ].filter(Boolean);
           return {
@@ -752,7 +766,11 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
             domain: 'youtube.com',
             author: oe.author_name ?? null,
             title: truncateAtWordBoundary(decodeHtmlEntities(oe.title), 120),
-            description: oe.author_name ? `Видео канала ${oe.author_name}` : null,
+            description: oe.author_name
+              ? isEn
+                ? `Video by ${oe.author_name}`
+                : `Видео канала ${oe.author_name}`
+              : null,
             bodyMarkdown: bodyParts.join('\n\n'),
             ogImageUrl: thumb,
             galleryUrls: thumb ? [thumb] : [],
@@ -785,8 +803,8 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
           const cleanBody = decodeHtmlEntities(issue.body || '').trim().slice(0, 4500);
           const metaLine = [
             `${owner}/${repoName} #${num}`,
-            issue.state ? `Статус: \`${issue.state}\`` : '',
-            issue.user?.login ? `Автор: @${issue.user.login}` : '',
+            issue.state ? `${isEn ? 'Status' : 'Статус'}: \`${issue.state}\`` : '',
+            issue.user?.login ? `${isEn ? 'Author' : 'Автор'}: @${issue.user.login}` : '',
           ]
             .filter(Boolean)
             .join(' · ');
@@ -834,9 +852,9 @@ export async function unfurlUrl(rawUrl: string): Promise<UnfurlResult> {
         if (gh?.full_name) {
           const safeHomepage = sanitizeSafeExternalUrl(gh.homepage);
           const metaLine = [
-            gh.language ? `Язык: \`${gh.language}\`` : '',
+            gh.language ? `${isEn ? 'Language' : 'Язык'}: \`${gh.language}\`` : '',
             typeof gh.stargazers_count === 'number' ? `★ ${gh.stargazers_count.toLocaleString('en-US')}` : '',
-            safeHomepage ? `[Сайт](${safeHomepage})` : '',
+            safeHomepage ? `[${isEn ? 'Website' : 'Сайт'}](${safeHomepage})` : '',
           ]
             .filter(Boolean)
             .join(' · ');

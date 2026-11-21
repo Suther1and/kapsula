@@ -117,7 +117,7 @@ async function main() {
       if (msg.type() === 'error') errors.push(`CONSOLE_ERROR: ${msg.text()}`);
     });
 
-    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}?lang=ru`, { waitUntil: 'networkidle' });
     await page.waitForSelector('[data-testid="kapsula-mobile-root"]');
 
     const sampleImgBytes = Array.from(fs.readFileSync(path.resolve(ROOT, 'build', 'icon.png')));
@@ -692,6 +692,23 @@ async function main() {
     await page.waitForTimeout(260);
     await assertNoHorizontalOverflow(page, 'compact-feed-light');
     await page.screenshot({ path: path.join(OUT_DIR, '23-compact-feed-emerald-light.png') });
+
+    // Bilingual EN smoke verification (close detail sheet if open after fold -> switch to English -> check nav chrome + zero overflow)
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(260);
+    await page.click('[data-testid="header-cloud-btn"]');
+    await page.waitForSelector('[data-testid="settings-cloud-sheet"]');
+    await page.click('[data-testid="settings-tab-appearance"]');
+    await page.click('[data-testid="settings-lang-en"]');
+    await page.waitForTimeout(180);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(260);
+    const enNavText = await page.evaluate(() => {
+      const nav = document.querySelector('[data-testid="mobile-bottom-nav"], nav');
+      return nav ? nav.innerText : '';
+    });
+    assert(enNavText.length > 0 && !/[А-Яа-яЁё]/.test(enNavText), `EN nav chrome leaked Cyrillic: "${enNavText}"`);
+    await assertNoHorizontalOverflow(page, 'compact-en-light');
 
     assert(errors.length === 0, `Runtime console/page errors detected:\n${errors.join('\n')}`);
     console.log('\n[fold-verify] ALL 26 ANDROID FOLD V2 SCENARIOS PASSED (0 errors)!');

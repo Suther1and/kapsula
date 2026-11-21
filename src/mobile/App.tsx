@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ArrowCircleUp, Cloud, MagnifyingGlass, X } from '@phosphor-icons/react';
 import { Toaster, toast } from 'sonner';
-import { ONBOARDING_PRESETS } from '@shared/note-templates';
+import type { AppLocale } from '@shared/i18n/core';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
+import { APP_VERSION, computeVersionCodeFromSemver } from '@shared/app-version';
 import { isDoneColumn, toggleMarkdownTaskInBody } from '@shared/task-helpers';
 import type { SyncStatus } from '@shared/sync-contract';
 import type {
@@ -23,6 +25,7 @@ import { consumeTopBackHandler } from './lib/back-stack';
 import {
   extractTasksFromMobileItem,
   polishMobileNoteText,
+  shouldPromptAiSettings,
   transcribeMobileVoiceItem,
 } from './lib/mobile-ai';
 import {
@@ -37,6 +40,15 @@ import {
   makeSafeUploadName,
   type MobileTabId,
 } from './lib/mobile-helpers';
+import {
+  getMobileOnboardingPresets,
+  getUrlLocaleOverride,
+  MobileI18nProvider,
+  resolveMobileLocale,
+  setRuntimeMobileLocale,
+  tm,
+  writeStoredMobileLocale,
+} from './lib/mobile-i18n';
 import { checkForMobileUpdate, type MobileUpdateCheckResult } from './lib/mobile-updater';
 import {
   mobileBridge,
@@ -65,10 +77,7 @@ import {
   type NoteDraftBuffer,
 } from './components/MobileNoteEditor';
 import { MobileSearchOverlay } from './components/MobileSearchOverlay';
-import {
-  MOBILE_WELCOME_NOTE_BODY,
-  MobileWelcomeSheet,
-} from './components/MobileWelcomeSheet';
+import { MobileWelcomeSheet } from './components/MobileWelcomeSheet';
 import { NotesView } from './components/NotesView';
 import { QuickCaptureSheet, type QuickCaptureTab } from './components/QuickCaptureSheet';
 import { SettingsCloudSheet } from './components/SettingsCloudSheet';
@@ -165,9 +174,25 @@ export const App: React.FC = () => {
   const [selectedDateIso, setSelectedDateIso] = useState<string>(() => toDateIso(new Date()));
   const [selectedSecretId, setSelectedSecretId] = useState<string | null>(null);
 
-  // Settings, Custom Color Engine, AI & Vault Security state
+  // Settings, Custom Color Engine, AI, Locale & Vault Security state
+  const [locale, setLocaleState] = useState<AppLocale>(() => resolveMobileLocale());
+  const userLocaleOverrideRef = useRef<AppLocale | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const [appearance, setAppearance] = useState<AppearanceConfig>(readInitialAppearance);
+  const t = useCallback(
+    (key: MobileDictKey, params?: Record<string, string | number>) => tm(key, params, locale),
+    [locale]
+  );
+  const handleChangeLocale = useCallback(
+    (next: AppLocale) => {
+      userLocaleOverrideRef.current = next;
+      setLocaleState(next);
+      writeStoredMobileLocale(next);
+      setRuntimeMobileLocale(next);
+      void store.setLocale(next);
+    },
+    [store]
+  );
   const [biometricEnabled, setBiometricEnabled] = useState(true);
   const [hasMasterPin, setHasMasterPin] = useState(false);
   const [pinLockoutRemainingSec, setPinLockoutRemainingSec] = useState(0);
@@ -203,8 +228,8 @@ export const App: React.FC = () => {
 
   // App Version & In-App Updates state
   const [appVersion, setAppVersion] = useState<NativeAppVersion>({
-    versionName: '1.0.0',
-    versionCode: 100000000,
+    versionName: APP_VERSION,
+    versionCode: computeVersionCodeFromSemver(APP_VERSION),
   });
   const [updateInfo, setUpdateInfo] = useState<MobileUpdateCheckResult | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -225,21 +250,21 @@ export const App: React.FC = () => {
       const res = await syncEngine.completeOAuthCallback(clean);
       if (!res.ok) {
         mobileBridge.haptic('error');
-        toast.error(res.error || 'Не удалось завершить вход через Google');
+        toast.error(res.error || t('toast.googleError'));
         return;
       }
       mobileBridge.haptic('success');
       if (res.needsPassphraseSetup) {
-        toast.success('Вход через Google выполнен — задай секретную фразу');
+        toast.success(t('toast.googleNeedsSetup'));
         openSettingsAt('cloud');
       } else if (res.needsPassphraseUnlock) {
-        toast.success('Вход через Google выполнен — введи секретную фразу');
+        toast.success(t('toast.googleNeedsUnlock'));
         openSettingsAt('cloud');
       } else {
-        toast.success('Вход через Google выполнен');
+        toast.success(t('toast.googleSuccess'));
       }
     },
-    [syncEngine, openSettingsAt]
+    [syncEngine, openSettingsAt, t]
   );
 
   const handleCheckUpdates = useCallback(
@@ -254,10 +279,10 @@ export const App: React.FC = () => {
         if (manual) {
           if (res.status === 'update_available' && res.latestVersion) {
             mobileBridge.haptic('success');
-            toast.success(`Доступна новая версия Kapsula v${res.latestVersion}`);
+            toast.success(t('toast.updateFound', { version: res.latestVersion }));
           } else if (res.status === 'up_to_date') {
             mobileBridge.haptic('light');
-            toast('Установлена актуальная версия Kapsula');
+            toast(t('toast.updateLatest'));
           } else if (res.error) {
             mobileBridge.haptic('error');
             toast.error(res.error);
@@ -267,7 +292,7 @@ export const App: React.FC = () => {
         setUpdateChecking(false);
       }
     },
-    [appVersion.versionName, appVersion.versionCode]
+    [appVersion.versionName, appVersion.versionCode, t]
   );
 
   const handleInstallUpdate = useCallback(async () => {
@@ -278,16 +303,16 @@ export const App: React.FC = () => {
       const res = await mobileBridge.downloadAndInstallApk(updateInfo.apkUrl, updateInfo.sha256);
       if (!res.ok) {
         mobileBridge.haptic('error');
-        toast.error(res.error || 'Не удалось установить обновление');
+        toast.error(res.error || t('toast.updateInstallErr'));
       } else {
         mobileBridge.haptic('success');
-        toast.success('Открываю системный установщик обновления');
+        toast.success(t('toast.updateOpeningInstaller'));
       }
     } finally {
       setUpdateInstalling(false);
       setUpdateDownloadPercent(null);
     }
-  }, [updateInfo]);
+  }, [updateInfo, t]);
 
   const enqueueSharesUnique = useCallback((incoming: SharedIntentPayload[]) => {
     const fresh: SharedIntentPayload[] = [];
@@ -366,6 +391,20 @@ export const App: React.FC = () => {
         persistAppearanceLocal(storedAppearance);
         return storedAppearance;
       });
+    }
+
+    // Keep UI locale in sync with store/remote workspace_prefs (URL ?lang= seeds initial locale unless user switched)
+    const persistedLocale = store.getPersistedLocale();
+    if (userLocaleOverrideRef.current !== null) {
+      if (persistedLocale && persistedLocale !== userLocaleOverrideRef.current) {
+        userLocaleOverrideRef.current = persistedLocale;
+        setRuntimeMobileLocale(persistedLocale);
+        setLocaleState(persistedLocale);
+      }
+    } else {
+      const urlLockedLocale = getUrlLocaleOverride();
+      const nextLocale = urlLockedLocale ?? store.getLocale();
+      setLocaleState((prev) => (prev === nextLocale ? prev : nextLocale));
     }
 
     // Dismiss first-run welcome sheet automatically if vault gained data via sync or seeding
@@ -766,7 +805,7 @@ export const App: React.FC = () => {
 
   // Delete handlers with reversible Trash & 5-second Undo toast!
   const handleDeleteItemWithUndo = useCallback(
-    async (id: string, label = 'Перемещено в корзину') => {
+    async (id: string, label?: string) => {
       const raw = store.getRawItem(id);
       if (!raw) return;
       await store.deleteItem(id);
@@ -776,19 +815,19 @@ export const App: React.FC = () => {
         delete next[id];
         return next;
       });
-      toast(label, {
+      toast(label ?? t('common.movedToTrash'), {
         duration: 5000,
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void store.restoreItem(id);
             mobileBridge.haptic('success');
-            toast.success('Восстановлено');
+            toast.success(t('common.restored'));
           },
         },
       });
     },
-    [store]
+    [store, t]
   );
 
   const handleBulkDeleteWithUndo = useCallback(
@@ -798,20 +837,20 @@ export const App: React.FC = () => {
         await store.deleteItem(id);
       }
       if (validIds.length === 0) return;
-      toast(`Перемещено в корзину: ${validIds.length}`, {
+      toast(t('common.movedMultipleToTrash', { count: validIds.length }), {
         duration: 5000,
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void Promise.all(validIds.map((id) => store.restoreItem(id))).then(() => {
               mobileBridge.haptic('success');
-              toast.success('Записи восстановлены');
+              toast.success(t('common.itemsRestored'));
             });
           },
         },
       });
     },
-    [store]
+    [store, t]
   );
 
   const handleDeleteEventWithUndo = useCallback(
@@ -820,38 +859,38 @@ export const App: React.FC = () => {
       if (!raw) return;
       const snapshot = { ...raw };
       await store.deleteCalendarEvent(id);
-      toast('Событие удалено', {
+      toast(t('toast.eventDeleted'), {
         duration: 5000,
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void store.restoreRawCalendarEvent(snapshot);
             mobileBridge.haptic('success');
-            toast.success('Событие восстановлено');
+            toast.success(t('toast.eventRestored'));
           },
         },
       });
     },
-    [store]
+    [store, t]
   );
 
   const handleDeleteTaskWithUndo = useCallback(
     async (task: VaultTaskEntry) => {
       const snapshot = await store.deleteVaultTask(task);
       if (!snapshot) return;
-      toast('Задача удалена', {
+      toast(t('toast.taskDeleted'), {
         duration: 5000,
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void store.restoreRawItem(snapshot);
             mobileBridge.haptic('success');
-            toast.success('Задача восстановлена');
+            toast.success(t('toast.taskRestored'));
           },
         },
       });
     },
-    [store]
+    [store, t]
   );
 
   // Unlock Vault via Android BiometricPrompt with fail-closed Master PIN fallback
@@ -868,8 +907,8 @@ export const App: React.FC = () => {
       return { ok: false, needsPinFallback: true };
     }
     const res = await mobileBridge.authenticateBiometric(
-      'Доступ к Сейфу Kapsula',
-      'Подтверди личность отпечатком или лицом'
+      t('biometric.vaultTitle'),
+      t('biometric.vaultSubtitle')
     );
     if (res.ok) {
       setVaultLocked(false);
@@ -974,9 +1013,9 @@ export const App: React.FC = () => {
       if (!localName) return;
       await store.updateItem(itemId, { imagePath: localName, thumbPath: localName });
       mobileBridge.haptic('success');
-      toast.success('Фото прикреплено к заметке');
+      toast.success(t('toast.photoAttached'));
     },
-    [store, handleInsertInlinePhoto]
+    [store, handleInsertInlinePhoto, t]
   );
 
   // Voice AI transcription, task extraction & text polish (personal key -> built-in cloud proxy)
@@ -984,16 +1023,13 @@ export const App: React.FC = () => {
     async (item: VaultItem) => {
       const res = await transcribeMobileVoiceItem(store, item, undefined, syncEngine);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось расшифровать запись', {
-          action:
-            res.error?.includes('Настройках') ||
-            res.error?.includes('ключ') ||
-            res.error?.includes('Облако')
-              ? {
-                  label: 'Настроить ИИ',
-                  onClick: () => openSettingsAt('appearance'),
-                }
-              : undefined,
+        toast.error(res.error || t('toast.transcribeError'), {
+          action: shouldPromptAiSettings(res.error)
+            ? {
+                label: t('toast.setupAiAction'),
+                onClick: () => openSettingsAt('appearance'),
+              }
+            : undefined,
         });
         return;
       }
@@ -1001,61 +1037,55 @@ export const App: React.FC = () => {
       const tasksAdded = res.extractedTasks?.length ?? 0;
       toast.success(
         tasksAdded > 0
-          ? `Расшифровано · найдено задач: ${tasksAdded}`
-          : 'Голосовая заметка расшифрована'
+          ? t('toast.transcribeDoneWithTasks', { count: tasksAdded })
+          : t('toast.transcribeDone')
       );
     },
-    [store, syncEngine, openSettingsAt]
+    [store, syncEngine, openSettingsAt, t]
   );
 
   const handleExtractTasks = useCallback(
     async (item: VaultItem) => {
       const res = await extractTasksFromMobileItem(store, item, syncEngine);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось выделить задачи', {
-          action:
-            res.error?.includes('Настройках') ||
-            res.error?.includes('ключ') ||
-            res.error?.includes('Облако')
-              ? {
-                  label: 'Настроить ИИ',
-                  onClick: () => openSettingsAt('appearance'),
-                }
-              : undefined,
+        toast.error(res.error || t('toast.extractTasksError'), {
+          action: shouldPromptAiSettings(res.error)
+            ? {
+                label: t('toast.setupAiAction'),
+                onClick: () => openSettingsAt('appearance'),
+              }
+            : undefined,
         });
         return;
       }
       mobileBridge.haptic('success');
       if (res.tasks.length === 0) {
-        toast('Явных задач в тексте не нашлось');
+        toast(t('toast.extractTasksEmpty'));
       } else {
-        toast.success(`Добавлено задач: ${res.tasks.length}`);
+        toast.success(t('toast.extractTasksDone', { count: res.tasks.length }));
       }
     },
-    [store, syncEngine, openSettingsAt]
+    [store, syncEngine, openSettingsAt, t]
   );
 
   const handlePolishNote = useCallback(
     async (item: VaultItem) => {
       const res = await polishMobileNoteText(store, item, syncEngine);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось причесать текст', {
-          action:
-            res.error?.includes('Настройках') ||
-            res.error?.includes('ключ') ||
-            res.error?.includes('Облако')
-              ? {
-                  label: 'Настроить ИИ',
-                  onClick: () => openSettingsAt('appearance'),
-                }
-              : undefined,
+        toast.error(res.error || t('toast.polishError'), {
+          action: shouldPromptAiSettings(res.error)
+            ? {
+                label: t('toast.setupAiAction'),
+                onClick: () => openSettingsAt('appearance'),
+              }
+            : undefined,
         });
         return;
       }
       mobileBridge.haptic('success');
-      toast.success('Текст приведён в порядок (прошлая версия в истории)');
+      toast.success(t('toast.polishDone'));
     },
-    [store, syncEngine, openSettingsAt]
+    [store, syncEngine, openSettingsAt, t]
   );
 
   const handleCopyDiagnostics = useCallback(async () => {
@@ -1085,7 +1115,7 @@ export const App: React.FC = () => {
     });
     await mobileBridge.copyPlain(report);
     mobileBridge.haptic('success');
-    toast.success('Диагностика скопирована');
+    toast.success(t('toast.diagnosticsCopied'));
   }, [
     appVersion,
     fold.isExpanded,
@@ -1099,6 +1129,7 @@ export const App: React.FC = () => {
     archivedItems.length,
     syncStatus,
     aiConfig,
+    t,
   ]);
 
   const handleCreateOrbitQuick = useCallback(
@@ -1238,7 +1269,8 @@ export const App: React.FC = () => {
       ? fold.hingeBounds.right
       : 0;
 
-  const currentTabTitle = MOBILE_NAV_TABS.find((t) => t.id === activeTab)?.label ?? 'Kapsula';
+  const activeNavTab = MOBILE_NAV_TABS.find((tab) => tab.id === activeTab);
+  const currentTabTitle = activeNavTab ? t(activeNavTab.labelKey) : t('app.name');
   const currentShare = shareQueue[0] ?? null;
 
   // Bottom toasts: cleanly above floating dock when visible; in fullscreen compact editor,
@@ -1254,10 +1286,12 @@ export const App: React.FC = () => {
 
   if (!ready) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[var(--k-bg-canvas)] text-[var(--k-ink-secondary)]">
-        <KapsulaEmblem size={36} />
-        <span className="text-[13px]">Открываю Kapsula…</span>
-      </div>
+      <MobileI18nProvider locale={locale} onLocaleChange={handleChangeLocale}>
+        <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[var(--k-bg-canvas)] text-[var(--k-ink-secondary)]">
+          <KapsulaEmblem size={36} />
+          <span className="text-[13px]">{t('app.loading')}</span>
+        </div>
+      </MobileI18nProvider>
     );
   }
 
@@ -1284,6 +1318,7 @@ export const App: React.FC = () => {
   );
 
   return (
+    <MobileI18nProvider locale={locale} onLocaleChange={handleChangeLocale}>
     <div
       data-testid="kapsula-mobile-root"
       data-fold-mode={fold.isExpanded ? 'expanded' : 'compact'}
@@ -1331,14 +1366,14 @@ export const App: React.FC = () => {
                       data-testid="mobile-search-input"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Поиск по заметкам, задачам, событиям…"
+                      placeholder={t('header.searchPlaceholder')}
                       className="w-full h-9 pl-9 pr-8 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13px] text-[var(--k-ink-primary)]"
                     />
                     {searchQuery ? (
                       <button
                         type="button"
                         onClick={() => setSearchQuery('')}
-                        aria-label="Очистить поиск"
+                        aria-label={t('header.clearSearch')}
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--k-ink-muted)]"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -1354,7 +1389,7 @@ export const App: React.FC = () => {
                     }}
                     className="k-tap px-2.5 h-9 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] shrink-0"
                   >
-                    Везде
+                    {t('header.everywhere')}
                   </button>
                 </div>
               ) : null}
@@ -1368,7 +1403,7 @@ export const App: React.FC = () => {
                       mobileBridge.haptic('light');
                       setSearchOpen(true);
                     }}
-                    aria-label="Поиск"
+                    aria-label={t('common.search')}
                     className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
                   >
                     <MagnifyingGlass className="w-4 h-4" />
@@ -1382,7 +1417,7 @@ export const App: React.FC = () => {
                     mobileBridge.haptic('light');
                     openSettingsAt('cloud');
                   }}
-                  aria-label="Облако и настройки"
+                  aria-label={t('nav.cloudAndSettings')}
                   className="k-tap inline-flex items-center gap-1.5 px-2.5 h-9 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[12px] font-medium text-[var(--k-ink-primary)]"
                 >
                   <span
@@ -1393,12 +1428,12 @@ export const App: React.FC = () => {
                   {fold.isExpanded ? (
                     <span>
                       {syncStatus.state === 'synced'
-                        ? 'Облако'
+                        ? t('header.cloud')
                         : syncStatus.state === 'syncing'
-                          ? 'Обновление…'
+                          ? t('header.syncing')
                           : syncStatus.state === 'offline'
-                            ? 'Офлайн'
-                            : 'Настроить'}
+                            ? t('header.offline')
+                            : t('header.setup')}
                     </span>
                   ) : null}
                 </button>
@@ -1419,7 +1454,7 @@ export const App: React.FC = () => {
             <div className="flex items-center gap-2 min-w-0">
               <ArrowCircleUp weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
               <span className="text-[12px] font-medium text-[var(--k-ink-primary)] truncate">
-                Доступна Kapsula v{updateInfo.latestVersion}
+                {t('header.updateAvailable', { version: updateInfo.latestVersion })}
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -1432,12 +1467,12 @@ export const App: React.FC = () => {
                 {updateInstalling
                   ? updateDownloadPercent !== null
                     ? `${updateDownloadPercent}%`
-                    : 'Загрузка…'
-                  : 'Обновить'}
+                    : t('header.updateDownloading')
+                  : t('header.updateNow')}
               </button>
               <button
                 type="button"
-                aria-label="Скрыть уведомление об обновлении"
+                aria-label={t('header.updateDismissAria')}
                 onClick={() => {
                   const ver = updateInfo.latestVersion!;
                   setDismissedUpdateVersion(ver);
@@ -1477,7 +1512,7 @@ export const App: React.FC = () => {
               onCreateBoard={handleCreateBoardQuick}
               onUpdateItem={handleUpdateItemOptimistic}
               onToggleMarkdownTask={handleToggleMarkdownTaskOptimistic}
-              onDeleteItem={(id) => handleDeleteItemWithUndo(id, 'Перемещено в корзину')}
+              onDeleteItem={(id) => handleDeleteItemWithUndo(id, t('common.movedToTrash'))}
               onBulkDeleteItems={handleBulkDeleteWithUndo}
               onTranscribeVoice={handleTranscribeVoice}
               onExtractTasks={handleExtractTasks}
@@ -1525,7 +1560,7 @@ export const App: React.FC = () => {
                 setSelectedFeedItemId(id);
                 setActiveTab('feed');
               }}
-              onDeleteNote={(id) => handleDeleteItemWithUndo(id, 'Перемещено в корзину')}
+              onDeleteNote={(id) => handleDeleteItemWithUndo(id, t('common.movedToTrash'))}
             />
           ) : null}
 
@@ -1603,7 +1638,7 @@ export const App: React.FC = () => {
               onRevealSecret={(id) => store.revealSecret(id)}
               onCopySecretField={handleCopySecretField}
               onUpsertSecret={(input) => store.upsertSecret(input)}
-              onDeleteSecret={(id) => handleDeleteItemWithUndo(id, 'Секрет перемещён в корзину')}
+              onDeleteSecret={(id) => handleDeleteItemWithUndo(id, t('common.secretMovedToTrash'))}
               onCreateOrbit={handleCreateOrbitQuick}
             />
           ) : null}
@@ -1702,12 +1737,13 @@ export const App: React.FC = () => {
             });
           }
           if (createWelcomeNote) {
+            const { welcomeNote } = getMobileOnboardingPresets(locale);
             await store.createItem({
               dna: 'note',
-              title: ONBOARDING_PRESETS.welcomeNote.title,
-              summary: ONBOARDING_PRESETS.welcomeNote.summary,
-              body: MOBILE_WELCOME_NOTE_BODY,
-              tags: ONBOARDING_PRESETS.welcomeNote.tags,
+              title: welcomeNote.title,
+              summary: welcomeNote.summary,
+              body: welcomeNote.body,
+              tags: welcomeNote.tags,
             });
           }
           await store.setSyncState('pref_onboarded', '1');
@@ -1831,12 +1867,12 @@ export const App: React.FC = () => {
           }
           if (guard.action === 'require_biometric') {
             const verified = await mobileBridge.authenticateBiometric(
-              'Отключение защиты Сейфа',
-              'Подтверди личность отпечатком или лицом'
+              t('biometric.disableTitle'),
+              t('biometric.vaultSubtitle')
             );
             if (!verified.ok && verified.reason !== 'no_device_credential') {
               mobileBridge.haptic('error');
-              toast.error(verified.error || 'Отмена: защита Сейфа остаётся включённой');
+              toast.error(verified.error || t('biometric.disableCancel'));
               return;
             }
           }
@@ -1852,20 +1888,18 @@ export const App: React.FC = () => {
               mobileBridge.haptic('error');
               throw new Error(
                 verify.lockoutRemainingSec > 0
-                  ? `Слишком много попыток · подожди ${verify.lockoutRemainingSec} с`
-                  : verify.error || 'Неверный текущий мастер-ПИН'
+                  ? t('biometric.tooManyAttempts', { sec: verify.lockoutRemainingSec })
+                  : verify.error || t('biometric.wrongCurrentPin')
               );
             }
           } else if (biometricEnabled) {
             const verified = await mobileBridge.authenticateBiometric(
-              'Установка мастер-ПИНа',
-              'Подтверди личность отпечатком или лицом'
+              t('biometric.setupPinTitle'),
+              t('biometric.vaultSubtitle')
             );
             if (!verified.ok && verified.reason !== 'no_device_credential') {
               mobileBridge.haptic('error');
-              throw new Error(
-                verified.error || 'Отмена: подтверди личность для установки мастер-ПИНа'
-              );
+              throw new Error(verified.error || t('biometric.setupPinCancel'));
             }
           }
           await store.setMasterPin(pin);
@@ -1879,8 +1913,8 @@ export const App: React.FC = () => {
               mobileBridge.haptic('error');
               throw new Error(
                 verify.lockoutRemainingSec > 0
-                  ? `Слишком много попыток · подожди ${verify.lockoutRemainingSec} с`
-                  : verify.error || 'Неверный текущий мастер-ПИН'
+                  ? t('biometric.tooManyAttempts', { sec: verify.lockoutRemainingSec })
+                  : verify.error || t('biometric.wrongCurrentPin')
               );
             }
           }
@@ -1949,5 +1983,6 @@ export const App: React.FC = () => {
         onClose={() => setLightboxImage(null)}
       />
     </div>
+    </MobileI18nProvider>
   );
 };

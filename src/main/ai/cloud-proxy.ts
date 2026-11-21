@@ -2,11 +2,18 @@ import {
   DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
   DEFAULT_SYNC_SUPABASE_URL,
 } from '@shared/sync-contract';
-import type { AiProvider, CloudAiQuotaStatus } from '@shared/types';
+import type { AiProvider, AppLocale, CloudAiQuotaStatus } from '@shared/types';
 import type { FetchLike } from './decision-router';
 
 export const DEFAULT_CLOUD_AI_QUOTA_ERROR =
   'Месячный лимит общего ИИ ($1,00) исчерпан. Можно добавить свой API-ключ в Настройках или дождаться 1-го числа.';
+
+export const DEFAULT_CLOUD_AI_QUOTA_ERROR_EN =
+  'Shared monthly built-in AI limit ($1.00) reached. Add your own API key in Settings or wait until the 1st.';
+
+export function getDefaultCloudAiQuotaError(locale: AppLocale = 'ru'): string {
+  return locale === 'en' ? DEFAULT_CLOUD_AI_QUOTA_ERROR_EN : DEFAULT_CLOUD_AI_QUOTA_ERROR;
+}
 
 export class AiHttpError extends Error {
   constructor(
@@ -23,6 +30,8 @@ export interface CloudAiProxyConfig {
   supabaseUrl: string;
   supabasePublishableKey: string;
   getAccessToken: () => Promise<string | null>;
+  locale?: AppLocale;
+  getLocale?: () => AppLocale;
 }
 
 export interface ResolvedAiRoute {
@@ -113,6 +122,15 @@ async function parseProxyErrorMessage(resp: Response): Promise<string> {
   }
 }
 
+function resolveProxyLocale(
+  locale?: AppLocale,
+  proxy?: CloudAiProxyConfig | null
+): AppLocale {
+  if (locale === 'en' || locale === 'ru') return locale;
+  const fromProxy = proxy?.getLocale?.() ?? proxy?.locale;
+  return fromProxy === 'en' ? 'en' : 'ru';
+}
+
 export async function postGeminiGenerateContent(params: {
   model: string;
   body: Record<string, unknown>;
@@ -120,9 +138,12 @@ export async function postGeminiGenerateContent(params: {
   proxy?: CloudAiProxyConfig | null;
   accessToken?: string | null;
   timeoutMs: number;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<Record<string, unknown>> {
   const fetchImpl = params.fetchFn ?? fetch;
+  const locale = resolveProxyLocale(params.locale, params.proxy);
+  const isEn = locale === 'en';
 
   if (params.apiKey) {
     const resp = await fetchImpl(
@@ -145,7 +166,12 @@ export async function postGeminiGenerateContent(params: {
 
   const token = params.accessToken || (await params.proxy?.getAccessToken().catch(() => null));
   if (!params.proxy || !token) {
-    throw new AiHttpError(401, 'Войди в аккаунт синхронизации или добавь свой API-ключ в Настройках.');
+    throw new AiHttpError(
+      401,
+      isEn
+        ? 'Sign in to your sync account or add your own API key in Settings.'
+        : 'Войди в аккаунт синхронизации или добавь свой API-ключ в Настройках.'
+    );
   }
 
   const endpoint = `${normalizeBaseUrl(params.proxy.supabaseUrl)}/functions/v1/ai-proxy`;
@@ -169,23 +195,29 @@ export async function postGeminiGenerateContent(params: {
     if (resp.status === 429) {
       throw new AiHttpError(
         429,
-        serverMsg && hasCyrillic(serverMsg) ? serverMsg : DEFAULT_CLOUD_AI_QUOTA_ERROR,
+        !isEn && serverMsg && hasCyrillic(serverMsg)
+          ? serverMsg
+          : getDefaultCloudAiQuotaError(locale),
         true
       );
     }
     if (resp.status === 401 || resp.status === 403) {
       throw new AiHttpError(
         resp.status,
-        serverMsg && hasCyrillic(serverMsg)
+        !isEn && serverMsg && hasCyrillic(serverMsg)
           ? serverMsg
-          : 'Сессия аккаунта истекла — перезайди во вкладке «Синхронизация».'
+          : isEn
+            ? 'Sync session expired — sign in again under Sync.'
+            : 'Сессия аккаунта истекла — перезайди во вкладке «Синхронизация».'
       );
     }
     throw new AiHttpError(
       resp.status,
-      serverMsg && hasCyrillic(serverMsg)
+      !isEn && serverMsg && hasCyrillic(serverMsg)
         ? serverMsg
-        : `Встроенный ИИ временно недоступен (${resp.status}).`
+        : isEn
+          ? `Built-in AI is temporarily unavailable (${resp.status}).`
+          : `Встроенный ИИ временно недоступен (${resp.status}).`
     );
   }
 
@@ -202,9 +234,12 @@ export async function postOpenRouterChatCompletions(params: {
   proxy?: CloudAiProxyConfig | null;
   accessToken?: string | null;
   timeoutMs: number;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<Record<string, unknown>> {
   const fetchImpl = params.fetchFn ?? fetch;
+  const locale = resolveProxyLocale(params.locale, params.proxy);
+  const isEn = locale === 'en';
 
   if (params.apiKey) {
     const resp = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
@@ -226,7 +261,12 @@ export async function postOpenRouterChatCompletions(params: {
 
   const token = params.accessToken || (await params.proxy?.getAccessToken().catch(() => null));
   if (!params.proxy || !token) {
-    throw new AiHttpError(401, 'Войди в аккаунт синхронизации или добавь свой API-ключ в Настройках.');
+    throw new AiHttpError(
+      401,
+      isEn
+        ? 'Sign in to your sync account or add your own API key in Settings.'
+        : 'Войди в аккаунт синхронизации или добавь свой API-ключ в Настройках.'
+    );
   }
 
   const endpoint = `${normalizeBaseUrl(params.proxy.supabaseUrl)}/functions/v1/ai-proxy`;
@@ -249,23 +289,29 @@ export async function postOpenRouterChatCompletions(params: {
     if (resp.status === 429) {
       throw new AiHttpError(
         429,
-        serverMsg && hasCyrillic(serverMsg) ? serverMsg : DEFAULT_CLOUD_AI_QUOTA_ERROR,
+        !isEn && serverMsg && hasCyrillic(serverMsg)
+          ? serverMsg
+          : getDefaultCloudAiQuotaError(locale),
         true
       );
     }
     if (resp.status === 401 || resp.status === 403) {
       throw new AiHttpError(
         resp.status,
-        serverMsg && hasCyrillic(serverMsg)
+        !isEn && serverMsg && hasCyrillic(serverMsg)
           ? serverMsg
-          : 'Сессия аккаунта истекла — перезайди во вкладке «Синхронизация».'
+          : isEn
+            ? 'Sync session expired — sign in again under Sync.'
+            : 'Сессия аккаунта истекла — перезайди во вкладке «Синхронизация».'
       );
     }
     throw new AiHttpError(
       resp.status,
-      serverMsg && hasCyrillic(serverMsg)
+      !isEn && serverMsg && hasCyrillic(serverMsg)
         ? serverMsg
-        : `Встроенный ИИ временно недоступен (${resp.status}).`
+        : isEn
+          ? `Built-in AI is temporarily unavailable (${resp.status}).`
+          : `Встроенный ИИ временно недоступен (${resp.status}).`
     );
   }
 
@@ -280,8 +326,11 @@ export async function fetchCloudAiQuota(params: {
   cloudProxy?: CloudAiProxyConfig | null;
   hasGoogleKey: boolean;
   hasOpenRouterKey: boolean;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<CloudAiQuotaStatus> {
+  const locale = resolveProxyLocale(params.locale, params.cloudProxy);
+  const isEn = locale === 'en';
   const usingPersonalKey = Boolean(params.hasGoogleKey || params.hasOpenRouterKey);
   const personalProvider: CloudAiQuotaStatus['personalProvider'] = params.hasGoogleKey
     ? 'google_ai_studio'
@@ -335,11 +384,15 @@ export async function fetchCloudAiQuota(params: {
         usingPersonalKey,
         personalProvider,
         error:
-          serverMsg && hasCyrillic(serverMsg)
+          !isEn && serverMsg && hasCyrillic(serverMsg)
             ? serverMsg
             : resp.status === 401
-              ? 'Сессия истекла — перезайди в аккаунт синхронизации'
-              : 'Не удалось получить статус встроенного ИИ',
+              ? isEn
+                ? 'Session expired — sign in to your sync account again'
+                : 'Сессия истекла — перезайди в аккаунт синхронизации'
+              : isEn
+                ? 'Could not fetch built-in AI status'
+                : 'Не удалось получить статус встроенного ИИ',
       };
     }
 
@@ -394,7 +447,7 @@ export async function fetchCloudAiQuota(params: {
       globalExhausted: false,
       usingPersonalKey,
       personalProvider,
-      error: 'Нет связи с облачным сервисом ИИ',
+      error: isEn ? 'Cannot reach cloud AI service' : 'Нет связи с облачным сервисом ИИ',
     };
   }
 }

@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { isMacPlatform } from '@shared/shortcuts';
 import { getDnaHumanLabel, getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { ContextMenuSurface, type ContextMenuEntry } from '../ui/ContextMenuSurface';
@@ -81,6 +82,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
   onDelete,
   onCreateBoardNote,
 }) => {
+  const { t, locale } = useI18n();
   const framesStorageKey = `kapsula.boardFrames.v7.${boardKey}`;
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 32, y: 60 });
@@ -166,7 +168,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
     setLocalCoords(next);
     setPan({ x: 32, y: 60 });
     setZoom(1);
-    toast.success('Карточки аккуратно разложены по сетке');
+    toast.success(t('board.arrangedToast'));
   };
 
   const handleAddFrame = () => {
@@ -203,7 +205,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
     const baseY = visibleItems.length > 0 ? Math.round(maxCardBottom + 24) : 76;
     const newFrame: BoardFrame = {
       id: `frame-${Date.now().toString(36)}`,
-      title: `Группа ${frames.length + 1}`,
+      title: t('board.groupDefaultTitle', { num: frames.length + 1 }),
       x: Math.round(24 + offset),
       y: Math.round(baseY + offset),
       w: 520,
@@ -238,7 +240,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
     } else {
       void window.kapsula.updateItem(fromId, { linksOut: next });
     }
-    toast.success(existing.includes(toId) ? 'Связь удалена' : 'Карточки связаны');
+    toast.success(existing.includes(toId) ? t('board.linkRemovedToast') : t('board.linkCreatedToast'));
   };
 
   const itemPositionsById = useMemo(() => {
@@ -402,7 +404,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
           type="button"
           onClick={() => setZoom((z) => Math.max(0.45, Math.round((z - 0.1) * 100) / 100))}
           className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
-          title="Уменьшить"
+          title={t('board.zoomOut')}
         >
           <MagnifyingGlassMinus className="w-3.5 h-3.5" />
         </button>
@@ -412,7 +414,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
             setZoom(1);
             setPan({ x: 32, y: 60 });
           }}
-          title="Сбросить масштаб"
+          title={t('board.zoomReset')}
           className="k-mono k-tabular text-[11px] px-1.5 min-w-[42px] text-center hover:text-[var(--k-accent)] cursor-pointer"
         >
           {Math.round(zoom * 100)}%
@@ -421,7 +423,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
           type="button"
           onClick={() => setZoom((z) => Math.min(1.65, Math.round((z + 0.1) * 100) / 100))}
           className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
-          title="Увеличить"
+          title={t('board.zoomIn')}
         >
           <MagnifyingGlassPlus className="w-3.5 h-3.5" />
         </button>
@@ -433,10 +435,10 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
           data-testid="board-add-frame-btn"
           onClick={handleAddFrame}
           className="k-interactive inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-          title="Добавить визуальную рамку-группу"
+          title={t('board.addGroupTitle')}
         >
           <FrameCorners className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-          <span>Группа</span>
+          <span>{t('board.addGroupShort')}</span>
         </button>
 
         <button
@@ -451,10 +453,10 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
               ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
               : 'hover:bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
           }`}
-          title="Кликай по двум карточкам подряд, чтобы соединить их стрелкой"
+          title={t('board.connectHint')}
         >
           <LinkSimple className="w-3.5 h-3.5" />
-          <span>{connectMode ? (connectFromId ? 'Выбери цель…' : 'Связывание') : 'Связать'}</span>
+          <span>{connectMode ? (connectFromId ? t('board.connectPickTarget') : t('board.connectActive')) : t('board.connectStart')}</span>
         </button>
 
         <button
@@ -463,7 +465,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
           className="k-interactive inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[11.5px] font-medium cursor-pointer"
         >
           <GridFour className="w-3.5 h-3.5" />
-          <span>По сетке</span>
+          <span>{t('board.arrangeGrid')}</span>
         </button>
 
         {onCreateBoardNote ? (
@@ -473,7 +475,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
             className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11.5px] font-medium cursor-pointer"
           >
             <Plus weight="bold" className="w-3.5 h-3.5" />
-            <span>Заметка</span>
+            <span>{t('dna.note')}</span>
           </button>
         ) : null}
       </div>
@@ -481,8 +483,8 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
       {connectMode ? (
         <div className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-xl border border-[var(--k-accent)]/40 bg-[var(--k-bg-elevated)] text-[11.5px] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-md">
           {connectFromId
-            ? 'Теперь нажми на вторую карточку, чтобы провести или убрать стрелку'
-            : 'Нажми на первую карточку, от которой провести связь'}
+            ? t('board.bannerPickSecond')
+            : t('board.bannerPickFirst')}
         </div>
       ) : null}
 
@@ -560,7 +562,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   onDoubleClick={() => setEditingFrameId(frame.id)}
                   style={{ color: frame.color }}
                   className="text-[12px] font-semibold tracking-tight cursor-text"
-                  title="Двойной клик, чтобы переименовать группу"
+                  title={t('board.renameGroupHint')}
                 >
                   {frame.title}
                 </button>
@@ -570,7 +572,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                 type="button"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => persistFrames(frames.filter((f) => f.id !== frame.id))}
-                aria-label="Удалить группу"
+                aria-label={t('board.deleteGroupAria')}
                 className="w-5 h-5 rounded-md inline-flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-bg-surface-1)]/80 cursor-pointer"
               >
                 <X className="w-3 h-3" />
@@ -599,7 +601,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                 };
               }}
               className="absolute right-1 bottom-1 w-4 h-4 cursor-nwse-resize opacity-40 hover:opacity-100 flex items-center justify-center"
-              title="Потяни, чтобы изменить размер группы"
+              title={t('board.resizeGroupTitle')}
             >
               <ArrowsOutCardinal className="w-3 h-3 text-[var(--k-ink-muted)]" />
             </div>
@@ -663,7 +665,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   {
                     type: 'item',
                     id: 'open',
-                    label: 'Открыть',
+                    label: t('common.open'),
                     icon: <FolderOpen className="w-3.5 h-3.5" />,
                     onSelect: () => onOpenItem(item),
                   },
@@ -672,7 +674,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   menu.push({
                     type: 'item',
                     id: 'ql',
-                    label: 'Быстрый просмотр',
+                    label: t('cards.quickLookShort'),
                     icon: <Eye className="w-3.5 h-3.5" />,
                     onSelect: () => onQuickLook(item),
                   });
@@ -680,7 +682,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                 menu.push({
                   type: 'item',
                   id: 'connect',
-                  label: 'Провести связь от этой карточки',
+                  label: t('board.ctx.connectFromHere'),
                   icon: <LinkSimple className="w-3.5 h-3.5" />,
                   onSelect: () => {
                     setConnectMode(true);
@@ -691,7 +693,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   menu.push({
                     type: 'item',
                     id: 'pin',
-                    label: item.isPinned ? 'Открепить' : 'Закрепить',
+                    label: item.isPinned ? t('ui.quickLook.unpin') : t('board.ctx.pin'),
                     icon: <PushPin className="w-3.5 h-3.5" />,
                     onSelect: () => onTogglePin(item),
                   });
@@ -700,13 +702,13 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   menu.push({
                     type: 'submenu',
                     id: 'orbit',
-                    label: 'В раздел',
+                    label: t('board.ctx.toSection'),
                     icon: <SquaresFour className="w-3.5 h-3.5" />,
                     items: [
                       {
                         type: 'item',
                         id: 'orb-none',
-                        label: 'Без раздела',
+                        label: t('nav.noSection'),
                         active: !item.orbit,
                         onSelect: () => onMoveToOrbit(item.id, ''),
                       },
@@ -725,13 +727,13 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   menu.push({
                     type: 'submenu',
                     id: 'board',
-                    label: 'На холст',
+                    label: t('board.ctx.toBoard'),
                     icon: <Swatches className="w-3.5 h-3.5" />,
                     items: [
                       {
                         type: 'item',
                         id: 'brd-none',
-                        label: 'Убрать с холста',
+                        label: t('cards.ctx.removeFromBoard'),
                         active: !item.focusBoardId,
                         onSelect: () => onMoveToBoard(item.id, null),
                       },
@@ -751,7 +753,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   menu.push({
                     type: 'item',
                     id: 'del',
-                    label: 'Удалить',
+                    label: t('common.delete'),
                     icon: <Trash className="w-3.5 h-3.5" />,
                     danger: true,
                     onSelect: () => onDelete(item.id),
@@ -812,13 +814,13 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   className="flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--k-bg-surface-2)]/70 border-b border-[var(--k-border-hairline)] cursor-grab active:cursor-grabbing"
                 >
                   <span className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)] shrink-0">
-                    {getDnaHumanLabel(item)}
+                    {getDnaHumanLabel(item, locale)}
                   </span>
                   <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                     {onQuickLook ? (
                       <button
                         type="button"
-                        title="Быстрый просмотр"
+                        title={t('cards.quickLookShort')}
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -838,7 +840,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                       }}
                       className="text-[10.5px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer shrink-0"
                     >
-                      Открыть
+                      {t('common.open')}
                     </button>
                     <DotsSix weight="bold" className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
                   </div>
@@ -862,7 +864,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
 
                 <div className="p-2.5 flex flex-col gap-1.5">
                   <div className="text-[12.5px] font-semibold text-[var(--k-ink-primary)] leading-snug line-clamp-2">
-                    {cleanBrokenTextArtifacts(item.title || getDnaHumanLabel(item), true)}
+                    {cleanBrokenTextArtifacts(item.title || getDnaHumanLabel(item, locale), true)}
                   </div>
                   {(() => {
                     const cleanBody = cleanBrokenTextArtifacts(
@@ -889,7 +891,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                           onClick={(e) => {
                             e.stopPropagation();
                             void window.kapsula.copyText(hex);
-                            toast.success(`Цвет ${hex} скопирован`);
+                            toast.success(t('ui.quickLook.colorCopied', { hex }));
                           }}
                           className="w-4 h-4 rounded-full border border-[var(--k-border-strong)] cursor-pointer"
                           style={{ backgroundColor: hex }}
@@ -915,7 +917,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                       origW: cardW,
                     };
                   }}
-                  title="Потяни, чтобы изменить ширину карточки"
+                  title={t('board.resizeCardTitle')}
                   className="absolute right-0.5 bottom-0.5 w-3.5 h-3.5 cursor-ew-resize opacity-0 group-hover/bcard:opacity-80 transition-opacity flex items-end justify-end p-0.5"
                 >
                   <span className="w-2 h-2 border-r-2 border-b-2 border-[var(--k-ink-muted)] rounded-br-[2px]" />

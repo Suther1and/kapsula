@@ -106,20 +106,11 @@ jobs:
             );
           }
 
-          const filesToHash = [installerName, blockmapName, 'latest.yml'];
-          const lines = filesToHash.map((name) => {
-            const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(releaseDir, name))).digest('hex');
-            return `${hash}  ${name}`;
-          });
-          fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS-windows.txt'), lines.join('\n') + '\n', 'utf8');
-
           const sizeMb = (fs.statSync(path.join(releaseDir, installerName)).size / (1024 * 1024)).toFixed(2);
           console.log(`[verify-windows] Installer: ${installerName} (${sizeMb} MB)`);
           console.log(`[verify-windows] PE icon verified (${iconGroups[0].icons.length} sizes matching build/icon.ico)`);
           console.log('--- release/latest.yml ---');
           console.log(latestYml.trim());
-          console.log('--- release/SHA256SUMS-windows.txt ---');
-          console.log(lines.join('\n'));
           EOF
 
       - name: Upload Windows installer artifacts
@@ -130,7 +121,6 @@ jobs:
             release/*.exe
             release/*.blockmap
             release/latest.yml
-            release/SHA256SUMS-windows.txt
           retention-days: 30
           if-no-files-found: error
 
@@ -158,4 +148,3 @@ jobs:
             release/*.exe
             release/*.blockmap
             release/latest.yml
-            release/SHA256SUMS-windows.txt

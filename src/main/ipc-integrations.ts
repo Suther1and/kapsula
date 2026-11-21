@@ -10,6 +10,7 @@ import type {
   TranscribeItemResult,
   VaultItem,
 } from '@shared/types';
+import { translate } from '@shared/i18n';
 import {
   exportMarkdownZip,
   importJsonBackup,
@@ -67,6 +68,8 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
     return win ? deps.dialog.showSaveDialog(win, options) : deps.dialog.showSaveDialog(options);
   };
 
+  const getLocale = () => deps.repo.getLocale();
+
   const triggerSyncHint = () => {
     if (deps.syncEngine) {
       void deps.syncEngine.syncNow().catch(() => {});
@@ -112,10 +115,11 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
         : [];
 
       if (targets.length === 0) {
+        const locale = getLocale();
         const pick = await showOpenDialog({
-          title: 'Выбрать письма (.eml) для импорта в Kapsula',
+          title: translate(locale, 'main.dialog.emlTitle'),
           properties: ['openFile', 'multiSelections'],
-          filters: [{ name: 'Письма (.eml)', extensions: ['eml'] }],
+          filters: [{ name: translate(locale, 'main.dialog.emlFilter'), extensions: ['eml'] }],
         });
         if (pick.canceled || pick.filePaths.length === 0) {
           return { importedCount: 0, skippedCount: 0, orbitsCreated: 0 };
@@ -127,15 +131,18 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
       let skippedCount = 0;
       const errors: string[] = [];
 
+      const locale = getLocale();
       for (const emlPath of targets) {
         try {
           if (!fs.existsSync(emlPath)) {
-            errors.push(`${path.basename(emlPath)}: файл не найден`);
+            errors.push(
+              translate(locale, 'main.ipc.emlFileNotFound', { name: path.basename(emlPath) })
+            );
             continue;
           }
           const buf = fs.readFileSync(emlPath);
           const sha = crypto.createHash('sha256').update(buf).digest('hex');
-          const parsed = parseEmlBuffer(buf);
+          const parsed = parseEmlBuffer(buf, locale);
           const externalId = parsed.messageId
             ? `eml:${parsed.messageId}`
             : `eml:sha:${sha.slice(0, 24)}`;
@@ -156,7 +163,9 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
           importedCount += 1;
         } catch (err) {
           errors.push(
-            `${path.basename(emlPath)}: ${err instanceof Error ? err.message : 'ошибка импорта письма'}`
+            `${path.basename(emlPath)}: ${
+              err instanceof Error ? err.message : translate(locale, 'main.ipc.emlImportError')
+            }`
           );
         }
       }
@@ -182,7 +191,7 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
       let targetDir = typeof folderPath === 'string' && folderPath.trim() ? folderPath.trim() : '';
       if (!targetDir) {
         const pick = await showOpenDialog({
-          title: 'Выбрать папку Obsidian или Markdown для импорта',
+          title: translate(getLocale(), 'main.dialog.mdTitle'),
           properties: ['openDirectory'],
         });
         if (pick.canceled || pick.filePaths.length === 0) {
@@ -210,10 +219,11 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
     async (_e, zipPath?: string): Promise<ImportResult> => {
       let targetZip = typeof zipPath === 'string' && zipPath.trim() ? zipPath.trim() : '';
       if (!targetZip) {
+        const locale = getLocale();
         const pick = await showOpenDialog({
-          title: 'Выбрать ZIP-архив из Notion',
+          title: translate(locale, 'main.dialog.notionTitle'),
           properties: ['openFile'],
-          filters: [{ name: 'Архив Notion (.zip)', extensions: ['zip'] }],
+          filters: [{ name: translate(locale, 'main.dialog.notionFilter'), extensions: ['zip'] }],
         });
         if (pick.canceled || pick.filePaths.length === 0) {
           return { importedCount: 0, skippedCount: 0, orbitsCreated: 0 };
@@ -240,10 +250,11 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
     async (_e, filePath?: string): Promise<ImportResult> => {
       let targetFile = typeof filePath === 'string' && filePath.trim() ? filePath.trim() : '';
       if (!targetFile) {
+        const locale = getLocale();
         const pick = await showOpenDialog({
-          title: 'Выбрать резервную копию Kapsula (.json)',
+          title: translate(locale, 'main.dialog.backupOpenTitle'),
           properties: ['openFile'],
-          filters: [{ name: 'Резервная копия Kapsula (.json)', extensions: ['json'] }],
+          filters: [{ name: translate(locale, 'main.dialog.backupFilter'), extensions: ['json'] }],
         });
         if (pick.canceled || pick.filePaths.length === 0) {
           return { importedCount: 0, skippedCount: 0, orbitsCreated: 0 };
@@ -267,13 +278,14 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
   // 7. Full Markdown + assets `.zip` export (excludes secrets & deleted items)
   register('integrations:export-markdown-zip', async (): Promise<ExportResult> => {
     const stamp = new Date().toISOString().slice(0, 10);
+    const locale = getLocale();
     const pick = await showSaveDialog({
-      title: 'Экспортировать заметки в Markdown (.zip)',
+      title: translate(locale, 'main.dialog.exportZipTitle'),
       defaultPath: path.join(
         resolveDefaultDocumentsDir(deps.documentsDir),
         `kapsula-markdown-${stamp}.zip`
       ),
-      filters: [{ name: 'Архив Markdown (.zip)', extensions: ['zip'] }],
+      filters: [{ name: translate(locale, 'main.dialog.exportZipFilter'), extensions: ['zip'] }],
     });
     if (pick.canceled || !pick.filePath) {
       return { ok: false };

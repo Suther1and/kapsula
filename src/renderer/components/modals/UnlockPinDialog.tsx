@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Fingerprint, Lock, Timer } from '@phosphor-icons/react';
 import { toast } from 'sonner';
+import { useI18n } from '@shared/i18n/react';
 import { isMacPlatform } from '@shared/shortcuts';
 import { friendlyErrorMessage } from '../../lib/format';
 import { ModalDialog } from '../ui/ModalDialog';
@@ -23,6 +24,7 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
   biometricEnabled,
   initialLockoutSec = 0,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const isMac = isMacPlatform(window.kapsula?.platform ?? 'win32');
   const [pin, setPin] = useState('');
@@ -89,14 +91,14 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
         setLockoutSec(0);
         onOpenChange(false);
         onUnlocked();
-        toast.success('Сейф открыт');
+        toast.success(t('pin.unlocked'));
       } else {
-        setError('Неверный мастер-код');
+        setError(t('pin.wrong'));
         setShakeKey((k) => k + 1);
         await refreshLockoutFromSettings();
       }
     } catch (err) {
-      setError(friendlyErrorMessage(err, 'Слишком много неверных попыток — подожди немного'));
+      setError(friendlyErrorMessage(err, t('pin.tooMany'), locale));
       setShakeKey((k) => k + 1);
       await refreshLockoutFromSettings();
     } finally {
@@ -115,12 +117,12 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
         setLockoutSec(0);
         onOpenChange(false);
         onUnlocked();
-        toast.success('Сейф открыт');
+        toast.success(t('pin.unlocked'));
       } else if (res.error) {
         setError(res.error);
       }
     } catch (err) {
-      setError(friendlyErrorMessage(err, 'Не удалось выполнить биометрическую проверку'));
+      setError(friendlyErrorMessage(err, t('pin.bioFailed'), locale));
     } finally {
       setBiometricBusy(false);
     }
@@ -130,8 +132,8 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
     <ModalDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Открыть Сейф"
-      subtitle="Введи мастер-код, чтобы просматривать и копировать данные"
+      title={t('pin.title')}
+      subtitle={t('pin.subtitle')}
       maxWidthClass="max-w-[390px]"
     >
       <motion.form
@@ -163,7 +165,7 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
             disabled={lockoutSec > 0}
             value={pin}
             onChange={(e) => setPin(e.target.value)}
-            placeholder="Мастер-код"
+            placeholder={t('pin.placeholder')}
             data-testid="unlock-pin-input"
             className="flex-1 bg-transparent border-none outline-none text-[14px] k-mono disabled:opacity-50"
           />
@@ -175,7 +177,7 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
             className="flex items-center gap-2 rounded-xl border border-[var(--k-amber)]/35 bg-[var(--k-amber-soft)] px-3 py-2 text-[12px] text-[var(--k-amber)] k-tabular"
           >
             <Timer weight="bold" className="w-4 h-4 shrink-0" />
-            <span>Слишком много попыток — повтори через {lockoutSec} с</span>
+            <span>{t('pin.lockoutMsg', { sec: lockoutSec })}</span>
           </div>
         ) : error ? (
           <div className="text-[12px] text-[var(--k-danger)]">{error}</div>
@@ -188,10 +190,10 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
           className="k-interactive h-9 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
         >
           {lockoutSec > 0
-            ? `Подожди ${lockoutSec} с`
+            ? t('pin.waitBtn', { sec: lockoutSec })
             : checking
-              ? 'Проверяю…'
-              : 'Разблокировать'}
+              ? t('common.checking')
+              : t('pin.unlockBtn')}
         </button>
 
         {bioCanUse ? (
@@ -205,10 +207,10 @@ export const UnlockPinDialog: React.FC<UnlockPinDialogProps> = ({
             <Fingerprint className="w-4 h-4 text-[var(--k-accent)]" />
             <span>
               {biometricBusy
-                ? 'Подтверди личность…'
+                ? t('pin.bioPrompt')
                 : isMac
-                  ? 'Открыть через Touch ID'
-                  : 'Войти по биометрии'}
+                  ? t('pin.bioTouchId')
+                  : t('pin.bioGeneric')}
             </span>
           </button>
         ) : null}

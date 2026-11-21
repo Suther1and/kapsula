@@ -244,7 +244,7 @@ async function main() {
     const page = await ctx1.newPage();
     const errsMain = attachErrorListeners(page, 'main');
 
-    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.goto(`${baseUrl}?lang=ru`, { waitUntil: 'networkidle' });
     await page.waitForSelector('[data-testid="kapsula-mobile-root"]');
 
     try {
@@ -798,7 +798,7 @@ async function main() {
       const vPage = await ctxVaultTest.newPage();
       const vErrs = attachErrorListeners(vPage, 'vault-unlock-transition');
       try {
-        await vPage.goto(baseUrl, { waitUntil: 'networkidle' });
+        await vPage.goto(`${baseUrl}?lang=ru`, { waitUntil: 'networkidle' });
         await vPage.waitForSelector('[data-testid="kapsula-mobile-root"]');
         await vPage.evaluate(async () => {
           await window.__kapsulaMobile.store.setSyncState('pref_onboarded', '1');
@@ -845,7 +845,7 @@ async function main() {
       const uPage = await ctxVaultUi.newPage();
       const uErrs = attachErrorListeners(uPage, 'vault-totp-ui');
       try {
-        await uPage.goto(baseUrl, { waitUntil: 'networkidle' });
+        await uPage.goto(`${baseUrl}?lang=ru`, { waitUntil: 'networkidle' });
         await uPage.waitForSelector('[data-testid="kapsula-mobile-root"]');
         await uPage.evaluate(async (needDirectUnlock) => {
           await window.__kapsulaMobile.store.setSyncState('pref_onboarded', '1');
@@ -985,7 +985,7 @@ async function main() {
       const pPage = await ctxPin.newPage();
       const pErrs = attachErrorListeners(pPage, 'vault-master-pin');
       try {
-        await pPage.goto(baseUrl, { waitUntil: 'networkidle' });
+        await pPage.goto(`${baseUrl}?lang=ru`, { waitUntil: 'networkidle' });
         await pPage.waitForSelector('[data-testid="kapsula-mobile-root"]');
         await pPage.evaluate(async () => {
           await window.__kapsulaMobile.store.setSyncState('pref_onboarded', '1');
@@ -1368,6 +1368,43 @@ async function main() {
       );
     } catch (e) {
       record('M06_Settings_Colors_Suite', false, e.message);
+    }
+
+    try {
+      await page.click('[data-testid="header-cloud-btn"]');
+      await page.waitForSelector('[data-testid="settings-cloud-sheet"]', { timeout: 5000 });
+      await page.click('[data-testid="settings-tab-appearance"]');
+      await page.click('[data-testid="settings-lang-en"]');
+      await page.waitForTimeout(200);
+      await page.click('[data-testid="settings-tab-cloud"]');
+      await page.waitForTimeout(180);
+      const aiTextEn = await page
+        .locator('[data-testid="settings-cloud-ai-status"]')
+        .innerText()
+        .catch(() => '');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(220);
+      const navTextEn = await page.evaluate(() => {
+        const nav = document.querySelector('[data-testid="mobile-bottom-nav"], nav');
+        return nav ? nav.innerText : '';
+      });
+      const overflowEn = await page.evaluate(
+        () => document.documentElement.scrollWidth > window.innerWidth + 1
+      );
+      const enOk =
+        navTextEn.length > 0 &&
+        !/[А-Яа-яЁё]/.test(navTextEn) &&
+        !/[А-Яа-яЁё]/.test(aiTextEn) &&
+        !overflowEn;
+      record(
+        'M07_Bilingual_EN_Switch_And_AI_Copy',
+        enOk,
+        enOk
+          ? `EN switch OK (nav="${navTextEn.replace(/\s+/g, ' ').trim()}", zero Cyrillic chrome leaks, 0 overflow)`
+          : `navEn="${navTextEn}" aiEn="${aiTextEn}" overflow=${overflowEn}`
+      );
+    } catch (e) {
+      record('M07_Bilingual_EN_Switch_And_AI_Copy', false, e.message);
     }
 
     await ctx1.close();

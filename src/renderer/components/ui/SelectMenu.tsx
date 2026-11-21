@@ -1,6 +1,7 @@
 import React from 'react';
 import { Select } from '@base-ui/react/select';
 import { CaretDown, Check } from '@phosphor-icons/react';
+import { useI18n } from '@shared/i18n/react';
 
 export interface SelectOption {
   value: string;
@@ -25,14 +26,16 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
   value,
   onChange,
   options,
-  placeholder = 'Выбрать',
+  placeholder,
   className = '',
   size = 'md',
   align = 'start',
   onOpenChange,
   'data-testid': testId,
 }) => {
+  const { t } = useI18n();
   const current = options.find((o) => o.value === value);
+  const resolvedPlaceholder = placeholder ?? t('ui.selectPlaceholder');
 
   return (
     <Select.Root
@@ -55,7 +58,7 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
               style={{ backgroundColor: current.dotColor }}
             />
           ) : null}
-          <span className="truncate">{current ? current.label : placeholder}</span>
+          <span className="truncate">{current ? current.label : resolvedPlaceholder}</span>
         </span>
         <Select.Icon className="shrink-0 text-[var(--k-ink-muted)] transition-[rotate,transform] duration-150 ease-[var(--k-ease-out)] group-data-[popup-open]:rotate-180">
           <CaretDown weight="bold" className="w-3.5 h-3.5" />

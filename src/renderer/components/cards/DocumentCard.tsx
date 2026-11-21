@@ -1,6 +1,7 @@
 import React from 'react';
 import { FileText, FolderOpen } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { formatFileSize } from '../../lib/format';
 
 interface DocumentCardProps {
@@ -9,12 +10,13 @@ interface DocumentCardProps {
 }
 
 export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = false }) => {
-  const fileName = item.mediaMeta?.fileName || item.title || 'Документ';
+  const { t, locale } = useI18n();
+  const fileName = item.mediaMeta?.fileName || item.title || t('dna.document');
   const extMatch = /\.([a-z0-9]+)$/i.exec(fileName);
   const ext = (extMatch?.[1] || 'FILE').toUpperCase().slice(0, 5);
   const metaLabel = [
-    formatFileSize(item.mediaMeta?.fileSize),
-    item.mediaMeta?.pageCount ? `${item.mediaMeta.pageCount} стр.` : '',
+    formatFileSize(item.mediaMeta?.fileSize, locale),
+    item.mediaMeta?.pageCount ? t('common.pagesShort', { count: item.mediaMeta.pageCount }) : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -40,7 +42,7 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = 
             }}
             className="k-interactive h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium cursor-pointer shrink-0"
           >
-            Открыть
+            {t('common.open')}
           </button>
         ) : null}
       </div>
@@ -80,7 +82,7 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = 
               e.stopPropagation();
               void window.kapsula.revealMediaFile(item.mediaPath!);
             }}
-            aria-label="Показать в папке"
+            aria-label={t('cards.showInFolder')}
             className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
           >
             <FolderOpen className="w-3.5 h-3.5" />
@@ -93,7 +95,7 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = 
             }}
             className="k-interactive h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-accent)] cursor-pointer"
           >
-            Открыть файл
+            {t('cards.openFile')}
           </button>
         </div>
       ) : null}

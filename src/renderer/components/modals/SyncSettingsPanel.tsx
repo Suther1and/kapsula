@@ -18,6 +18,8 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
+import { useI18n } from '@shared/i18n/react';
+import type { I18nTranslator } from '@shared/i18n/types';
 import type { SyncPlatform, SyncStatus } from '@shared/sync-contract';
 import { friendlyErrorMessage } from '../../lib/format';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -58,15 +60,22 @@ interface PassphraseStrength {
   color: string;
 }
 
-function evaluatePassphraseStrength(raw: string): PassphraseStrength {
+function evaluatePassphraseStrength(
+  raw: string,
+  t: I18nTranslator['t']
+): PassphraseStrength {
   const value = raw.trim();
   if (!value) {
-    return { score: 0, label: `Минимум ${MIN_NEW_PASSPHRASE_LENGTH} символов`, color: 'var(--k-ink-muted)' };
+    return {
+      score: 0,
+      label: t('sync.pass.minLen', { min: MIN_NEW_PASSPHRASE_LENGTH }),
+      color: 'var(--k-ink-muted)',
+    };
   }
   if (value.length < MIN_NEW_PASSPHRASE_LENGTH) {
     return {
       score: 1,
-      label: `Короткая — добавь ещё ${MIN_NEW_PASSPHRASE_LENGTH - value.length} симв.`,
+      label: t('sync.pass.short', { left: MIN_NEW_PASSPHRASE_LENGTH - value.length }),
       color: 'var(--k-danger)',
     };
   }
@@ -78,20 +87,21 @@ function evaluatePassphraseStrength(raw: string): PassphraseStrength {
   const wordCount = value.split(/\s+/).filter(Boolean).length;
 
   if (value.length >= 16 || (value.length >= 12 && classes >= 3) || wordCount >= 3) {
-    return { score: 4, label: 'Надёжная секретная фраза', color: 'var(--k-emerald)' };
+    return { score: 4, label: t('sync.pass.strong'), color: 'var(--k-emerald)' };
   }
   if (value.length >= 12 || classes >= 3) {
-    return { score: 3, label: 'Хорошая фраза', color: 'var(--k-emerald)' };
+    return { score: 3, label: t('sync.pass.good'), color: 'var(--k-emerald)' };
   }
   return {
     score: 2,
-    label: 'Нормальная — для усиления добавь цифры или слова',
+    label: t('sync.pass.medium'),
     color: 'var(--k-amber)',
   };
 }
 
 const PassphraseStrengthMeter: React.FC<{ value: string }> = ({ value }) => {
-  const { score, label, color } = evaluatePassphraseStrength(value);
+  const { t } = useI18n();
+  const { score, label, color } = evaluatePassphraseStrength(value, t);
   return (
     <div data-testid="passphrase-strength-meter" className="space-y-1">
       <div className="grid grid-cols-4 gap-1">
@@ -115,23 +125,31 @@ const PassphraseStrengthMeter: React.FC<{ value: string }> = ({ value }) => {
   );
 };
 
-function formatSyncTime(ts: number | null | undefined): string {
-  if (!ts) return 'ещё не выполнялась';
+function formatSyncTime(
+  ts: number | null | undefined,
+  t: I18nTranslator['t'],
+  dateLocale: string
+): string {
+  if (!ts) return t('sync.time.never');
   const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (diffSec < 15) return 'только что';
-  if (diffSec < 60) return `${diffSec} с назад`;
+  if (diffSec < 15) return t('date.justNow');
+  if (diffSec < 60) return t('date.secondsAgo', { count: diffSec });
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} мин назад`;
-  return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (diffMin < 60) return t('date.minutesAgo', { count: diffMin });
+  return new Date(ts).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatLastSeenIso(iso: string): string {
+function formatLastSeenIso(
+  iso: string,
+  t: I18nTranslator['t'],
+  dateLocale: string
+): string {
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return '';
-  return formatSyncTime(ts);
+  return formatSyncTime(ts, t, dateLocale);
 }
 
-function platformLabel(platform: SyncPlatform): string {
+function platformLabel(platform: SyncPlatform, t: I18nTranslator['t']): string {
   switch (platform) {
     case 'win32':
       return 'Windows';
@@ -144,7 +162,7 @@ function platformLabel(platform: SyncPlatform): string {
     case 'linux':
       return 'Linux';
     default:
-      return 'Веб';
+      return t('sync.platform.web');
   }
 }
 
@@ -164,6 +182,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   freshRecoveryKey,
   onFreshRecoveryKeyChange,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
   const [email, setEmail] = useState('');
@@ -226,7 +245,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   if (!status) {
     return (
       <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 text-[12.5px] text-[var(--k-ink-secondary)]">
-        Загружаю состояние синхронизации…
+        {t('sync.loading')}
       </div>
     );
   }
@@ -235,7 +254,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
     e.preventDefault();
     const cleanEmail = email.trim();
     if (!cleanEmail || !password) {
-      toast.info('Введи почту и пароль');
+      toast.info(t('sync.enterEmailPass'));
       return;
     }
     setAuthBusy(true);
@@ -246,26 +265,26 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
           : await window.kapsula.syncSignIn({ email: cleanEmail, password });
       setStatus(res.status);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось войти');
+        toast.error(res.error || t('sync.signInErr'));
         return;
       }
       setPassword('');
       if (res.needsEmailConfirmation) {
-        toast.success('Отправили письмо для подтверждения почты');
+        toast.success(t('sync.confirmEmailSent'));
         setAuthMode('signin');
       } else if (res.needsPassphraseSetup) {
-        toast.success('Аккаунт создан — теперь задай секретную фразу шифрования');
+        toast.success(t('sync.accountCreatedSetPass'));
         onAuthChanged?.();
       } else if (res.needsPassphraseUnlock) {
-        toast.info('Введи секретную фразу шифрования с твоего первого устройства');
+        toast.info(t('sync.enterFirstDevicePass'));
         onAuthChanged?.();
       } else {
-        toast.success('Синхронизация подключена');
+        toast.success(t('sync.connectedToast'));
         onAuthChanged?.();
         onVaultChanged?.();
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Ошибка подключения к облаку'));
+      toast.error(friendlyErrorMessage(err, t('sync.cloudConnectErr'), locale));
     } finally {
       setAuthBusy(false);
     }
@@ -277,20 +296,20 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       const res = await window.kapsula.syncSignInGoogle();
       setStatus(res.status);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось войти через Google');
+        toast.error(res.error || t('sync.googleErr'));
         return;
       }
       onAuthChanged?.();
       if (res.needsPassphraseSetup) {
-        toast.success('Вход через Google выполнен — задай секретную фразу шифрования');
+        toast.success(t('sync.googleSetPass'));
       } else if (res.needsPassphraseUnlock) {
-        toast.info('Вход через Google выполнен — введи секретную фразу шифрования');
+        toast.info(t('sync.googleEnterPass'));
       } else {
-        toast.success('Синхронизация через Google подключена');
+        toast.success(t('sync.googleConnected'));
         onVaultChanged?.();
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось выполнить вход через Google'));
+      toast.error(friendlyErrorMessage(err, t('sync.googleStartErr'), locale));
     } finally {
       setGoogleBusy(false);
     }
@@ -299,11 +318,11 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   const handleSetupPassphrase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (passphrase.trim().length < MIN_NEW_PASSPHRASE_LENGTH) {
-      toast.info(`Придумай фразу минимум из ${MIN_NEW_PASSPHRASE_LENGTH} символов`);
+      toast.info(t('sync.passMinHint', { min: MIN_NEW_PASSPHRASE_LENGTH }));
       return;
     }
     if (passphrase !== passphraseConfirm) {
-      toast.error('Фразы не совпадают');
+      toast.error(t('sync.passMismatch'));
       return;
     }
     setCryptoBusy(true);
@@ -311,7 +330,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       const res = await window.kapsula.syncSetupPassphrase(passphrase);
       setStatus(res.status);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось настроить шифрование');
+        toast.error(res.error || t('sync.cryptoSetupErr'));
         return;
       }
       setPassphrase('');
@@ -321,13 +340,13 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
         setCopiedRecovery(false);
       }
       if (res.initialSyncOk === false) {
-        toast.warning('Ключ создан, но первичная отправка не завершена — повтори синхронизацию');
+        toast.warning(t('sync.keyCreatedPushPending'));
       } else {
-        toast.success('Сквозное шифрование включено — данные синхронизированы');
+        toast.success(t('sync.e2eEnabledToast'));
       }
       onVaultChanged?.();
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось настроить шифрование'));
+      toast.error(friendlyErrorMessage(err, t('sync.cryptoSetupErr'), locale));
     } finally {
       setCryptoBusy(false);
     }
@@ -337,11 +356,11 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
     e.preventDefault();
     if (unlockMode === 'recovery' && recoveryNewPass.trim()) {
       if (recoveryNewPass.trim().length < MIN_NEW_PASSPHRASE_LENGTH) {
-        toast.info(`Новая фраза должна быть не короче ${MIN_NEW_PASSPHRASE_LENGTH} символов`);
+        toast.info(t('sync.newPassMinHint', { min: MIN_NEW_PASSPHRASE_LENGTH }));
         return;
       }
       if (recoveryNewPass !== recoveryNewPassConfirm) {
-        toast.error('Новые фразы не совпадают');
+        toast.error(t('sync.newPassMismatch'));
         return;
       }
     }
@@ -356,17 +375,17 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             });
       setStatus(res.status);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось расшифровать хранилище');
+        toast.error(res.error || t('sync.unlockErr'));
         return;
       }
       setPassphrase('');
       setRecoveryInput('');
       setRecoveryNewPass('');
       setRecoveryNewPassConfirm('');
-      toast.success('Хранилище расшифровано и синхронизировано');
+      toast.success(t('sync.unlockToast'));
       onVaultChanged?.();
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Ошибка расшифровки'));
+      toast.error(friendlyErrorMessage(err, t('sync.unlockGenericErr'), locale));
     } finally {
       setCryptoBusy(false);
     }
@@ -379,15 +398,15 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       setStatus(res.status);
       if (res.ok) {
         const parts: string[] = [];
-        if (res.pushed) parts.push(`отправлено: ${res.pushed}`);
-        if (res.pulled) parts.push(`получено: ${res.pulled}`);
-        toast.success(parts.length ? `Синхронизировано (${parts.join(', ')})` : 'Всё актуально');
+        if (res.pushed) parts.push(t('sync.pushedPart', { count: res.pushed }));
+        if (res.pulled) parts.push(t('sync.pulledPart', { count: res.pulled }));
+        toast.success(parts.length ? t('sync.syncedSummary', { parts: parts.join(', ') }) : t('sync.allUpToDate'));
         if (res.pulled) onVaultChanged?.();
       } else {
-        toast.error(res.error || 'Не удалось синхронизировать');
+        toast.error(res.error || t('sync.syncFailed'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Ошибка синхронизации'));
+      toast.error(friendlyErrorMessage(err, t('sync.syncErr'), locale));
     } finally {
       setSyncBusy(false);
     }
@@ -398,10 +417,10 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
     try {
       const next = await window.kapsula.reconcileFullSync();
       setStatus(next);
-      toast.success('Сверка синхронизации завершена');
+      toast.success(t('sync.reconcileDone'));
       onVaultChanged?.();
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось выполнить сверку'));
+      toast.error(friendlyErrorMessage(err, t('sync.reconcileErr'), locale));
     } finally {
       setReconcileBusy(false);
     }
@@ -410,11 +429,11 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   const handleChangePassphrase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassDraft.trim().length < MIN_NEW_PASSPHRASE_LENGTH) {
-      toast.info(`Новая фраза должна быть не короче ${MIN_NEW_PASSPHRASE_LENGTH} символов`);
+      toast.info(t('sync.newPassMinHint', { min: MIN_NEW_PASSPHRASE_LENGTH }));
       return;
     }
     if (newPassDraft !== newPassConfirmDraft) {
-      toast.error('Новые фразы не совпадают');
+      toast.error(t('sync.newPassMismatch'));
       return;
     }
     setChangePassBusy(true);
@@ -425,16 +444,16 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       });
       setStatus(res.status);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось сменить фразу');
+        toast.error(res.error || t('sync.changePassErr'));
         return;
       }
       setCurPassDraft('');
       setNewPassDraft('');
       setNewPassConfirmDraft('');
       setShowChangePass(false);
-      toast.success('Секретная фраза обновлена (резервный ключ остался прежним)');
+      toast.success(t('sync.changePassDone'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Ошибка смены фразы'));
+      toast.error(friendlyErrorMessage(err, t('sync.changePassFail'), locale));
     } finally {
       setChangePassBusy(false);
     }
@@ -446,14 +465,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       const res = await window.kapsula.syncRegenerateRecoveryKey();
       setStatus(res.status);
       if (!res.ok || !res.recoveryKey) {
-        toast.error(res.error || 'Не удалось перевыпустить резервный ключ');
+        toast.error(res.error || t('sync.regenErr'));
         return;
       }
       onFreshRecoveryKeyChange(res.recoveryKey);
       setCopiedRecovery(false);
-      toast.success('Создан новый резервный ключ — старый больше не действует');
+      toast.success(t('sync.regenDone'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось перевыпустить резервный ключ'));
+      toast.error(friendlyErrorMessage(err, t('sync.regenErr'), locale));
     } finally {
       setRegenBusy(false);
     }
@@ -466,9 +485,9 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       setStatus(next);
       onFreshRecoveryKeyChange(null);
       onAuthChanged?.();
-      toast('Синхронизация отключена · локальные записи сохранены');
+      toast(t('sync.signedOutToast'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось отключить синхронизацию'));
+      toast.error(friendlyErrorMessage(err, t('sync.signOutErr'), locale));
     } finally {
       setSignOutBusy(false);
     }
@@ -488,11 +507,11 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       setShowCustomServer(false);
       toast.success(
         next.hasCustomServer
-          ? 'Подключён свой сервер синхронизации'
-          : 'Возвращён стандартный облачный сервер Kapsula'
+          ? t('sync.customServerConnected')
+          : t('sync.defaultServerRestored')
       );
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Проверь адрес и ключ сервера'));
+      toast.error(friendlyErrorMessage(err, t('sync.customServerErr'), locale));
     } finally {
       setSavingServer(false);
     }
@@ -506,9 +525,9 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       setCustomUrl('');
       setCustomKey('');
       setShowCustomServer(false);
-      toast.success('Возвращён стандартный сервер синхронизации');
+      toast.success(t('sync.resetServerDone'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сбросить сервер'));
+      toast.error(friendlyErrorMessage(err, t('sync.resetServerErr'), locale));
     } finally {
       setSavingServer(false);
     }
@@ -533,10 +552,10 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
           <div>
             <div className="text-[13.5px] font-semibold text-[var(--k-ink-primary)] flex items-center gap-1.5">
               <Key className="w-4 h-4 text-[var(--k-accent)]" />
-              <span>Сохрани резервный ключ восстановления</span>
+              <span>{t('sync.recovery.title')}</span>
             </div>
             <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-              Он показывается один раз. Если забудешь секретную фразу, только этот ключ вернёт доступ к заметкам и Сейфу на новом устройстве.
+              {t('sync.recovery.desc')}
             </div>
           </div>
           <div className="rounded-lg bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] px-3 py-2.5 font-mono text-[12px] text-[var(--k-ink-primary)] select-all break-all">
@@ -551,8 +570,8 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                 setCopiedRecovery(true);
                 toast.success(
                   res.wipeSeconds > 0
-                    ? `Резервный ключ скопирован (буфер очистится через ${res.wipeSeconds} с)`
-                    : 'Резервный ключ скопирован'
+                    ? t('sync.recovery.copiedWipe', { seconds: res.wipeSeconds })
+                    : t('sync.recovery.copied')
                 );
               }}
               className={`k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-medium cursor-pointer ${
@@ -562,19 +581,19 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               }`}
             >
               {copiedRecovery ? <Check weight="bold" className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedRecovery ? 'Ключ скопирован' : 'Скопировать ключ'}</span>
+              <span>{copiedRecovery ? t('sync.recovery.keyCopiedBtn') : t('sync.recovery.copyKeyBtn')}</span>
             </button>
             <button
               type="button"
               onClick={() => onFreshRecoveryKeyChange(null)}
               className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
             >
-              <span>Готово, я сохранил</span>
+              <span>{t('sync.recovery.doneBtn')}</span>
             </button>
             {copiedRecovery ? (
               <span className="text-[11.5px] text-[var(--k-emerald)] inline-flex items-center gap-1">
                 <CheckCircle weight="fill" className="w-3.5 h-3.5" />
-                Сохрани ключ в надёжном месте
+                {t('sync.recovery.safeHint')}
               </span>
             ) : null}
           </div>
@@ -590,17 +609,17 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             </div>
             <div>
               <div className="text-[13.5px] font-medium">
-                Синхронизация (Windows · Mac · Android)
+                {t('sync.header.title')}
               </div>
               <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-                Заметки, задачи, календарь, файлы и Сейф шифруются твоим ключом прямо на устройстве до отправки в облако. Без ключа прочитать данные невозможно.
+                {t('sync.header.desc')}
               </div>
             </div>
           </div>
 
           {status.state === 'awaiting_email_confirm' ? (
             <div className="rounded-lg border border-[var(--k-amber)]/35 bg-[var(--k-amber-soft)] px-3 py-2.5 text-[12px] text-[var(--k-ink-primary)]">
-              Отправили письмо на <strong>{status.email}</strong>. Перейди по ссылке подтверждения из письма, затем войди ниже.
+              {t('sync.confirmEmailBanner', { email: status.email || '' })}
             </div>
           ) : null}
 
@@ -612,12 +631,12 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             className="k-interactive h-9.5 px-3.5 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] hover:bg-[var(--k-bg-surface-3)] text-[var(--k-ink-primary)] text-[13px] font-medium inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
           >
             <GoogleColorIcon className="w-4 h-4 shrink-0" />
-            <span>{googleBusy ? 'Ожидаю вход в браузере…' : 'Войти через Google'}</span>
+            <span>{googleBusy ? t('sync.googleWait') : t('sync.googleBtn')}</span>
           </button>
 
           <div className="flex items-center gap-2.5 text-[11px] text-[var(--k-ink-muted)]">
             <span className="h-px flex-1 bg-[var(--k-border-hairline)]" />
-            <span>или по почте и паролю</span>
+            <span>{t('sync.orEmailPass')}</span>
             <span className="h-px flex-1 bg-[var(--k-border-hairline)]" />
           </div>
 
@@ -627,8 +646,8 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             size="sm"
             fullWidth
             options={[
-              { value: 'signup', label: 'Создать аккаунт' },
-              { value: 'signin', label: 'Войти в существующий' },
+              { value: 'signup', label: t('sync.tab.signup') },
+              { value: 'signin', label: t('sync.tab.signin') },
             ]}
           />
 
@@ -639,7 +658,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Почта (например, name@example.com)"
+              placeholder={t('sync.emailPlaceholder')}
               data-testid="sync-email-input"
               className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
@@ -650,7 +669,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Пароль аккаунта (от 6 символов)"
+              placeholder={t('sync.passwordPlaceholder')}
               data-testid="sync-password-input"
               className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
@@ -661,14 +680,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               className="k-interactive h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:opacity-60"
             >
               {authBusy
-                ? 'Подключаюсь…'
+                ? t('common.connecting')
                 : authMode === 'signup'
-                  ? 'Создать аккаунт синхронизации'
-                  : 'Войти'}
+                  ? t('sync.createAccountBtn')
+                  : t('sync.signInBtn')}
             </button>
             {authMode === 'signup' ? (
               <div className="text-[11.5px] text-[var(--k-ink-muted)] text-center">
-                Подтверждение почты не требуется — аккаунт заработает сразу после создания.
+                {t('sync.noVerifyNeeded')}
               </div>
             ) : null}
           </form>
@@ -682,10 +701,10 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             <div>
               <div className="text-[13.5px] font-medium flex items-center gap-1.5">
                 <LockKey className="w-4 h-4 text-[var(--k-accent)]" />
-                <span>Задай секретную фразу шифрования</span>
+                <span>{t('sync.setPassTitle')}</span>
               </div>
               <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-                Аккаунт <strong>{status.email}</strong> подключён. Придумай надёжную фразу от {MIN_NEW_PASSPHRASE_LENGTH} символов — ею будут шифроваться все твои записи и Сейф. На этом устройстве её нужно ввести один раз.
+                {t('sync.setPassDesc', { email: status.email || '', min: MIN_NEW_PASSPHRASE_LENGTH })}
               </div>
             </div>
             <button
@@ -694,7 +713,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               onClick={() => void handleSignOut()}
               className="text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0 disabled:opacity-50"
             >
-              Выйти
+              {t('sync.signOutBtn')}
             </button>
           </div>
 
@@ -705,7 +724,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               minLength={MIN_NEW_PASSPHRASE_LENGTH}
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
-              placeholder={`Секретная фраза (от ${MIN_NEW_PASSPHRASE_LENGTH} символов)`}
+              placeholder={t('sync.passPlaceholder', { min: MIN_NEW_PASSPHRASE_LENGTH })}
               data-testid="sync-setup-passphrase-input"
               className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
@@ -716,7 +735,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               minLength={MIN_NEW_PASSPHRASE_LENGTH}
               value={passphraseConfirm}
               onChange={(e) => setPassphraseConfirm(e.target.value)}
-              placeholder="Повтори секретную фразу"
+              placeholder={t('sync.repeatPassPlaceholder')}
               data-testid="sync-setup-passphrase-confirm"
               className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
@@ -726,7 +745,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               data-testid="sync-setup-passphrase-submit"
               className="k-interactive h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:cursor-default"
             >
-              {cryptoBusy ? 'Создаю ключ и шифрую…' : 'Включить сквозную синхронизацию'}
+              {cryptoBusy ? t('sync.cryptoCreating') : t('sync.enableE2eBtn')}
             </button>
           </form>
         </div>
@@ -739,10 +758,10 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             <div>
               <div className="text-[13.5px] font-medium flex items-center gap-1.5">
                 <LockKey className="w-4 h-4 text-[var(--k-accent)]" />
-                <span>Расшифруй облачное хранилище</span>
+                <span>{t('sync.unlockTitle')}</span>
               </div>
               <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-                Для аккаунта <strong>{status.email}</strong> уже есть зашифрованные данные. Введи свою секретную фразу или резервный ключ, чтобы подключить это устройство.
+                {t('sync.unlockDesc', { email: status.email || '' })}
               </div>
             </div>
             <button
@@ -751,7 +770,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               onClick={() => void handleSignOut()}
               className="text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0 disabled:opacity-50"
             >
-              Выйти
+              {t('sync.signOutBtn')}
             </button>
           </div>
 
@@ -761,8 +780,8 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             size="sm"
             fullWidth
             options={[
-              { value: 'passphrase', label: 'Секретная фраза' },
-              { value: 'recovery', label: 'Резервный ключ' },
+              { value: 'passphrase', label: t('sync.mode.passphrase') },
+              { value: 'recovery', label: t('sync.mode.recovery') },
             ]}
           />
 
@@ -773,7 +792,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                 required
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
-                placeholder="Твоя секретная фраза шифрования"
+                placeholder={t('sync.yourPassPlaceholder')}
                 data-testid="sync-unlock-passphrase-input"
                 className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
               />
@@ -793,14 +812,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                     type="password"
                     value={recoveryNewPass}
                     onChange={(e) => setRecoveryNewPass(e.target.value)}
-                    placeholder="Новая фраза (необязательно)"
+                    placeholder={t('sync.newPassOptional')}
                     className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[12.5px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
                   />
                   <input
                     type="password"
                     value={recoveryNewPassConfirm}
                     onChange={(e) => setRecoveryNewPassConfirm(e.target.value)}
-                    placeholder="Повтори новую фразу"
+                    placeholder={t('sync.repeatNewPass')}
                     className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[12.5px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
                   />
                 </div>
@@ -813,7 +832,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               data-testid="sync-unlock-submit"
               className="k-interactive h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:opacity-60"
             >
-              {cryptoBusy ? 'Проверяю ключ и загружаю…' : 'Подключить это устройство'}
+              {cryptoBusy ? t('sync.verifyingAndLoading') : t('sync.connectDeviceBtn')}
             </button>
           </form>
         </div>
@@ -846,22 +865,27 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   <div className="text-[13.5px] font-medium flex flex-wrap items-center gap-x-1.5 gap-y-1">
                     <span>
                       {status.state === 'syncing'
-                        ? 'Синхронизация…'
+                        ? t('sync.state.syncing')
                         : status.state === 'offline'
-                          ? 'Офлайн · ждём сеть'
+                          ? t('sync.state.offline')
                           : status.state === 'error'
-                            ? 'Нужна повторная синхронизация'
-                            : 'Синхронизация активна'}
+                            ? t('sync.state.retry')
+                            : t('sync.state.active')}
                     </span>
                     {status.realtimeConnected ? (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] text-[10.5px] font-medium whitespace-nowrap shrink-0">
-                        в реальном времени
+                        {t('sync.realtimeBadge')}
                       </span>
                     ) : null}
                   </div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)] k-tabular truncate mt-0.5">
-                    {status.email} · обновлено: {formatSyncTime(status.lastSyncAt)}
-                    {status.pendingCount > 0 ? ` · в очереди: ${status.pendingCount}` : ''}
+                    {t('sync.statusUpdated', {
+                      email: status.email || '',
+                      when: formatSyncTime(status.lastSyncAt, t, dateLocale),
+                    })}
+                    {status.pendingCount > 0
+                      ? t('sync.statusPending', { count: status.pendingCount })
+                      : ''}
                   </div>
                 </div>
               </div>
@@ -872,11 +896,11 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   disabled={reconcileBusy || syncBusy || status.state === 'syncing'}
                   onClick={() => void handleReconcileFull()}
                   data-testid="sync-reconcile-btn"
-                  title="Сверить все записи и удаления с облаком заново"
+                  title={t('sync.reconcileTitle')}
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] text-[12px] font-medium cursor-pointer shrink-0 disabled:opacity-60"
                 >
                   <ShieldCheck className={`w-3.5 h-3.5 text-[var(--k-accent)] ${reconcileBusy ? 'animate-pulse' : ''}`} />
-                  <span>{reconcileBusy ? 'Сверяю…' : 'Сверка синхронизации'}</span>
+                  <span>{reconcileBusy ? t('sync.reconcileBusy') : t('sync.reconcileBtn')}</span>
                 </button>
                 <button
                   type="button"
@@ -888,7 +912,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   <ArrowsClockwise
                     className={`w-3.5 h-3.5 ${syncBusy || status.state === 'syncing' ? 'animate-spin' : ''}`}
                   />
-                  <span>Синхронизировать</span>
+                  <span>{t('sync.syncNowBtn')}</span>
                 </button>
               </div>
             </div>
@@ -900,9 +924,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               >
                 <span className="inline-flex items-center gap-1.5">
                   <WarningCircle weight="fill" className="w-4 h-4 shrink-0" />
-                  <span>
-                    Не удалось отправить изменений: <strong>{failedCount}</strong>. Запусти полную сверку, чтобы повторить отправку.
-                  </span>
+                  <span>{t('sync.failedBanner', { count: failedCount })}</span>
                 </span>
               </div>
             ) : null}
@@ -917,8 +939,10 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               <span className="inline-flex items-center gap-1.5 k-tabular">
                 <CheckCircle className="w-3.5 h-3.5 text-[var(--k-emerald)]" />
                 <span>
-                  Зашифровано на устройстве · записей: {status.syncedRecordsCount}
-                  {status.lastReconcileAt ? ` · сверка: ${formatSyncTime(status.lastReconcileAt)}` : ''}
+                  {t('sync.statsLine', { count: status.syncedRecordsCount })}
+                  {status.lastReconcileAt
+                    ? t('sync.reconcileAt', { when: formatSyncTime(status.lastReconcileAt, t, dateLocale) })
+                    : ''}
                 </span>
               </span>
               <div className="flex items-center gap-3">
@@ -928,14 +952,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   onClick={() => void handleRegenerateRecovery()}
                   className="text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-50"
                 >
-                  {regenBusy ? 'Создаю ключ…' : 'Новый резервный ключ'}
+                  {regenBusy ? t('sync.regenBusy') : t('sync.regenBtn')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowChangePass((v) => !v)}
                   className="text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                 >
-                  Сменить фразу
+                  {t('sync.changePassBtn')}
                 </button>
                 <button
                   type="button"
@@ -944,7 +968,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   className="inline-flex items-center gap-1 text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] cursor-pointer disabled:opacity-50"
                 >
                   <SignOut className="w-3.5 h-3.5" />
-                  <span>Выйти</span>
+                  <span>{t('sync.signOutBtn')}</span>
                 </button>
               </div>
             </div>
@@ -955,14 +979,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                 className="pt-2 border-t border-[var(--k-border-hairline)] flex flex-col gap-2"
               >
                 <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                  Смена секретной фразы обновит защиту ключа без перезагрузки всей базы. Резервный ключ останется действительным.
+                  {t('sync.changePassNote')}
                 </div>
                 <input
                   type="password"
                   required
                   value={curPassDraft}
                   onChange={(e) => setCurPassDraft(e.target.value)}
-                  placeholder="Текущая фраза"
+                  placeholder={t('sync.currentPassPh')}
                   className="h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-2.5 text-[12.5px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
                 />
                 <div className="grid grid-cols-2 gap-2">
@@ -972,7 +996,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                     minLength={MIN_NEW_PASSPHRASE_LENGTH}
                     value={newPassDraft}
                     onChange={(e) => setNewPassDraft(e.target.value)}
-                    placeholder={`Новая фраза (от ${MIN_NEW_PASSPHRASE_LENGTH} симв.)`}
+                    placeholder={t('sync.newPassMinPh', { min: MIN_NEW_PASSPHRASE_LENGTH })}
                     className="h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-2.5 text-[12.5px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
                   />
                   <input
@@ -981,7 +1005,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                     minLength={MIN_NEW_PASSPHRASE_LENGTH}
                     value={newPassConfirmDraft}
                     onChange={(e) => setNewPassConfirmDraft(e.target.value)}
-                    placeholder="Повтори новую фразу"
+                    placeholder={t('sync.repeatNewPass')}
                     className="h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-2.5 text-[12.5px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
                   />
                 </div>
@@ -992,7 +1016,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                     disabled={changePassBusy || newPassDraft.trim().length < MIN_NEW_PASSPHRASE_LENGTH}
                     className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-60"
                   >
-                    {changePassBusy ? 'Обновляю…' : 'Сохранить новую фразу'}
+                    {changePassBusy ? t('common.updating') : t('sync.saveNewPassBtn')}
                   </button>
                 </div>
               </form>
@@ -1003,7 +1027,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
           {status.devices.length > 0 ? (
             <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-2">
               <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
-                Подключённые устройства ({status.devices.length})
+                {t('sync.devicesHeading', { count: status.devices.length })}
               </div>
               <div className="flex flex-col gap-1.5">
                 {status.devices.map((dev) => (
@@ -1018,12 +1042,15 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                           <span className="truncate">{dev.deviceName}</span>
                           {dev.isCurrent ? (
                             <span className="px-1.5 py-0.5 rounded bg-[var(--k-accent)]/15 text-[var(--k-accent)] text-[10px] font-medium shrink-0">
-                              это устройство
+                              {t('sync.thisDevice')}
                             </span>
                           ) : null}
                         </div>
                         <div className="text-[11px] text-[var(--k-ink-muted)]">
-                          {platformLabel(dev.platform)} · активность: {formatLastSeenIso(dev.lastSeenAt)}
+                          {t('sync.deviceActivity', {
+                            platform: platformLabel(dev.platform, t),
+                            when: formatLastSeenIso(dev.lastSeenAt, t, dateLocale),
+                          })}
                         </div>
                       </div>
                     </div>
@@ -1046,12 +1073,12 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>
               {status.hasCustomServer
-                ? `Свой сервер синхронизации: ${status.supabaseUrl}`
-                : 'Свой сервер синхронизации (сейчас используется облако Kapsula)'}
+                ? t('sync.customServerActive', { url: status.supabaseUrl })
+                : t('sync.customServerDefault')}
             </span>
           </span>
           <span className="text-[11px] text-[var(--k-ink-muted)]">
-            {showCustomServer ? 'Скрыть' : 'Изменить'}
+            {showCustomServer ? t('common.hide') : t('common.edit')}
           </span>
         </button>
 
@@ -1061,14 +1088,14 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
               type="url"
               value={customUrl}
               onChange={(e) => setCustomUrl(e.target.value)}
-              placeholder="Адрес сервера синхронизации (https://…)"
+              placeholder={t('sync.serverUrlPlaceholder')}
               className="h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-2.5 text-[12px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
             <input
               type="password"
               value={customKey}
               onChange={(e) => setCustomKey(e.target.value)}
-              placeholder="Публичный ключ доступа (оставь пустым для сброса)"
+              placeholder={t('sync.serverKeyPlaceholder')}
               className="h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-2.5 text-[12px] text-[var(--k-ink-primary)] outline-none focus:border-[var(--k-accent)]"
             />
             <div className="flex justify-end gap-2">
@@ -1079,7 +1106,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                   onClick={() => void handleResetServer()}
                   className="h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-50"
                 >
-                  Сбросить
+                  {t('common.reset')}
                 </button>
               ) : null}
               <button
@@ -1087,7 +1114,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                 disabled={savingServer}
                 className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-60"
               >
-                {savingServer ? 'Сохраняю…' : 'Сохранить'}
+                {savingServer ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </form>

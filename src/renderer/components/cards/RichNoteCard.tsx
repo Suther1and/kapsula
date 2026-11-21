@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { ImageSquare } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import { getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
@@ -54,8 +55,9 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = ({
   compactList = false,
   onToggleMarkdownTask,
 }) => {
+  const { t, locale, pluralNoun } = useI18n();
   const tasks = useMemo(() => extractCardTasks(item.body), [item.body]);
-  const cleanTitle = cleanBrokenTextArtifacts(item.title || 'Заметка', true);
+  const cleanTitle = cleanBrokenTextArtifacts(item.title || t('dna.note'), true);
 
   const inlineMediaFiles = useMemo(
     () => (!item.thumbPath && !item.imagePath ? extractInlineMediaFilenames(item.body) : []),
@@ -69,7 +71,10 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = ({
       .filter((line) => !TASK_RE.test(line))
       .filter(
         (line) =>
-          !(tasks.length > 0 && /^\s*#{1,6}\s*(?:Задачи|Следующие шаги|Дела)\s*$/i.test(line))
+          !(
+            tasks.length > 0 &&
+            /^\s*#{1,6}\s*(?:Задачи|Следующие шаги|Дела|Tasks|Next steps|Action items)\s*$/i.test(line)
+          )
       )
       .join('\n');
     const summaryFallback = tasks.length > 0 ? '' : item.summary || '';
@@ -190,20 +195,10 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = ({
           ))}
           {tasks.length > 4 ? (
             <span className="text-[11px] text-[var(--k-ink-muted)] k-tabular">
-              {(() => {
-                const rem = tasks.length - 4;
-                const mod100 = rem % 100;
-                const mod10 = rem % 10;
-                const word =
-                  mod100 >= 11 && mod100 <= 14
-                    ? 'задач'
-                    : mod10 === 1
-                      ? 'задача'
-                      : mod10 >= 2 && mod10 <= 4
-                        ? 'задачи'
-                        : 'задач';
-                return `Ещё ${rem} ${word}…`;
-              })()}
+              {t('cards.moreTasks', {
+                count: tasks.length - 4,
+                word: pluralNoun(tasks.length - 4, 'task').replace(/^\d+\s+/, ''),
+              })}
             </span>
           ) : null}
         </div>

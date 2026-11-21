@@ -1,5 +1,5 @@
 import { decodeHtmlEntities } from '@shared/html-entities';
-import type { ParsedEmailAttachment, ParsedEmailSummary } from '@shared/types';
+import type { AppLocale, ParsedEmailAttachment, ParsedEmailSummary } from '@shared/types';
 import {
   domNodeToMarkdown,
   parseHtmlDocument,
@@ -407,12 +407,14 @@ function walkMimeEntity(rawEntity: string, acc: MimeWalkAccumulator, depth = 0):
  * Supports RFC 2047 headers (UTF-8 B/Q, windows-1251, KOI8-R), recursive multipart/*,
  * base64 & quoted-printable decoding, HTML -> Markdown conversion, and attachments.
  */
-export function parseEmlBuffer(buffer: Buffer): ParsedEmailSummary {
+export function parseEmlBuffer(buffer: Buffer, locale: AppLocale = 'ru'): ParsedEmailSummary {
   // Decode raw RFC 5322 envelope using latin1 to preserve exact byte values for 8-bit/windows-1251 bodies
   const raw = buffer.toString('latin1');
   const { headers } = splitHeadersAndBody(raw);
 
-  const subject = decodeRfc2047Header(headers.get('subject') || '').trim() || 'Письмо без темы';
+  const subject =
+    decodeRfc2047Header(headers.get('subject') || '').trim() ||
+    (locale === 'en' ? 'Untitled email' : 'Письмо без темы');
   const fromInfo = parseFromField(headers.get('from') || '');
   const to = decodeRfc2047Header(headers.get('to') || '').trim() || undefined;
   const rawDate = (headers.get('date') || '').trim();
@@ -474,20 +476,22 @@ export function parseEmlBuffer(buffer: Buffer): ParsedEmailSummary {
  */
 export function formatEmailAsNoteMarkdown(
   parsed: ParsedEmailSummary,
-  savedImages: Array<{ filename: string; mediaUrl: string }> = []
+  savedImages: Array<{ filename: string; mediaUrl: string }> = [],
+  locale: AppLocale = 'ru'
 ): string {
+  const isEn = locale === 'en';
   const metaLines: string[] = [];
-  if (parsed.from) metaLines.push(`**От:** ${parsed.from}`);
-  if (parsed.to) metaLines.push(`**Кому:** ${parsed.to}`);
+  if (parsed.from) metaLines.push(`**${isEn ? 'From:' : 'От:'}** ${parsed.from}`);
+  if (parsed.to) metaLines.push(`**${isEn ? 'To:' : 'Кому:'}** ${parsed.to}`);
   if (parsed.date) {
-    const formattedDate = new Date(parsed.date).toLocaleString('ru-RU', {
+    const formattedDate = new Date(parsed.date).toLocaleString(isEn ? 'en-US' : 'ru-RU', {
       day: '2-digit',
       month: 'long',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     });
-    metaLines.push(`**Дата:** ${formattedDate}`);
+    metaLines.push(`**${isEn ? 'Date:' : 'Дата:'}** ${formattedDate}`);
   }
 
   const sections: string[] = [];
@@ -503,21 +507,24 @@ export function formatEmailAsNoteMarkdown(
     const imgMarkdown = savedImages
       .map((img) => `![${img.filename}](${img.mediaUrl})`)
       .join('\n\n');
-    sections.push(`## Вложения\n\n${imgMarkdown}`);
+    sections.push(`## ${isEn ? 'Attachments' : 'Вложения'}\n\n${imgMarkdown}`);
   }
 
   const nonImageAttachments = parsed.attachments.filter(
     (att) => !att.contentType.toLowerCase().startsWith('image/')
   );
   if (nonImageAttachments.length > 0) {
+    const kbLabel = isEn ? 'KB' : 'КБ';
     const fileList = nonImageAttachments
       .map((att) => {
         const kb = Math.max(1, Math.round(att.size / 1024));
-        return `- ${att.filename} (${kb} КБ)`;
+        return `- ${att.filename} (${kb} ${kbLabel})`;
       })
       .join('\n');
     sections.push(
-      savedImages.length > 0 ? fileList : `## Файлы во вложении\n\n${fileList}`
+      savedImages.length > 0
+        ? fileList
+        : `## ${isEn ? 'Attached files' : 'Файлы во вложении'}\n\n${fileList}`
     );
   }
 

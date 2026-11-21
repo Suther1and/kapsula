@@ -26,12 +26,13 @@ import type {
   CalendarRecurrence,
   VaultTaskEntry,
 } from '@shared/types';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
 import {
   capitalizeFirst,
   eventOccursOnDay,
-  pluralRu,
   sameCalendarDay,
 } from '../lib/mobile-helpers';
+import { tm, useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
 import { ItemActionSheet, type ActionSheetEntry } from './ItemActionSheet';
@@ -51,23 +52,27 @@ interface CalendarViewProps {
   onToggleTask: (task: VaultTaskEntry) => Promise<void>;
 }
 
-const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const EVENT_COLORS = ['#E86A33', '#2EA06B', '#3B82F6', '#8B5CF6', '#EC4899', '#F5A524'];
 const TIME_PRESETS = ['09:00', '11:00', '14:00', '16:00', '19:00'];
-const RECURRENCE_OPTIONS: Array<{ id: CalendarRecurrence; label: string }> = [
-  { id: 'none', label: 'Один раз' },
-  { id: 'daily', label: 'Каждый день' },
-  { id: 'weekdays', label: 'По будням' },
-  { id: 'weekly', label: 'Раз в неделю' },
-  { id: 'monthly', label: 'Раз в месяц' },
+const RECURRENCE_OPTION_KEYS: Array<{ id: CalendarRecurrence; labelKey: MobileDictKey }> = [
+  { id: 'none', labelKey: 'calendar.recurrenceOnce' },
+  { id: 'daily', labelKey: 'calendar.recurrenceDaily' },
+  { id: 'weekdays', labelKey: 'calendar.recurrenceWeekdays' },
+  { id: 'weekly', labelKey: 'calendar.recurrenceWeeklyOpt' },
+  { id: 'monthly', labelKey: 'calendar.recurrenceMonthlyOpt' },
 ];
-const RECURRENCE_LABELS: Record<CalendarRecurrence, string> = {
-  none: 'Не повторять',
-  daily: 'Каждый день',
-  weekdays: 'По будням',
-  weekly: 'Каждую неделю',
-  monthly: 'Каждый месяц',
+const RECURRENCE_LABEL_KEYS: Record<CalendarRecurrence, MobileDictKey> = {
+  none: 'calendar.recurrenceNone',
+  daily: 'calendar.recurrenceDaily',
+  weekdays: 'calendar.recurrenceWeekdays',
+  weekly: 'calendar.recurrenceWeekly',
+  monthly: 'calendar.recurrenceMonthly',
 };
+
+function formatInputTime24(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export function toDateIso(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -89,8 +94,8 @@ export function getWeekStripDays(date: Date): Date[] {
   );
 }
 
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+function formatTime(ms: number, intlLocale = 'ru-RU'): string {
+  return new Date(ms).toLocaleTimeString(intlLocale, { hour: '2-digit', minute: '2-digit' });
 }
 
 function parseHourMinute(raw: string, fallbackH: number, fallbackM: number): [number, number] {
@@ -121,6 +126,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onDeleteEvent,
   onToggleTask,
 }) => {
+  const { locale, intlLocale, t, plural, weekdays } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const selectedDate = useMemo(() => fromDateIso(selectedDateIso), [selectedDateIso]);
   const [monthCursor, setMonthCursor] = useState(
@@ -223,8 +229,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     setEditingEvent(ev);
     setTitle(ev.title);
     setDateStr(toDateIso(new Date(ev.startAt)));
-    setStartTime(formatTime(ev.startAt));
-    setEndTime(formatTime(ev.endAt));
+    setStartTime(formatInputTime24(ev.startAt));
+    setEndTime(formatInputTime24(ev.endAt));
     setAllDay(ev.allDay);
     setLocation(ev.location || '');
     setNotes(ev.notes || '');
@@ -239,8 +245,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     if (!clean) return;
     const parsed = parseRussianEvent(clean, Date.now(), selectedDate.getTime());
     if (parsed) {
+      const defaultRuTitle = tm('calendar.defaultEventTitle', undefined, 'ru');
+      const eventTitle =
+        locale === 'en' && parsed.title === defaultRuTitle
+          ? t('calendar.defaultEventTitle')
+          : parsed.title;
       await onSaveEvent({
-        title: parsed.title,
+        title: eventTitle,
         startAt: parsed.startAt,
         endAt: parsed.endAt,
         allDay: parsed.allDay,
@@ -253,7 +264,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       onSelectDateIso(toDateIso(target));
       setMonthCursor(new Date(target.getFullYear(), target.getMonth(), 1));
       mobileBridge.haptic('success');
-      toast.success(`Добавлено: ${parsed.title}`);
+      toast.success(t('calendar.quickAddedToast', { title: eventTitle }));
     } else {
       const start = new Date(selectedDate);
       start.setHours(10, 0, 0, 0);
@@ -266,14 +277,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         kind: 'event',
       });
       mobileBridge.haptic('success');
-      toast.success('Событие добавлено');
+      toast.success(t('calendar.eventAddedToast'));
     }
     setQuickInput('');
   };
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanTitle = title.trim() || 'Событие';
+    const cleanTitle = title.trim() || t('calendar.defaultEventTitle');
     const base = fromDateIso(dateStr);
     const [sh, sm] = parseHourMinute(startTime, 10, 0);
     const [eh, em] = parseHourMinute(endTime, (sh + 1) % 24, sm);
@@ -307,7 +318,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     setMonthCursor(new Date(base.getFullYear(), base.getMonth(), 1));
     setEditorOpen(false);
     mobileBridge.haptic('success');
-    toast.success(editingEvent ? 'Событие обновлено' : 'Событие создано');
+    toast.success(editingEvent ? t('calendar.eventUpdatedToast') : t('calendar.eventCreatedToast'));
   };
 
   const moveEventByDays = async (ev: CalendarEvent, deltaDays: number) => {
@@ -325,25 +336,25 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       kind: ev.kind,
       recurrence: ev.recurrence,
     });
-    toast.success('Событие перенесено на завтра');
+    toast.success(t('calendar.eventMovedTomorrowToast'));
   };
 
   const buildEventActions = (ev: CalendarEvent): ActionSheetEntry[] => [
     {
       id: 'edit',
-      label: 'Редактировать событие',
+      label: t('calendar.actionEdit'),
       icon: <PencilSimple className="w-5 h-5" />,
       onSelect: () => openEditModal(ev),
     },
     {
       id: 'tomorrow',
-      label: 'Перенести на +1 день',
+      label: t('calendar.actionMoveTomorrow'),
       icon: <CalendarBlank className="w-5 h-5" />,
       onSelect: () => void moveEventByDays(ev, 1),
     },
     {
       id: 'delete',
-      label: 'Удалить событие',
+      label: t('calendar.actionDelete'),
       icon: <Trash className="w-5 h-5" />,
       danger: true,
       onSelect: () => void onDeleteEvent(ev.id),
@@ -353,11 +364,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const headerDateRef = !isExpanded && compactCalendarMode === 'week' ? selectedDate : monthCursor;
   const monthTitle = capitalizeFirst(
     headerDateRef
-      .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })
+      .toLocaleDateString(intlLocale, { month: 'long', year: 'numeric' })
       .replace(/\s*г\.?$/i, '')
   );
   const selectedDayLabel = capitalizeFirst(
-    selectedDate.toLocaleDateString('ru-RU', {
+    selectedDate.toLocaleDateString(intlLocale, {
       weekday: 'long',
       day: 'numeric',
       month: 'long',
@@ -430,7 +441,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             {hasTasks ? (
               <div className="flex items-center gap-1 px-1 pt-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--k-emerald)]" />
-                <span className="text-[9.5px] text-[var(--k-emerald)]">Задачи</span>
+                <span className="text-[9.5px] text-[var(--k-emerald)]">{t('calendar.legendTasks')}</span>
               </div>
             ) : null}
           </div>
@@ -499,14 +510,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <button
               type="button"
               data-testid="calendar-mode-toggle"
-              aria-label={compactCalendarMode === 'week' ? 'Развернуть месяц' : 'Свернуть до недели'}
+              aria-label={compactCalendarMode === 'week' ? t('calendar.expandMonthAria') : t('calendar.collapseWeekAria')}
               onClick={() => {
                 mobileBridge.haptic('light');
                 setCompactCalendarMode((m) => (m === 'week' ? 'month' : 'week'));
               }}
               className="k-tap inline-flex items-center gap-1 px-2 h-7 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[11.5px] font-semibold shrink-0"
             >
-              <span>{compactCalendarMode === 'week' ? 'Неделя' : 'Месяц'}</span>
+              <span>{compactCalendarMode === 'week' ? t('calendar.modeWeek') : t('calendar.modeMonth')}</span>
               {compactCalendarMode === 'week' ? (
                 <CaretDown weight="bold" className="w-3 h-3" />
               ) : (
@@ -526,11 +537,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             }}
             className="k-tap px-2.5 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-primary)]"
           >
-            Сегодня
+            {t('tasks.duePresetToday')}
           </button>
           <button
             type="button"
-            aria-label={compactCalendarMode === 'week' && !isExpanded ? 'Предыдущая неделя' : 'Предыдущий месяц'}
+            aria-label={compactCalendarMode === 'week' && !isExpanded ? t('calendar.prevWeekAria') : t('calendar.prevMonthAria')}
             onClick={() => stepPeriod(-1)}
             className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
           >
@@ -538,7 +549,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </button>
           <button
             type="button"
-            aria-label={compactCalendarMode === 'week' && !isExpanded ? 'Следующая неделя' : 'Следующий месяц'}
+            aria-label={compactCalendarMode === 'week' && !isExpanded ? t('calendar.nextWeekAria') : t('calendar.nextMonthAria')}
             onClick={() => stepPeriod(1)}
             className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
           >
@@ -548,7 +559,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       <div className="grid grid-cols-7 gap-1 mb-1">
-        {WEEKDAYS.map((w) => (
+        {weekdays.map((w) => (
           <div
             key={w}
             className="text-center text-[11px] font-semibold text-[var(--k-ink-muted)] py-0.5"
@@ -596,11 +607,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div className="mt-4 pt-3 border-t border-[var(--k-border-hairline)] flex items-center gap-4 text-[11.5px] text-[var(--k-ink-muted)]">
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-[var(--k-accent)]" />
-            События
+            {t('calendar.legendEvents')}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-[var(--k-emerald)]" />
-            Задачи со сроком
+            {t('calendar.legendDueTasks')}
           </span>
         </div>
       ) : null}
@@ -623,8 +634,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               {selectedDayLabel}
             </div>
             <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-              {pluralRu(dayEvents.length, 'событие', 'события', 'событий')} ·{' '}
-              {pluralRu(dayTasks.length, 'задача', 'задачи', 'задач')}
+              {plural('event', dayEvents.length)} ·{' '}
+              {plural('task', dayTasks.length)}
             </div>
           </div>
           <button
@@ -634,7 +645,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold shrink-0"
           >
             <Plus weight="bold" className="w-3.5 h-3.5" />
-            Событие
+            {t('calendar.defaultEventTitle')}
           </button>
         </div>
 
@@ -646,7 +657,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               data-testid="calendar-quick-input"
               value={quickInput}
               onChange={(e) => setQuickInput(e.target.value)}
-              placeholder="Напр.: Завтра в 15:00 созвон…"
+              placeholder={t('calendar.quickInputPlaceholder')}
               className="w-full h-10 pl-8 pr-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
           </div>
@@ -655,7 +666,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             disabled={!quickInput.trim()}
             className="k-tap px-3 h-10 rounded-xl bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium text-[var(--k-ink-primary)] disabled:opacity-40"
           >
-            Ок
+            {t('common.ok')}
           </button>
         </form>
       </div>
@@ -674,10 +685,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <div className="flex flex-col items-center justify-center text-center py-10 px-4">
             <CalendarBlank weight="duotone" className="w-8 h-8 text-[var(--k-ink-muted)] mb-2" />
             <div className="text-[14px] font-semibold text-[var(--k-ink-primary)]">
-              На этот день планов нет
+              {t('calendar.emptyDayTitle')}
             </div>
             <p className="text-[12.5px] text-[var(--k-ink-muted)] mt-1">
-              Добавь событие сверху или через кнопку «Событие».
+              {t('calendar.emptyDayHint')}
             </p>
           </div>
         ) : null}
@@ -687,7 +698,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             key={ev.id}
             onLongPress={() => setActionEvent(ev)}
             rightAction={{
-              label: 'Удалить',
+              label: t('common.delete'),
               icon: <Trash weight="fill" className="w-4 h-4" />,
               bgClass: 'bg-[var(--k-danger)]',
               onTrigger: () => void onDeleteEvent(ev.id),
@@ -706,7 +717,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   />
                   <span className="k-mono text-[11.5px] font-medium text-[var(--k-ink-secondary)] inline-flex items-center gap-1">
                     <Clock className="w-3 h-3 shrink-0" />
-                    {ev.allDay ? 'Весь день' : `${formatTime(ev.startAt)}–${formatTime(ev.endAt)}`}
+                    {ev.allDay
+                      ? t('calendar.allDay')
+                      : `${formatTime(ev.startAt, intlLocale)}–${formatTime(ev.endAt, intlLocale)}`}
                   </span>
                 </div>
                 <button
@@ -716,7 +729,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     mobileBridge.haptic('light');
                     setActionEvent(ev);
                   }}
-                  aria-label="Действия с событием"
+                  aria-label={t('calendar.eventActionsAria')}
                   className="inline-flex items-center justify-center w-9 h-9 -mr-2 -my-1.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] shrink-0"
                 >
                   <DotsThree weight="bold" className="w-4 h-4" />
@@ -743,7 +756,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               {ev.recurrence && ev.recurrence !== 'none' ? (
                 <div className="text-[11px] text-[var(--k-accent)] inline-flex items-center gap-1">
                   <Repeat className="w-3 h-3" />
-                  {RECURRENCE_LABELS[ev.recurrence]}
+                  {t(RECURRENCE_LABEL_KEYS[ev.recurrence])}
                 </div>
               ) : null}
             </div>
@@ -753,7 +766,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         {dayTasks.length > 0 ? (
           <div className="space-y-2 pt-2">
             <div className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] px-1">
-              Задачи дня
+              {t('calendar.dayTasksHeading')}
             </div>
             {dayTasks.map((task) => (
               <div
@@ -763,7 +776,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   type="button"
                   onClick={() => void onToggleTask(task)}
-                  aria-label={task.done ? 'Снять отметку' : 'Отметить выполненной'}
+                  aria-label={task.done ? t('tasks.actionUncheck') : t('tasks.actionDone')}
                   className="inline-flex items-center justify-center w-9 h-9 -ml-2 -my-1.5 shrink-0"
                 >
                   <span
@@ -803,7 +816,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
       <BottomSheet
         open={editorOpen}
-        title={editingEvent ? 'Редактировать событие' : 'Новое событие'}
+        title={editingEvent ? t('calendar.editEventSheetTitle') : t('calendar.newEventSheetTitle')}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         onClose={() => setEditorOpen(false)}
@@ -815,7 +828,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 await onDeleteEvent(editingEvent.id);
                 setEditorOpen(false);
               }}
-              aria-label="Удалить событие"
+              aria-label={t('calendar.actionDelete')}
               className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-danger)]"
             >
               <Trash className="w-4 h-4" />
@@ -830,13 +843,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             data-testid="calendar-event-title-input"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Название события"
+            placeholder={t('calendar.eventTitlePlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[15px] font-medium text-[var(--k-ink-primary)]"
           />
 
           <div className="grid grid-cols-2 gap-2 items-end">
             <label className="flex flex-col gap-1 text-[11.5px] text-[var(--k-ink-muted)]">
-              Дата
+              {t('calendar.fieldDate')}
               <input
                 type="date"
                 value={dateStr}
@@ -846,14 +859,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             </label>
 
             <div className="flex items-center justify-between px-3 h-10 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13px] text-[var(--k-ink-primary)]">
-              <span>Весь день</span>
+              <span>{t('calendar.allDay')}</span>
               <Switch.Root
                 checked={allDay}
                 onCheckedChange={(checked) => {
                   mobileBridge.haptic('light');
                   setAllDay(checked);
                 }}
-                aria-label="Весь день"
+                aria-label={t('calendar.allDay')}
                 className="k-switch-root"
               >
                 <Switch.Thumb className="k-switch-thumb" />
@@ -865,7 +878,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex flex-col gap-1 text-[11.5px] text-[var(--k-ink-muted)]">
-                  Начало
+                  {t('calendar.fieldStart')}
                   <input
                     type="time"
                     value={startTime}
@@ -877,7 +890,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-[11.5px] text-[var(--k-ink-muted)]">
-                  Конец
+                  {t('calendar.fieldEnd')}
                   <input
                     type="time"
                     value={endTime}
@@ -913,7 +926,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     onClick={() => setEndTime(addMinutesToTimeStr(startTime, dur))}
                     className="k-tap px-2 h-7 rounded-lg text-[11px] font-medium shrink-0 bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[var(--k-ink-muted)]"
                   >
-                    +{dur === 30 ? '30 мин' : dur === 60 ? '1 ч' : '2 ч'}
+                    +{dur === 30 ? t('calendar.dur30m') : dur === 60 ? t('calendar.dur1h') : t('calendar.dur2h')}
                   </button>
                 ))}
               </div>
@@ -922,9 +935,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
           {/* Recurrence Chips (NO ugly native <select>!) */}
           <div className="space-y-1.5">
-            <div className="text-[11.5px] text-[var(--k-ink-muted)]">Повтор</div>
+            <div className="text-[11.5px] text-[var(--k-ink-muted)]">{t('calendar.fieldRepeat')}</div>
             <div className="flex items-center gap-1.5 overflow-x-auto k-no-scrollbar pb-0.5">
-              {RECURRENCE_OPTIONS.map((opt) => (
+              {RECURRENCE_OPTION_KEYS.map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
@@ -935,7 +948,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       : 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                   }`}
                 >
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </button>
               ))}
             </div>
@@ -943,7 +956,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
           {/* Color Swatches */}
           <div className="space-y-1.5">
-            <div className="text-[11.5px] text-[var(--k-ink-muted)]">Цвет</div>
+            <div className="text-[11.5px] text-[var(--k-ink-muted)]">{t('calendar.fieldColor')}</div>
             <div className="flex items-center gap-2">
               {EVENT_COLORS.map((c) => (
                 <button
@@ -967,7 +980,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             type="text"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            placeholder="Место или ссылка на встречу"
+            placeholder={t('calendar.locationPlaceholder')}
             className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
           />
 
@@ -975,7 +988,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             rows={3}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Заметки к событию…"
+            placeholder={t('calendar.notesPlaceholder')}
             className="w-full p-3.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[13.5px] text-[var(--k-ink-primary)] resize-none"
           />
 
@@ -983,14 +996,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             type="submit"
             className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold"
           >
-            {editingEvent ? 'Сохранить изменения' : 'Добавить в календарь'}
+            {editingEvent ? t('common.saveChanges') : t('calendar.addToCalendarBtn')}
           </button>
         </form>
       </BottomSheet>
 
       <ItemActionSheet
         open={Boolean(actionEvent)}
-        title={actionEvent?.title || 'Событие'}
+        title={actionEvent?.title || t('calendar.defaultEventTitle')}
         actions={actionEvent ? buildEventActions(actionEvent) : []}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}

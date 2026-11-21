@@ -17,6 +17,7 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { OrbitDef, SecretPayload, TotpCodeSnapshot, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { formatCardExpiryDraft } from '@shared/russian-event-parser';
 import { generateTotp, isValidTotpInput, parseOtpAuthUri } from '@shared/totp';
 import { formatCardPanGroups, friendlyErrorMessage } from '../../lib/format';
@@ -37,12 +38,9 @@ interface SecretStudioSheetProps {
 const CARD_BRAND_LABEL: Record<string, string> = {
   visa: 'VISA',
   mastercard: 'Mastercard',
-  mir: 'МИР',
   amex: 'AMEX',
   unionpay: 'UnionPay',
 };
-
-const AUTO_REMASK_SECONDS = 30;
 
 function formatTotpDisplay(code: string): string {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
@@ -109,6 +107,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
   onDelete,
   onClose,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [payload, setPayload] = useState<SecretPayload | null>(null);
@@ -129,7 +128,6 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
 
   const [showSecret, setShowSecret] = useState(false);
   const [showCvv, setShowCvv] = useState(false);
-  const [revealSecLeft, setRevealSecLeft] = useState(0);
   const [totpSnap, setTotpSnap] = useState<TotpCodeSnapshot | null>(null);
 
   const notesInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -156,7 +154,6 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
     setShowSecret(false);
     setShowCvv(false);
     setShowTotpSeed(false);
-    setRevealSecLeft(0);
     setPayload(null);
     setLogin('');
     setSecretValue('');
@@ -188,27 +185,6 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
       cancelled = true;
     };
   }, [item.id, vaultLocked]);
-
-  // 30-second auto-re-mask for any revealed sensitive value in View mode
-  const anyRevealedInView = mode === 'view' && (showSecret || showCvv) && !vaultLocked;
-  useEffect(() => {
-    if (!anyRevealedInView) {
-      setRevealSecLeft(0);
-      return;
-    }
-    setRevealSecLeft(AUTO_REMASK_SECONDS);
-    const timer = window.setInterval(() => {
-      setRevealSecLeft((prev) => {
-        if (prev <= 1) {
-          setShowSecret(false);
-          setShowCvv(false);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [anyRevealedInView]);
 
   // Live 1s TOTP polling in view mode
   useEffect(() => {
@@ -268,7 +244,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
       return;
     }
     if (trimmedTotp && !editTotpValid) {
-      toast.info('Проверь формат ключа для 2FA-кода');
+      toast.info(t('secret.modal.errTotpShort'));
       return;
     }
     setSaving(true);
@@ -277,7 +253,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
         id: item.id,
         kind,
         title: title.trim() || item.title,
-        service: service.trim() || title.trim() || 'Сейф',
+        service: service.trim() || title.trim() || t('nav.vault'),
         login: login.trim() || undefined,
         secretValue: isCard ? secretValue.replace(/\D/g, '') : secretValue,
         expiry: isCard ? expiry.trim() || undefined : undefined,
@@ -299,20 +275,23 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
         setShowCvv(false);
         setShowTotpSeed(false);
         setMode('view');
-        toast.success('Данные Сейфа обновлены');
+        toast.success(t('secret.sheet.updated'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить изменения.'));
+      toast.error(friendlyErrorMessage(err, t('secret.sheet.saveFailed'), locale));
     } finally {
       setSaving(false);
     }
   };
 
   const Icon = isCard ? CreditCard : kind === 'password' ? User : kind === 'api_key' ? Key : ShieldCheck;
+  const rawBrand = item.secretMeta?.cardBrand?.toLowerCase();
   const brandName =
-    (item.secretMeta?.cardBrand &&
-      (CARD_BRAND_LABEL[item.secretMeta.cardBrand.toLowerCase()] || item.secretMeta.cardBrand)) ||
-    'КАРТА';
+    rawBrand === 'mir'
+      ? t('vault.brand.mir')
+      : (item.secretMeta?.cardBrand &&
+          ((rawBrand && CARD_BRAND_LABEL[rawBrand]) || item.secretMeta.cardBrand)) ||
+        t('vault.brand.cardFallback');
   const last4 = item.secretMeta?.last4 || (secretValue ? secretValue.replace(/\D/g, '').slice(-4) : '••••');
   const maskedPan = `••••  ••••  ••••  ${last4}`;
   const revealedPan = secretValue ? formatCardPanGroups(secretValue) : maskedPan;
@@ -334,12 +313,12 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
               {vaultLocked ? (
                 <>
                   <Lock className="w-3 h-3 text-[var(--k-amber)]" />
-                  <span>Под мастер-кодом</span>
+                  <span>{t('vault.underMasterCodeLong')}</span>
                 </>
               ) : (
                 <>
                   <LockOpen className="w-3 h-3 text-[var(--k-emerald)]" />
-                  <span>Зашифровано локально</span>
+                  <span>{t('vault.encryptedLocallyLong')}</span>
                 </>
               )}
             </div>
@@ -356,7 +335,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                 className="k-interactive h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <PencilSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                <span>Изменить</span>
+                <span>{t('common.edit')}</span>
               </button>
             ) : (
               <button
@@ -364,7 +343,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                 onClick={() => setMode('view')}
                 className="k-interactive h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
               >
-                Просмотр
+                {t('secret.sheet.view')}
               </button>
             )
           ) : null}
@@ -372,7 +351,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
           <button
             type="button"
             onClick={() => onDelete(item.id)}
-            aria-label="Удалить запись Сейфа"
+            aria-label={t('secret.sheet.deleteAria')}
             className="k-interactive w-8 h-8 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-secondary)] hover:bg-[var(--k-danger-soft)] hover:text-[var(--k-danger)] cursor-pointer"
           >
             <Trash className="w-4 h-4" />
@@ -380,7 +359,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Закрыть панель Сейфа"
+            aria-label={t('secret.sheet.closeAria')}
             className="k-interactive w-8 h-8 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
           >
             <X weight="bold" className="w-4 h-4" />
@@ -393,16 +372,16 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
         {vaultLocked ? (
           <div className="rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-2)] p-6 text-center flex flex-col items-center gap-3">
             <Lock className="w-8 h-8 text-[var(--k-amber)]" />
-            <div className="text-[14px] font-semibold">Сейф заблокирован</div>
+            <div className="text-[14px] font-semibold">{t('vault.lockedTitle')}</div>
             <div className="text-[12.5px] text-[var(--k-ink-secondary)]">
-              Разблокируй Сейф мастер-кодом, чтобы просматривать и копировать данные
+              {t('vault.lockedHint')}
             </div>
             <button
               type="button"
               onClick={onUnlockRequest}
               className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer"
             >
-              Ввести мастер-код
+              {t('secret.sheet.enterPin')}
             </button>
           </div>
         ) : (
@@ -437,18 +416,10 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                           {brandName}
                         </div>
                         <div className="text-[16px] font-semibold text-[var(--k-ink-primary)] mt-0.5">
-                          {title || item.title || 'Банковская карта'}
+                          {title || item.title || t('vault.type.bank_card')}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {anyRevealedInView && revealSecLeft > 0 ? (
-                          <span
-                            data-testid="secret-remask-countdown"
-                            className="k-mono k-tabular text-[11px] text-[var(--k-ink-secondary)]"
-                          >
-                            Скроется: {revealSecLeft} с
-                          </span>
-                        ) : null}
                         <button
                           type="button"
                           onClick={() => {
@@ -459,18 +430,18 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                           className="k-interactive h-8 px-2.5 rounded-lg bg-[var(--k-bg-surface-1)]/85 border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] hover:bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           {showSecret ? <EyeSlash className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                          <span>{showSecret ? 'Скрыть' : 'Показать'}</span>
+                          <span>{showSecret ? t('common.hide') : t('common.show')}</span>
                         </button>
                       </div>
                     </div>
 
                     <div className="relative k-mono text-[20px] tracking-[0.09em] font-medium text-[var(--k-ink-primary)] k-selectable">
-                      {loading ? 'Расшифровываю…' : showSecret ? revealedPan : maskedPan}
+                      {loading ? t('vault.decrypting') : showSecret ? revealedPan : maskedPan}
                     </div>
 
                     <div className="relative flex items-end justify-between gap-4 pt-1">
                       <div>
-                        <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">Срок</div>
+                        <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">{t('vault.cardExpiryShort')}</div>
                         <div className="k-mono text-[14px] text-[var(--k-ink-primary)] mt-0.5 k-selectable">
                           {expiry || item.secretMeta?.expiry || '—'}
                         </div>
@@ -484,7 +455,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         </div>
                       ) : null}
                       <div className="text-[11px] text-[var(--k-ink-muted)] text-right">
-                        {wipeSeconds > 0 ? `Буфер чистится через ${wipeSeconds} с` : 'Локальный сейф'}
+                        {wipeSeconds > 0 ? t('vault.wipePillHud', { seconds: wipeSeconds }) : t('vault.wipeLocalPillShort')}
                       </div>
                     </div>
                   </div>
@@ -494,7 +465,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     {service ? (
                       <div className="px-4 py-3 flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--k-ink-muted)]">Сервис / сайт</div>
+                          <div className="text-[11px] text-[var(--k-ink-muted)]">{t('secret.sheet.serviceLabel')}</div>
                           <div className="text-[14px] font-medium text-[var(--k-ink-primary)] truncate k-selectable mt-0.5">
                             {service}
                           </div>
@@ -505,14 +476,14 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     {login || item.secretMeta?.hasLogin ? (
                       <div className="px-4 py-3 flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--k-ink-muted)]">Логин</div>
+                          <div className="text-[11px] text-[var(--k-ink-muted)]">{t('vault.login')}</div>
                           <div className="text-[14px] font-medium text-[var(--k-ink-primary)] truncate k-selectable mt-0.5">
                             {loading ? '…' : login || item.secretMeta?.loginHint || '—'}
                           </div>
                         </div>
                         <CopySlotPill
-                          label="Логин"
-                          copiedLabel="Готово"
+                          label={t('vault.login')}
+                          copiedLabel={t('common.done')}
                           widthPx={92}
                           heightPx={30}
                           onCopy={async () => {
@@ -528,25 +499,17 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         <div className="flex items-center gap-2 text-[11px] text-[var(--k-ink-muted)]">
                           <span>
                             {kind === 'api_key'
-                              ? 'Ключ доступа'
+                              ? t('vault.secretKey')
                               : kind === 'seed'
-                                ? 'Фраза восстановления'
+                                ? t('dna.seed')
                                 : kind === 'note'
-                                  ? 'Секретный текст'
-                                  : 'Пароль'}
+                                  ? t('secret.sheet.secretTextLabel')
+                                  : t('vault.passwordLabel')}
                           </span>
-                          {showSecret && revealSecLeft > 0 ? (
-                            <span
-                              data-testid="secret-remask-countdown"
-                              className="k-mono k-tabular text-[10.5px] text-[var(--k-amber)]"
-                            >
-                              скроется через {revealSecLeft} с
-                            </span>
-                          ) : null}
                         </div>
                         <div className="k-mono text-[13.5px] text-[var(--k-ink-primary)] break-all k-selectable mt-0.5">
                           {loading
-                            ? 'Расшифровываю…'
+                            ? t('vault.decrypting')
                             : showSecret
                               ? secretValue || '—'
                               : '••••••••••••••••'}
@@ -555,7 +518,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowSecret((v) => !v)}
-                        aria-label={showSecret ? 'Скрыть' : 'Показать'}
+                        aria-label={showSecret ? t('common.hide') : t('common.show')}
                         className="k-interactive w-8 h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center justify-center cursor-pointer shrink-0"
                       >
                         {showSecret ? <EyeSlash className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -574,7 +537,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       <SheetTotpRing remainingSec={totpSnap.remainingSec} period={totpSnap.period} size={32} />
                       <div className="min-w-0">
                         <div className="text-[11px] text-[var(--k-ink-muted)]">
-                          2FA-код (одноразовый пароль)
+                          {t('secret.modal.totpToggle')}
                         </div>
                         <div
                           data-testid="secret-sheet-totp-code"
@@ -590,14 +553,14 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     </div>
                     <CopySlotPill
                       data-testid="secret-sheet-copy-totp"
-                      label="Скопировать"
-                      copiedLabel="Готово"
+                      label={t('common.copy')}
+                      copiedLabel={t('common.done')}
                       widthPx={126}
                       heightPx={32}
                       tone="accent"
                       onCopy={async () => {
                         const r = await window.kapsula.copySecretField(item.id, 'totp');
-                        if (r.ok) toast.success('2FA-код скопирован');
+                        if (r.ok) toast.success(t('vault.totpCopied'));
                         return r.ok;
                       }}
                     />
@@ -609,14 +572,14 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                   <CopySlotPill
                     label={
                       isCard
-                        ? 'Скопировать номер'
+                        ? t('vault.copyNumber')
                         : kind === 'api_key'
-                          ? 'Скопировать ключ'
+                          ? t('vault.copyKey')
                           : kind === 'note'
-                            ? 'Скопировать текст'
-                            : 'Скопировать пароль'
+                            ? t('vault.copyText')
+                            : t('vault.copyPassword')
                     }
-                    copiedLabel="Скопировано"
+                    copiedLabel={t('common.copied')}
                     widthPx={172}
                     heightPx={34}
                     wipeSeconds={wipeSeconds ?? 30}
@@ -629,13 +592,13 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                   />
                   {isCard && (item.secretMeta?.expiry || expiry) ? (
                     <CopySlotPill
-                      label={`Срок ${item.secretMeta?.expiry || expiry}`}
-                      copiedLabel="Готово"
+                      label={t('secret.sheet.expiryField', { value: item.secretMeta?.expiry || expiry })}
+                      copiedLabel={t('common.done')}
                       widthPx={116}
                       heightPx={34}
                       onCopy={async () => {
                         const r = await window.kapsula.copySecretField(item.id, 'expiry');
-                        if (r.ok) toast.success('Срок карты скопирован');
+                        if (r.ok) toast.success(t('vault.cardExpiryCopied'));
                         return r.ok;
                       }}
                     />
@@ -643,7 +606,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                   {isCard && (item.secretMeta?.hasCvv || cvv) ? (
                     <CopySlotPill
                       label="CVV"
-                      copiedLabel="Готово"
+                      copiedLabel={t('common.done')}
                       widthPx={94}
                       heightPx={34}
                       wipeSeconds={wipeSeconds ?? 30}
@@ -661,7 +624,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                   <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50 p-3.5 space-y-1">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-[11px] font-medium uppercase tracking-wider text-[var(--k-ink-muted)]">
-                        Комментарий
+                        {t('secret.sheet.commentLabel')}
                       </div>
                       <button
                         type="button"
@@ -671,7 +634,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         }}
                         className="text-[11px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                       >
-                        Изменить
+                        {t('common.edit')}
                       </button>
                     </div>
                     <div className="text-[13px] leading-relaxed text-[var(--k-ink-primary)] whitespace-pre-wrap k-selectable">
@@ -689,7 +652,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     className="k-interactive self-start inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-dashed border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                   >
                     <PencilSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                    <span>Добавить комментарий</span>
+                    <span>{t('secret.sheet.addComment')}</span>
                   </button>
                 )}
 
@@ -715,12 +678,12 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                 className="flex flex-col gap-4"
               >
                 {loading ? (
-                  <div className="text-[12.5px] text-[var(--k-ink-muted)]">Расшифровываю поля…</div>
+                  <div className="text-[12.5px] text-[var(--k-ink-muted)]">{t('vault.decryptingFields')}</div>
                 ) : (
                   <>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                        Название записи
+                        {t('secret.sheet.entryTitle')}
                       </label>
                       <input
                         value={title}
@@ -733,7 +696,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       <>
                         <div className="flex flex-col gap-1.5">
                           <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                            Сервис / сайт
+                            {t('secret.sheet.serviceLabel')}
                           </label>
                           <input
                             value={service}
@@ -743,7 +706,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         </div>
                         <div className="flex flex-col gap-1.5">
                           <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                            Логин или почта
+                            {t('secret.modal.loginPlaceholder')}
                           </label>
                           <input
                             value={login}
@@ -757,14 +720,14 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
                         {isCard
-                          ? 'Номер карты'
+                          ? t('secret.sheet.cardNumberLabel')
                           : kind === 'api_key'
-                            ? 'Ключ доступа / токен'
+                            ? t('secret.sheet.apiKeyLabel')
                             : kind === 'seed'
-                              ? 'Фраза восстановления'
+                              ? t('dna.seed')
                               : kind === 'note'
-                                ? 'Секретный текст'
-                                : 'Пароль'}
+                                ? t('secret.sheet.secretTextLabel')
+                                : t('vault.passwordLabel')}
                       </label>
                       <div className="flex items-center gap-1.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3 h-9 focus-within:border-[var(--k-border-focus)]">
                         <input
@@ -818,7 +781,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1.5">
                           <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                            Срок действия (MM/YY)
+                            {t('secret.sheet.expiryFullLabel')}
                           </label>
                           <input
                             value={expiry}
@@ -856,7 +819,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)] inline-flex items-center gap-1.5">
                         <ShieldPlus className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                        <span>2FA-код (одноразовый пароль)</span>
+                        <span>{t('secret.modal.totpToggle')}</span>
                       </label>
                       <div className="flex items-center gap-1.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3 h-9 focus-within:border-[var(--k-border-focus)]">
                         <input
@@ -864,13 +827,13 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                           data-testid="secret-edit-totp-input"
                           value={totpInput}
                           onChange={(e) => setTotpInput(e.target.value)}
-                          placeholder="Ключ 2FA или ссылка из аутентификатора"
+                          placeholder={t('secret.modal.totpPlaceholder')}
                           className="flex-1 bg-transparent border-none outline-none k-mono text-[12.5px] k-selectable"
                         />
                         <button
                           type="button"
                           onClick={() => setShowTotpSeed((v) => !v)}
-                          aria-label={showTotpSeed ? 'Скрыть ключ 2FA' : 'Показать ключ 2FA'}
+                          aria-label={showTotpSeed ? t('secret.sheet.hideTotp') : t('secret.sheet.showTotp')}
                           className="text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                         >
                           {showTotpSeed ? <EyeSlash className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -879,17 +842,17 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       {trimmedTotp ? (
                         editTotpPreview ? (
                           <div className="flex items-center justify-between gap-2 rounded-lg bg-[var(--k-bg-surface-2)]/70 border border-[var(--k-emerald)]/35 px-3 py-1.5 text-[12px]">
-                            <span className="text-[var(--k-ink-secondary)]">Предпросмотр кода</span>
+                            <span className="text-[var(--k-ink-secondary)]">{t('secret.sheet.codePreview')}</span>
                             <span className="k-mono font-semibold text-[var(--k-ink-primary)] tracking-[0.1em]">
                               {formatTotpDisplay(editTotpPreview.code)}{' '}
                               <span className="font-normal text-[var(--k-ink-muted)]">
-                                ({editTotpPreview.remainingSec} с)
+                                ({editTotpPreview.remainingSec} {t('common.secUnit')})
                               </span>
                             </span>
                           </div>
                         ) : (
                           <div className="text-[11.5px] text-[var(--k-danger)]">
-                            Не удалось распознать ключ 2FA — вставь секретный ключ целиком или ссылку из приложения-аутентификатора
+                            {t('secret.modal.totpInvalid')}
                           </div>
                         )
                       ) : null}
@@ -897,13 +860,13 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                        Раздел
+                        {t('nav.sectionFallback')}
                       </label>
                       <SelectMenu
                         value={orbit}
                         onChange={setOrbit}
                         options={[
-                          { value: '', label: 'Без раздела' },
+                          { value: '', label: t('nav.noSection') },
                           ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
                         ]}
                       />
@@ -911,7 +874,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)]">
-                        Комментарий (шифруется вместе с записью)
+                        {t('secret.sheet.commentEncrypted')}
                       </label>
                       <textarea
                         ref={notesInputRef}
@@ -921,8 +884,8 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         onChange={(e) => setNotes(e.target.value)}
                         placeholder={
                           isCard
-                            ? 'ПИН-код, назначение карты, лимиты, кэшбэк…'
-                            : 'ПИН-код, резервные коды, ответ на контрольный вопрос…'
+                            ? t('secret.sheet.commentCardPh')
+                            : t('secret.sheet.commentOtherPh')
                         }
                         className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-3 text-[13px] resize-none outline-none focus:border-[var(--k-border-focus)] k-selectable"
                       />
@@ -934,7 +897,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         onClick={() => setMode('view')}
                         className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] text-[13px] text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                       >
-                        Отмена
+                        {t('common.cancel')}
                       </button>
                       <button
                         type="submit"
@@ -942,7 +905,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                         className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                       >
                         <Check weight="bold" className="w-4 h-4" />
-                        <span>{saving ? 'Сохраняю…' : 'Сохранить'}</span>
+                        <span>{saving ? t('common.saving') : t('common.save')}</span>
                       </button>
                     </div>
                   </>

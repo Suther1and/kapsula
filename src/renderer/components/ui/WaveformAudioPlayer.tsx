@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from '@phosphor-icons/react';
 import { formatDurationMmSs } from '../../lib/format';
+import { useI18n } from '@shared/i18n/react';
 
 interface WaveformAudioPlayerProps {
   src: string | null;
@@ -19,6 +20,7 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
   seedKey,
   compact = false,
 }) => {
+  const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -127,7 +129,7 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
         type="button"
         disabled={!src}
         onClick={(e) => void togglePlay(e)}
-        aria-label={playing ? 'Пауза' : 'Воспроизвести'}
+        aria-label={playing ? t('ui.videoPause') : t('ui.audioPlay')}
         className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] shrink-0 cursor-pointer disabled:opacity-45"
       >
         {playing ? (
@@ -139,7 +141,7 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
 
       <div
         role="slider"
-        aria-label="Позиция воспроизведения"
+        aria-label={t('ui.audioSeekAria')}
         aria-valuemin={0}
         aria-valuemax={Math.round(duration)}
         aria-valuenow={Math.round(currentTime)}

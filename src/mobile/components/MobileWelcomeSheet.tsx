@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import {
   Check,
   CloudCheck,
+  Globe,
   Moon,
   Sparkle,
   Sun,
 } from '@phosphor-icons/react';
-import { ONBOARDING_PRESETS, type OnboardingOrbitPreset } from '@shared/note-templates';
+import type { OnboardingOrbitPreset } from '@shared/note-templates';
 import type { ThemeMode } from '@shared/types';
 import { KapsulaEmblem } from '@renderer/components/ui/KapsulaEmblem';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
 
@@ -26,17 +28,6 @@ interface MobileWelcomeSheetProps {
   onSkip: () => void;
 }
 
-export const MOBILE_WELCOME_NOTE_BODY = [
-  'Капсула держит под рукой всё важное — заметки, фото, ссылки, голосовые, задачи, календарь и защищённый Сейф.',
-  '',
-  '## С чего удобно начать',
-  '- [ ] Создай первую заметку и добавь фото прямо в текст',
-  '- [ ] Переключи вкладку «Задачи» в режим «Доска», чтобы раскладывать дела по колонкам',
-  '- [ ] Запиши голосовую заметку и расшифруй её через ИИ',
-  '- [ ] Сохрани карту, пароль или 2FA-код в защищённый «Сейф»',
-  '- [ ] Настрой внешний вид и облачную синхронизацию в Настройках',
-].join('\n');
-
 export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
   open,
   isExpanded,
@@ -47,6 +38,7 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
   onOpenCloud,
   onSkip,
 }) => {
+  const { locale, setLocale, localeOptions, t, onboardingPresets } = useMobileI18n();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [createWelcomeNote, setCreateWelcomeNote] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -64,7 +56,7 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
   const handleStart = async () => {
     setBusy(true);
     try {
-      const chosen = ONBOARDING_PRESETS.orbits.filter((o) => selectedIds.has(o.id));
+      const chosen = onboardingPresets.orbits.filter((o) => selectedIds.has(o.id));
       await onComplete({
         selectedOrbits: chosen,
         createWelcomeNote,
@@ -78,8 +70,8 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
   return (
     <BottomSheet
       open={open}
-      title="Добро пожаловать в Kapsula"
-      subtitle="Быстрая настройка пространства — можно пропустить"
+      title={t('welcome.title')}
+      subtitle={t('welcome.subtitle')}
       isExpanded={isExpanded}
       hingeRightOffsetPx={hingeRightOffsetPx}
       maxWidthClass="max-w-lg"
@@ -95,7 +87,7 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
             }}
             className="k-tap px-4 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13.5px] font-medium text-[var(--k-ink-secondary)]"
           >
-            Пропустить
+            {t('welcome.skip')}
           </button>
           <button
             type="button"
@@ -105,15 +97,52 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
             className="k-tap flex-1 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold disabled:opacity-50"
           >
             {busy
-              ? 'Готовлю…'
+              ? t('welcome.preparing')
               : selectedIds.size > 0 || createWelcomeNote
-                ? 'Начать работу'
-                : 'Начать с чистого листа'}
+                ? t('welcome.start')
+                : t('welcome.startBlank')}
           </button>
         </div>
       }
     >
       <div data-testid="mobile-welcome-sheet" className="p-4 space-y-4">
+        {/* Language / Язык instant toggle */}
+        <div
+          data-testid="welcome-language-selector"
+          className="flex items-center justify-between gap-2 p-2.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]"
+        >
+          <div className="flex items-center gap-2 pl-1 min-w-0">
+            <Globe className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+            <span className="text-[12.5px] font-semibold text-[var(--k-ink-primary)] truncate">
+              {t('common.language')}
+            </span>
+          </div>
+          <div className="inline-flex items-center gap-1 p-0.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] shrink-0">
+            {localeOptions.map((opt) => {
+              const active = locale === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`welcome-lang-${opt.id}`}
+                  aria-pressed={active}
+                  onClick={() => {
+                    mobileBridge.haptic('light');
+                    setLocale(opt.id);
+                  }}
+                  className={`k-tap px-2.5 h-8 rounded-lg text-[12px] font-semibold transition-colors ${
+                    active
+                      ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] shadow-xs'
+                      : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Hero */}
         <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
           <div className="w-11 h-11 rounded-2xl bg-[var(--k-accent-soft)] border border-[var(--k-border-focus)] flex items-center justify-center shrink-0">
@@ -121,10 +150,10 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
           </div>
           <div className="min-w-0">
             <div className="text-[14.5px] font-bold text-[var(--k-ink-primary)]">
-              Заметки, задачи, календарь и Сейф
+              {t('welcome.heroTitle')}
             </div>
             <p className="text-[12px] leading-snug text-[var(--k-ink-secondary)] mt-0.5">
-              Всё хранится локально и синхронизируется с ПК со сквозным шифрованием.
+              {t('welcome.heroBody')}
             </p>
           </div>
         </div>
@@ -142,20 +171,22 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
             <CloudCheck weight="duotone" className="w-5 h-5 text-[var(--k-emerald)] shrink-0" />
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-[var(--k-ink-primary)]">
-                Уже пользуешься на компьютере?
+                {t('welcome.cloudTitle')}
               </div>
               <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-                Войди в облако, чтобы загрузить свои записи
+                {t('welcome.cloudSubtitle')}
               </div>
             </div>
           </div>
-          <span className="text-[12px] font-semibold text-[var(--k-accent)] shrink-0">Войти</span>
+          <span className="text-[12px] font-semibold text-[var(--k-accent)] shrink-0">
+            {t('welcome.signIn')}
+          </span>
         </button>
 
         {/* Quick Theme Toggle */}
         <div className="space-y-1.5">
           <div className="text-[12px] font-semibold text-[var(--k-ink-secondary)] px-0.5">
-            Оформление
+            {t('welcome.appearanceLabel')}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -168,7 +199,7 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
               }`}
             >
               <Moon weight="duotone" className="w-4 h-4" />
-              Тёмная
+              {t('welcome.themeDark')}
             </button>
             <button
               type="button"
@@ -180,7 +211,7 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
               }`}
             >
               <Sun weight="duotone" className="w-4 h-4" />
-              Светлая
+              {t('welcome.themeLight')}
             </button>
           </div>
         </div>
@@ -189,14 +220,16 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
         <div className="space-y-2">
           <div className="flex items-center justify-between px-0.5">
             <span className="text-[12px] font-semibold text-[var(--k-ink-secondary)]">
-              Разделы по желанию
+              {t('welcome.sectionsLabel')}
             </span>
             <span className="text-[11px] text-[var(--k-ink-muted)]">
-              {selectedIds.size > 0 ? `Выбрано: ${selectedIds.size}` : 'Можно добавить позже'}
+              {selectedIds.size > 0
+                ? t('welcome.selectedCount', { count: selectedIds.size })
+                : t('welcome.addLater')}
             </span>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {ONBOARDING_PRESETS.orbits.map((preset) => {
+            {onboardingPresets.orbits.map((preset) => {
               const active = selectedIds.has(preset.id);
               return (
                 <button
@@ -235,10 +268,10 @@ export const MobileWelcomeSheet: React.FC<MobileWelcomeSheetProps> = ({
             <Sparkle weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
             <div className="min-w-0">
               <div className="text-[13px] font-medium text-[var(--k-ink-primary)]">
-                Добавить заметку-шпаргалку с чек-листом
+                {t('welcome.addChecklist')}
               </div>
               <div className="text-[11px] text-[var(--k-ink-muted)]">
-                Поможет сразу попробовать задачи и доску
+                {t('welcome.addChecklistHint')}
               </div>
             </div>
           </div>

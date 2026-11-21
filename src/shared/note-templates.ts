@@ -1,3 +1,5 @@
+import type { AppLocale } from './types';
+
 export interface NoteTemplate {
   id: 'meeting' | 'idea' | 'project' | 'day';
   label: string;
@@ -174,3 +176,162 @@ export const ONBOARDING_PRESETS: {
     tags: ['старт'],
   },
 };
+
+export const NOTE_TEMPLATES_EN: NoteTemplate[] = [
+  {
+    id: 'meeting',
+    label: 'Meeting',
+    shortLabel: 'Meeting',
+    description: 'Agenda, attendees, key points, and next steps',
+    icon: 'UsersThree',
+    title: 'Meeting Notes',
+    body: [
+      '## Context',
+      '- **Date:** ',
+      '- **Attendees:** ',
+      '',
+      '## Discussion',
+      '- Main topic and key points',
+      '',
+      '## Decisions & Next Steps',
+      '- [ ] Capture the key decision and share with attendees',
+      '- [ ] Schedule follow-up check-in',
+    ].join('\n'),
+    tags: ['meeting'],
+  },
+  {
+    id: 'idea',
+    label: 'Idea',
+    shortLabel: 'Idea',
+    description: 'Core concept, why it matters, and first steps to test',
+    icon: 'Lightbulb',
+    title: 'New Idea',
+    body: [
+      '## One-Liner',
+      '',
+      '## Why It Matters',
+      '- What problem it solves or noticeably simplifies',
+      '',
+      '## First Steps',
+      '- [ ] Test the hypothesis with a quick prototype',
+      '- [ ] Gather 2–3 references or related notes',
+      '',
+      '## Links & Materials',
+      '',
+    ].join('\n'),
+    tags: ['idea'],
+  },
+  {
+    id: 'project',
+    label: 'Project',
+    shortLabel: 'Project',
+    description: 'Goal, milestones, next tasks, and key links',
+    icon: 'RocketLaunch',
+    title: 'Project Plan',
+    body: [
+      '## Goal',
+      '',
+      '## Milestones',
+      '1. Prep & context gathering',
+      '2. Core execution',
+      '3. Review & launch',
+      '',
+      '## Next Tasks',
+      '- [ ] Define the first measurable outcome',
+      '- [ ] Break work into scoped tasks with dates',
+      '',
+      '## Links & Notes',
+      '',
+    ].join('\n'),
+    tags: ['project'],
+  },
+  {
+    id: 'day',
+    label: 'Daily Plan',
+    shortLabel: 'Daily Plan',
+    description: 'Top three priorities, meetings, and end-of-day wrap-up',
+    icon: 'SunHorizon',
+    title: 'Daily Plan',
+    body: [
+      '## Top 3 Priorities',
+      '- [ ] Most important task today',
+      '- [ ] Second key task',
+      '- [ ] Third priority',
+      '',
+      '## Meetings & Calls',
+      '',
+      '## Quick Tasks',
+      '- [ ] Clear inbox and small follow-ups',
+      '',
+      '## Evening Wrap-Up',
+      '- What went best today: ',
+    ].join('\n'),
+    tags: ['plan'],
+  },
+];
+
+export const ONBOARDING_PRESETS_EN: {
+  orbits: OnboardingOrbitPreset[];
+  welcomeNote: OnboardingWelcomeNote;
+} = {
+  orbits: [
+    {
+      id: 'work',
+      name: 'Work',
+      description: 'Tasks, projects, meetings, notes, and work materials.',
+      icon: 'Briefcase',
+      color: '#3B82F6',
+    },
+    {
+      id: 'personal',
+      name: 'Personal',
+      description: 'Everyday notes, shopping, plans, and important details.',
+      icon: 'Heart',
+      color: '#EC4899',
+    },
+    {
+      id: 'study',
+      name: 'Study',
+      description: 'Notes, books, articles, courses, and deep dives.',
+      icon: 'BookOpen',
+      color: '#8B5CF6',
+    },
+    {
+      id: 'finance',
+      name: 'Finance',
+      description: 'Receipts, bills, budgets, subscriptions, and payments.',
+      icon: 'Receipt',
+      color: '#2EA06B',
+    },
+    {
+      id: 'ideas',
+      name: 'Ideas',
+      description: 'Inspiration, drafts, links, and thoughts for later.',
+      icon: 'Lightbulb',
+      color: '#F5A524',
+    },
+  ],
+  welcomeNote: {
+    title: 'Welcome to Kapsula',
+    summary: 'A quick checklist to settle in and tailor your workspace',
+    body: [
+      'Kapsula keeps everything important close at hand — notes, images, links, tasks, calendar, and an encrypted Vault.',
+      '',
+      '## Good places to start',
+      '- [ ] Create your first note or paste an image straight from the clipboard',
+      '- [ ] Open Quick Launch for instant search and capture (you can change the shortcut in Settings)',
+      '- [ ] Switch Tasks to Board view to organize items across custom columns',
+      '- [ ] Explore the Vault — store passwords, bank cards, and 2FA codes safely',
+      '- [ ] Customize appearance and set up encrypted Cloud Sync in Settings',
+    ].join('\n'),
+    tags: ['start'],
+  },
+};
+
+export function getNoteTemplates(locale: AppLocale = 'ru'): NoteTemplate[] {
+  return locale === 'en' ? NOTE_TEMPLATES_EN : NOTE_TEMPLATES;
+}
+
+export function getOnboardingPresets(locale: AppLocale = 'ru'): typeof ONBOARDING_PRESETS {
+  return locale === 'en' ? ONBOARDING_PRESETS_EN : ONBOARDING_PRESETS;
+}

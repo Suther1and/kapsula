@@ -41,7 +41,8 @@ import {
   UsersThree,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
-import { NOTE_TEMPLATES, type NoteTemplate } from '@shared/note-templates';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
+import type { NoteTemplate } from '@shared/note-templates';
 import { extractWikiLinkTitles } from '@shared/task-helpers';
 import type {
   FocusBoard,
@@ -50,7 +51,7 @@ import type {
   OrbitDef,
   VaultItem,
 } from '@shared/types';
-import { formatRelativeDate, formatReminderStamp } from '@renderer/lib/format';
+import { tm, useMobileI18n } from '../lib/mobile-i18n';
 import {
   buildInlineMediaMarkdownUrl,
   KapsulaImage,
@@ -127,14 +128,14 @@ function countWords(title: string, body: string): number {
   return combined.split(/\s+/).filter(Boolean).length;
 }
 
-const REVISION_SOURCE_LABELS: Record<ItemRevisionSource, string> = {
-  auto: 'Автосохранение',
-  manual: 'Вручную',
-  beautify: 'До ИИ',
-  dictate: 'До диктовки',
-  voice: 'До расшифровки',
-  restore: 'До отката',
-  sync_conflict: 'Конфликт синхронизации',
+const REVISION_SOURCE_KEYS: Record<ItemRevisionSource, MobileDictKey> = {
+  auto: 'editor.revAuto',
+  manual: 'editor.revManual',
+  beautify: 'editor.revBeautify',
+  dictate: 'editor.revDictate',
+  voice: 'editor.revVoice',
+  restore: 'editor.revRestore',
+  sync_conflict: 'editor.revSyncConflict',
 };
 
 function computeSimpleLineDiff(
@@ -198,6 +199,14 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   onDelete,
   onBack,
 }) => {
+  const {
+    locale,
+    intlLocale,
+    t,
+    formatRelativeDate,
+    formatReminderStamp,
+    noteTemplates,
+  } = useMobileI18n();
   const isDraftMode = item.id === DRAFT_NOTE_ID;
   const initialTitle = draft?.title ?? item.title ?? '';
   const initialBody = draft?.body ?? item.body ?? '';
@@ -443,7 +452,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({
-        placeholder: 'Запиши мысль, / для команд или [[ для ссылки…',
+        placeholder: () => tm('editor.placeholder'),
       }),
       Typography,
       Highlight,
@@ -460,7 +469,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           if (hit) {
             onOpenItemRef.current?.(hit.id);
           } else {
-            toast(`Заметка «${targetTitle}» не найдена`);
+            toast(tm('editor.wikiNotFound', { title: targetTitle }));
           }
         },
       }),
@@ -557,6 +566,12 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       scheduleSave();
     },
   });
+
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) {
+      editor.view.dispatch(editor.state.tr);
+    }
+  }, [editor, locale]);
 
   const activeFormat = useEditorState({
     editor,
@@ -755,21 +770,21 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       }
     }
     return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'))
-      .map(([t]) => t);
-  }, [allItems]);
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], intlLocale))
+      .map(([tag]) => tag);
+  }, [allItems, intlLocale]);
 
   const tagSuggestions = useMemo(() => {
-    const existingSet = new Set(effTags.map((t) => t.toLowerCase()));
+    const existingSet = new Set(effTags.map((tag) => tag.toLowerCase()));
     const q = tagDraft.trim().replace(/^#+/, '').toLowerCase();
-    const candidates = existingTagPool.filter((t) => !existingSet.has(t.toLowerCase()));
+    const candidates = existingTagPool.filter((tag) => !existingSet.has(tag.toLowerCase()));
     if (!q) return candidates.slice(0, 10);
     const prefix: string[] = [];
     const sub: string[] = [];
-    for (const t of candidates) {
-      const lower = t.toLowerCase();
-      if (lower.startsWith(q)) prefix.push(t);
-      else if (lower.includes(q)) sub.push(t);
+    for (const tag of candidates) {
+      const lower = tag.toLowerCase();
+      if (lower.startsWith(q)) prefix.push(tag);
+      else if (lower.includes(q)) sub.push(tag);
     }
     return [...prefix, ...sub].slice(0, 10);
   }, [existingTagPool, effTags, tagDraft]);
@@ -781,7 +796,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       setActiveTagIdx(-1);
       setShowTagInput(false);
       if (!clean) return;
-      if (effTags.some((t) => t.toLowerCase() === clean.toLowerCase())) {
+      if (effTags.some((tag) => tag.toLowerCase() === clean.toLowerCase())) {
         return;
       }
       mobileBridge.haptic('light');
@@ -800,13 +815,13 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   };
 
   const handleRemoveTag = async (tag: string) => {
-    await handleUpdateMeta({ tags: effTags.filter((t) => t !== tag) });
+    await handleUpdateMeta({ tags: effTags.filter((itemTag) => itemTag !== tag) });
   };
 
   const handleQuickReminder = async (preset: 'today' | 'tomorrow' | 'threeDays' | 'clear') => {
     if (preset === 'clear') {
       await handleUpdateMeta({ remindAt: null });
-      toast('Напоминание снято');
+      toast(t('editor.reminderCleared'));
       setReminderSheetOpen(false);
       return;
     }
@@ -822,7 +837,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     }
     await handleUpdateMeta({ remindAt: d.getTime() });
     mobileBridge.haptic('success');
-    toast.success(`Напоминание: ${formatReminderStamp(d.getTime())}`);
+    toast.success(t('editor.reminderSet', { stamp: formatReminderStamp(d.getTime()) }));
     setReminderSheetOpen(false);
   };
 
@@ -851,7 +866,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           .insertContentAt(insertAfterPos, [
             {
               type: 'paragraph',
-              content: [{ type: 'kapsulaImage', attrs: { src: mediaUrl, alt: 'Фото' } }],
+              content: [{ type: 'kapsulaImage', attrs: { src: mediaUrl, alt: t('common.photo') } }],
             },
             { type: 'paragraph' },
           ])
@@ -861,13 +876,13 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           .chain()
           .focus()
           .insertContent([
-            { type: 'kapsulaImage', attrs: { src: mediaUrl, alt: 'Фото' } },
+            { type: 'kapsulaImage', attrs: { src: mediaUrl, alt: t('common.photo') } },
             { type: 'text', text: ' ' },
           ])
           .run();
       }
       mobileBridge.haptic('success');
-      toast.success('Фото вставлено в заметку');
+      toast.success(t('editor.photoInserted'));
       return;
     }
     if (!onAttachPhoto) return;
@@ -878,7 +893,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
   const insertWikiLinkFromTray = (target: VaultItem) => {
     if (!editor || !dockedTrigger) return;
-    const targetTitle = target.title?.trim() || 'Заметка';
+    const targetTitle = target.title?.trim() || t('notes.fallbackTitle');
     editor
       .chain()
       .focus()
@@ -896,16 +911,16 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     if (dockedTrigger?.mode !== 'slash') return [];
     const q = dockedTrigger.query.trim().toLowerCase();
     const allCmds = [
-      { id: 'h2', label: 'Заголовок', keywords: 'h2 заголовок title', run: () => editor?.chain().focus().toggleHeading({ level: 2 }).run() },
-      { id: 'task', label: 'Чек-лист', keywords: 'task чек-лист чеклист задача todo', run: () => editor?.chain().focus().toggleTaskList().run() },
-      { id: 'bullet', label: 'Список', keywords: 'bullet список list', run: () => editor?.chain().focus().toggleBulletList().run() },
-      { id: 'quote', label: 'Цитата', keywords: 'quote цитата', run: () => editor?.chain().focus().toggleBlockquote().run() },
-      { id: 'code', label: 'Код', keywords: 'code код блок', run: () => editor?.chain().focus().toggleCodeBlock().run() },
-      { id: 'image', label: 'Фото', keywords: 'image photo фото картинка', run: () => setPhotoSheetOpen(true) },
-      ...NOTE_TEMPLATES.map((tpl) => ({
+      { id: 'h2', label: t('editor.slashHeading'), keywords: `h2 title heading ${t('editor.slashHeading').toLowerCase()}`, run: () => editor?.chain().focus().toggleHeading({ level: 2 }).run() },
+      { id: 'task', label: t('editor.slashChecklist'), keywords: `task checklist todo ${t('editor.slashChecklist').toLowerCase()}`, run: () => editor?.chain().focus().toggleTaskList().run() },
+      { id: 'bullet', label: t('editor.slashList'), keywords: `bullet list ${t('editor.slashList').toLowerCase()}`, run: () => editor?.chain().focus().toggleBulletList().run() },
+      { id: 'quote', label: t('editor.slashQuote'), keywords: `quote ${t('editor.slashQuote').toLowerCase()}`, run: () => editor?.chain().focus().toggleBlockquote().run() },
+      { id: 'code', label: t('editor.slashCode'), keywords: `code block ${t('editor.slashCode').toLowerCase()}`, run: () => editor?.chain().focus().toggleCodeBlock().run() },
+      { id: 'image', label: t('editor.slashPhoto'), keywords: `image photo picture ${t('editor.slashPhoto').toLowerCase()}`, run: () => setPhotoSheetOpen(true) },
+      ...noteTemplates.map((tpl) => ({
         id: `tpl-${tpl.id}`,
-        label: `Шаблон: ${tpl.shortLabel}`,
-        keywords: `шаблон template ${tpl.label.toLowerCase()}`,
+        label: t('editor.slashTemplate', { label: tpl.shortLabel }),
+        keywords: `template ${tpl.label.toLowerCase()} ${tpl.shortLabel.toLowerCase()}`,
         run: () => void handleApplyTemplate(tpl),
       })),
     ];
@@ -913,7 +928,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     return allCmds.filter(
       (c) => c.label.toLowerCase().includes(q) || c.keywords.includes(q)
     );
-  }, [dockedTrigger, editor]);
+  }, [dockedTrigger, editor, t, noteTemplates]);
 
   const wikiSuggestions = useMemo(() => {
     if (dockedTrigger?.mode !== 'wiki') return [];
@@ -923,9 +938,9 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         if (it.id === item.id || it.id === materializedIdRef.current || it.dna === 'secret') {
           return false;
         }
-        const t = (it.title || '').trim();
-        if (!t) return false;
-        return !q || t.toLowerCase().includes(q);
+        const itemTitle = (it.title || '').trim();
+        if (!itemTitle) return false;
+        return !q || itemTitle.toLowerCase().includes(q);
       })
       .slice(0, 8);
   }, [dockedTrigger, allItems, item.id]);
@@ -940,7 +955,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       if (other.linksOut?.includes(currentId)) return true;
       if (normTitle && other.body && other.body.includes('[[')) {
         const linkedTitles = extractWikiLinkTitles(other.body);
-        return linkedTitles.some((t) => t.toLowerCase() === normTitle);
+        return linkedTitles.some((linkTitle) => linkTitle.toLowerCase() === normTitle);
       }
       return false;
     });
@@ -970,7 +985,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
   const toolbarItems = [
     {
-      label: 'Отменить',
+      label: t('editor.toolUndo'),
       testId: 'note-toolbar-undo',
       active: false,
       disabled: !activeFormat?.canUndo,
@@ -978,7 +993,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       run: () => editor?.chain().focus().undo().run(),
     },
     {
-      label: 'Повторить',
+      label: t('editor.toolRedo'),
       testId: 'note-toolbar-redo',
       active: false,
       disabled: !activeFormat?.canRedo,
@@ -986,56 +1001,56 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       run: () => editor?.chain().focus().redo().run(),
     },
     {
-      label: 'Заголовок',
+      label: t('editor.toolHeading'),
       active: Boolean(activeFormat?.h2),
       disabled: false,
       icon: TextHTwo,
       run: () => editor?.chain().focus().toggleHeading({ level: 2 }).run(),
     },
     {
-      label: 'Жирный',
+      label: t('editor.toolBold'),
       active: Boolean(activeFormat?.bold),
       disabled: false,
       icon: TextB,
       run: () => editor?.chain().focus().toggleBold().run(),
     },
     {
-      label: 'Курсив',
+      label: t('editor.toolItalic'),
       active: Boolean(activeFormat?.italic),
       disabled: false,
       icon: TextItalic,
       run: () => editor?.chain().focus().toggleItalic().run(),
     },
     {
-      label: 'Выделение',
+      label: t('editor.toolHighlight'),
       active: Boolean(activeFormat?.highlight),
       disabled: false,
       icon: Highlighter,
       run: () => editor?.chain().focus().toggleHighlight().run(),
     },
     {
-      label: 'Чек-лист',
+      label: t('editor.toolChecklist'),
       active: Boolean(activeFormat?.taskList),
       disabled: false,
       icon: CheckSquare,
       run: () => editor?.chain().focus().toggleTaskList().run(),
     },
     {
-      label: 'Список',
+      label: t('editor.toolList'),
       active: Boolean(activeFormat?.bulletList),
       disabled: false,
       icon: ListBullets,
       run: () => editor?.chain().focus().toggleBulletList().run(),
     },
     {
-      label: 'Цитата',
+      label: t('editor.toolQuote'),
       active: Boolean(activeFormat?.blockquote),
       disabled: false,
       icon: Quotes,
       run: () => editor?.chain().focus().toggleBlockquote().run(),
     },
     {
-      label: 'Код',
+      label: t('editor.toolCode'),
       active: Boolean(activeFormat?.codeBlock),
       disabled: false,
       icon: Code,
@@ -1044,7 +1059,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     ...(onInsertInlinePhoto || onAttachPhoto
       ? [
           {
-            label: 'Вставить фото',
+            label: t('editor.toolPhoto'),
             testId: 'note-toolbar-image',
             active: false,
             disabled: false,
@@ -1074,7 +1089,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                 void mobileBridge.hideKeyboard();
                 void flushSave().finally(() => onBack());
               }}
-              aria-label="Назад к списку"
+              aria-label={t('editor.backAria')}
               className="k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] shrink-0"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -1086,19 +1101,19 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             className="text-[11.5px] sm:text-[12px] text-[var(--k-ink-muted)] whitespace-nowrap shrink-0 inline-flex items-center gap-1"
           >
             {saveState === 'saving' ? (
-              <span className="text-[var(--k-accent)] font-medium">Сохраняю…</span>
+              <span className="text-[var(--k-accent)] font-medium">{t('editor.saving')}</span>
             ) : saveState === 'draft' && !materializedIdRef.current ? (
-              <span>Черновик</span>
+              <span>{t('editor.draft')}</span>
             ) : (
               <>
                 <Check className="w-3.5 h-3.5 text-[var(--k-emerald)] shrink-0" />
                 <span className="hidden min-[380px]:inline">
                   {wordsCount > 0
-                    ? `${wordsCount} сл.`
-                    : formatRelativeDate(item.contentUpdatedAt || item.updatedAt)}
+                    ? t('editor.wordsShort', { count: wordsCount })
+                    : formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
                 </span>
                 <span className="min-[380px]:hidden">
-                  {wordsCount > 0 ? `${wordsCount} сл.` : 'Сохранено'}
+                  {wordsCount > 0 ? t('editor.wordsShort', { count: wordsCount }) : t('editor.saved')}
                 </span>
               </>
             )}
@@ -1121,7 +1136,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                   setPolishing(false);
                 }
               }}
-              aria-label="Причесать текст"
+              aria-label={t('editor.polishAria')}
               className="k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] disabled:opacity-50"
             >
               {polishing ? (
@@ -1141,7 +1156,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                 setSelectedRevisionId(null);
                 setHistoryOpen(true);
               }}
-              aria-label="История версий"
+              aria-label={t('editor.historyTitle')}
               className="k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
             >
               <ClockCounterClockwise className="w-4 h-4" />
@@ -1152,7 +1167,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             type="button"
             data-testid="note-editor-reminder-btn"
             onClick={() => setReminderSheetOpen(true)}
-            aria-label="Напоминание"
+            aria-label={t('editor.reminderTitle')}
             className={`k-tap relative inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl border transition-colors ${
               effRemindAt
                 ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
@@ -1167,7 +1182,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               type="button"
               data-testid="note-editor-photo-btn"
               onClick={() => setPhotoSheetOpen(true)}
-              aria-label="Вставить фото"
+              aria-label={t('editor.toolPhoto')}
               className="k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
             >
               <Camera className="w-4 h-4" />
@@ -1180,7 +1195,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               mobileBridge.haptic('light');
               void handleUpdateMeta({ isPinned: !effPinned });
             }}
-            aria-label={effPinned ? 'Открепить' : 'Закрепить'}
+            aria-label={effPinned ? t('common.unpin') : t('common.pin')}
             className={`k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl border transition-colors ${
               effPinned
                 ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
@@ -1205,7 +1220,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                 onBack?.();
               }
             }}
-            aria-label="Удалить заметку"
+            aria-label={t('notes.deleteNote')}
             className="k-tap inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-danger)]"
           >
             <Trash className="w-4 h-4" />
@@ -1224,7 +1239,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               style={{ color: selectedOrbit?.color || 'var(--k-accent)' }}
             />
           }
-          label={selectedOrbit?.name || 'Без раздела'}
+          label={selectedOrbit?.name || t('common.noOrbit')}
           placeholder={!selectedOrbit}
           onClick={() => setOrbitPickerOpen(true)}
           className="min-h-[34px] py-1 px-2.5 shrink-0 whitespace-nowrap max-w-[180px]"
@@ -1239,7 +1254,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               style={{ color: selectedBoard?.color || 'var(--k-emerald)' }}
             />
           }
-          label={selectedBoard?.name || 'Без холста'}
+          label={selectedBoard?.name || t('common.noBoard')}
           placeholder={!selectedBoard}
           onClick={() => setBoardPickerOpen(true)}
           className="min-h-[34px] py-1 px-2.5 shrink-0 whitespace-nowrap max-w-[168px]"
@@ -1262,7 +1277,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             type="button"
             onClick={() => void handleRemoveTag(tag)}
             className="k-tap inline-flex items-center gap-0.5 px-3 h-9 rounded-full border border-[var(--k-border-hairline)] bg-transparent text-[12px] text-[var(--k-ink-secondary)] shrink-0"
-            title="Нажми, чтобы убрать тег"
+            title={t('editor.removeTagHint')}
           >
             <span className="opacity-65">#</span>
             <span>{tag}</span>
@@ -1316,7 +1331,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                   setShowTagInput(false);
                 }
               }}
-              placeholder="тег…"
+              placeholder={t('editor.tagPlaceholder')}
               className="w-28 h-8 px-2.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-focus)] text-[12px] text-[var(--k-ink-primary)] outline-none"
             />
           </form>
@@ -1332,7 +1347,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-dashed border-[var(--k-border-strong)] text-[12px] text-[var(--k-ink-muted)] shrink-0"
           >
             <Tag className="w-3.5 h-3.5" />
-            Тег
+            {t('editor.tagAdd')}
           </button>
         )}
       </div>
@@ -1343,7 +1358,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           data-testid="mobile-tag-suggestions"
           className="flex items-center gap-1.5 px-3.5 py-1.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-x-auto k-no-scrollbar shrink-0"
         >
-          <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">Теги:</span>
+          <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">{t('editor.tagsLabel')}</span>
           {tagSuggestions.map((tag, idx) => {
             const highlighted = idx === activeTagIdx;
             return (
@@ -1424,7 +1439,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                 editor?.commands.focus('start');
               }
             }}
-            placeholder="Заголовок заметки…"
+            placeholder={t('editor.titlePlaceholder')}
             className="w-full bg-transparent border-0 outline-none resize-none overflow-hidden text-[20px] font-bold leading-snug tracking-[-0.004em] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] mb-2.5"
           />
 
@@ -1434,7 +1449,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               data-testid="mobile-note-templates"
               className="flex items-center gap-1.5 overflow-x-auto k-no-scrollbar pb-3"
             >
-              {NOTE_TEMPLATES.map((tpl) => {
+              {noteTemplates.map((tpl) => {
                 const Icon = templateIcon(tpl.icon);
                 return (
                   <button
@@ -1472,7 +1487,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             localName={item.imagePath || item.thumbPath}
             fallbackUrl={item.ogImageUrl}
             ensureMediaUrl={ensureMediaUrl}
-            alt={item.title || 'Вложение'}
+            alt={item.title || t('common.attachment')}
             onImageClick={(src) => onOpenImage(src, title || item.title || undefined)}
             wrapperClassName="mb-3 rounded-2xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]"
             className="w-full max-h-72 object-cover block"
@@ -1523,7 +1538,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             <EditorContent editor={editor} />
           </div>
 
-          {/* Backlinks («Обратные ссылки») */}
+          {/* Backlinks */}
           {backlinks.length > 0 ? (
             <section
               data-testid="mobile-note-backlinks"
@@ -1531,7 +1546,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             >
               <div className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                 <LinkSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                <span>Обратные ссылки ({backlinks.length})</span>
+                <span>{t('editor.backlinksHeading', { count: backlinks.length })}</span>
               </div>
               <div className="space-y-1.5">
                 {backlinks.map((linked) => (
@@ -1544,7 +1559,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                     <div className="flex items-center gap-2 min-w-0">
                       <FileText className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
                       <span className="text-[13.5px] font-medium text-[var(--k-ink-primary)] truncate">
-                        {linked.title || 'Без названия'}
+                        {linked.title || t('common.noTitle')}
                       </span>
                     </div>
                     <ArrowSquareOut className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
@@ -1565,7 +1580,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           className="px-2.5 py-1.5 border-t border-[var(--k-border-focus)]/40 bg-[var(--k-bg-surface-1)] flex items-center gap-1.5 overflow-x-auto k-no-scrollbar shrink-0"
         >
           <span className="text-[11px] font-semibold text-[var(--k-accent)] px-1.5 shrink-0">
-            {dockedTrigger.mode === 'slash' ? 'Команда:' : 'Ссылка:'}
+            {dockedTrigger.mode === 'slash' ? t('editor.slashPrefix') : t('editor.wikiPrefix')}
           </span>
           {dockedTrigger.mode === 'slash'
             ? slashSuggestions.map((cmd) => (
@@ -1647,11 +1662,11 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       {/* Revision History Bottom Sheet with Diff Preview & Restore */}
       <BottomSheet
         open={historyOpen}
-        title="История версий"
+        title={t('editor.historyTitle')}
         subtitle={
           revisions.length > 0
-            ? `Сохранено снимков: ${revisions.length}`
-            : 'Снимки сохраняются автоматически при изменении заметки'
+            ? t('editor.historyCount', { count: revisions.length })
+            : t('editor.historyHint')
         }
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
@@ -1661,7 +1676,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         <div data-testid="mobile-revision-history-sheet" className="p-4 space-y-3.5">
           {revisions.length === 0 ? (
             <div className="py-10 text-center text-[13px] text-[var(--k-ink-muted)]">
-              Для этой заметки пока нет сохранённых версий.
+              {t('editor.historyEmpty')}
             </div>
           ) : (
             <>
@@ -1684,7 +1699,9 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                         {formatRelativeDate(rev.createdAt)}
                       </div>
                       <div className="text-[10.5px] opacity-80">
-                        {REVISION_SOURCE_LABELS[rev.source] ?? 'Снимок'}
+                        {rev.source in REVISION_SOURCE_KEYS
+                          ? t(REVISION_SOURCE_KEYS[rev.source])
+                          : t('editor.revSnapshot')}
                         {rev.deviceName ? ` · ${rev.deviceName}` : ''}
                       </div>
                     </button>
@@ -1696,11 +1713,11 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                 <div className="space-y-3">
                   <div className="rounded-2xl p-3 pb-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-1 max-h-64 overflow-y-auto k-scroll">
                     <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] mb-1.5">
-                      Отличия от текущей версии
+                      {t('editor.historyDiffHeader')}
                     </div>
                     {activeRevision.title && activeRevision.title !== title ? (
                       <div className="text-[12.5px] font-semibold text-[var(--k-emerald)] mb-1">
-                        Заголовок: {activeRevision.title}
+                        {t('editor.historyTitlePrefix', { title: activeRevision.title })}
                       </div>
                     ) : null}
                     {computeSimpleLineDiff(activeRevision.content, bodySnapshot).map((line, i) => {
@@ -1708,7 +1725,9 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                         /!\[([^\]]*)\]\((?:kapsula-media:\/\/local\/[^)\s]+|blob:[^)\s]+|data:image\/[^)\s]+)\)/gi,
                         (_m, alt: string) => {
                           const a = (alt || '').trim();
-                          return a ? `[Фото: ${a}]` : '[Фото]';
+                          return a
+                            ? t('editor.historyPhotoAlt', { alt: a })
+                            : t('editor.historyPhotoPlaceholder');
                         }
                       );
                       return (
@@ -1751,20 +1770,20 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                           }
                           setHistoryOpen(false);
                           mobileBridge.haptic('success');
-                          toast.success('Версия восстановлена');
+                          toast.success(t('editor.historyRestored'));
                         }
                       }}
                       className="k-tap flex-1 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13.5px] font-semibold"
                     >
-                      Восстановить эту версию
+                      {t('editor.historyRestoreBtn')}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
                         void mobileBridge.copyPlain(activeRevision.content);
-                        toast.success('Текст версии скопирован');
+                        toast.success(t('editor.historyCopied'));
                       }}
-                      aria-label="Скопировать текст версии"
+                      aria-label={t('editor.historyCopyAria')}
                       className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]"
                     >
                       <Copy className="w-4 h-4" />
@@ -1780,15 +1799,15 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       {/* Section & Board Picker Sheets */}
       <MobilePickerSheet
         open={orbitPickerOpen}
-        title="Раздел заметки"
+        title={t('editor.orbitTitle')}
         value={effOrbit}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,
@@ -1802,15 +1821,15 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
       <MobilePickerSheet
         open={boardPickerOpen}
-        title="Холст заметки"
+        title={t('editor.boardTitle')}
         value={effBoardId || ''}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateBoard)}
-        createPlaceholder="Название холста…"
+        createPlaceholder={t('common.boardNamePlaceholder')}
         onCreateNew={onCreateBoard}
         options={[
-          { value: '', label: 'Без холста' },
+          { value: '', label: t('common.noBoard') },
           ...boards.map((b) => ({
             value: b.id,
             label: b.name,
@@ -1825,11 +1844,11 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       {/* Reminder Quick Sheet */}
       <BottomSheet
         open={reminderSheetOpen}
-        title="Напоминание"
+        title={t('editor.reminderTitle')}
         subtitle={
           effRemindAt
-            ? `Сейчас: ${formatReminderStamp(effRemindAt)}`
-            : 'Заметка появится в календаре и задачах'
+            ? t('editor.reminderCurrent', { stamp: formatReminderStamp(effRemindAt) })
+            : t('editor.reminderHint')
         }
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
@@ -1842,21 +1861,21 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             onClick={() => void handleQuickReminder('today')}
             className="k-tap h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13.5px] font-medium text-[var(--k-ink-primary)]"
           >
-            Сегодня вечером
+            {t('editor.reminderTonight')}
           </button>
           <button
             type="button"
             onClick={() => void handleQuickReminder('tomorrow')}
             className="k-tap h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13.5px] font-medium text-[var(--k-ink-primary)]"
           >
-            Завтра в 10:00
+            {t('editor.reminderTomorrowMorning')}
           </button>
           <button
             type="button"
             onClick={() => void handleQuickReminder('threeDays')}
             className="k-tap h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13.5px] font-medium text-[var(--k-ink-primary)]"
           >
-            Через 3 дня
+            {t('editor.reminderIn3Days')}
           </button>
           <button
             type="button"
@@ -1864,7 +1883,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             onClick={() => void handleQuickReminder('clear')}
             className="k-tap h-11 rounded-2xl bg-[var(--k-danger-soft)] text-[13.5px] font-medium text-[var(--k-danger)] disabled:opacity-35"
           >
-            Снять
+            {t('editor.reminderClearBtn')}
           </button>
         </div>
       </BottomSheet>
@@ -1872,8 +1891,8 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       {/* Camera / Gallery Inline Photo Sheet */}
       <BottomSheet
         open={photoSheetOpen}
-        title="Вставить фото в текст"
-        subtitle="Фото сохранится прямо внутри заметки и синхронизируется с ПК"
+        title={t('editor.insertPhotoTitle')}
+        subtitle={t('editor.insertPhotoSubtitle')}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         maxWidthClass="max-w-sm"
@@ -1886,7 +1905,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             className="k-tap flex flex-col items-center justify-center gap-2 py-5 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] font-semibold text-[14px]"
           >
             <Camera weight="duotone" className="w-6 h-6" />
-            <span>Камера</span>
+            <span>{t('common.camera')}</span>
           </button>
           <button
             type="button"
@@ -1894,7 +1913,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             className="k-tap flex flex-col items-center justify-center gap-2 py-5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-strong)] text-[var(--k-ink-primary)] font-semibold text-[14px]"
           >
             <ImageIcon weight="duotone" className="w-6 h-6 text-[var(--k-accent)]" />
-            <span>Галерея</span>
+            <span>{t('common.gallery')}</span>
           </button>
         </div>
       </BottomSheet>

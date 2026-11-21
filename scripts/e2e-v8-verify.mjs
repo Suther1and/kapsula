@@ -316,6 +316,7 @@ async function main() {
       env: {
         ...process.env,
         KAPSULA_DATA_DIR: tmpDataDir,
+        KAPSULA_LOCALE: 'ru',
         KAPSULA_E2E_QUIT_ON_CLOSE: '1',
         KAPSULA_E2E_KEEP_HUD: '1',
         KAPSULA_SKIP_SENDKEYS: '1',
@@ -1356,6 +1357,37 @@ async function main() {
       assert.equal(afterPurge.inTrash, false, 'Purged item still in trash');
 
       return { disposableId: disposable.id, afterSoftDelete, afterPurge };
+    });
+
+    await runCheck('10b_en_locale_and_sidebar_prefs', 'Instant EN switch, zero Cyrillic chrome leaks & hideable sidebar sections', async () => {
+      await vault.getByTestId('customize-sidebar-btn').click();
+      await vault.getByTestId('customize-sidebar-toggle-calendar').click();
+      assert.equal(await vault.getByTestId('nav-calendar').count(), 0, 'Hidden Calendar section must disappear from sidebar');
+      await vault.getByTestId('customize-sidebar-show-all').click();
+      assert.equal(await vault.getByTestId('nav-calendar').count(), 1, 'Show all must restore Calendar section');
+      await vault.keyboard.press('Escape');
+      await vault.waitForTimeout(160);
+
+      await vault.getByTestId('open-settings-btn').click();
+      const dialog = vault.locator('[role="dialog"]');
+      await dialog.waitFor({ state: 'visible', timeout: 5000 });
+      await vault.getByTestId('settings-language-switcher').getByText('English', { exact: true }).click();
+      await vault.waitForFunction(
+        () => document.querySelector('[data-testid="nav-flow"]')?.textContent?.includes('All Items'),
+        undefined,
+        { timeout: 4000 }
+      );
+      const chromeText = await vault.evaluate(() =>
+        ['nav-flow', 'nav-notes', 'nav-tasks', 'nav-secrets', 'open-settings-btn']
+          .map((id) => document.querySelector(`[data-testid="${id}"]`)?.textContent || '')
+          .join(' | ')
+      );
+      assert.ok(chromeText.includes('Tasks') && chromeText.includes('Vault'), `Expected EN labels: ${chromeText}`);
+      assert.ok(!/[А-Яа-яЁё]/.test(chromeText), `EN chrome leaked Cyrillic: ${chromeText}`);
+      await vault.getByTestId('settings-language-switcher').getByText('Русский', { exact: true }).click();
+      await vault.keyboard.press('Escape');
+      await vault.waitForTimeout(180);
+      return { chromeText };
     });
   } finally {
     if (app) {

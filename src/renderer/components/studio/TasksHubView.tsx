@@ -34,13 +34,17 @@ import {
 import NumberFlow from '@number-flow/react';
 import { toast } from 'sonner';
 import type { OrbitDef, TaskBoardColumn, TaskPriority, VaultTaskEntry } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import {
-  DEFAULT_TASK_BOARD_COLUMNS,
-  TASK_COLUMN_ICONS,
   type TaskColumnIconId,
+  computeColumnDropOrder,
+  getDefaultTaskBoardColumns,
+  getTaskColumnIcons,
   isDoneColumn,
   isStandaloneTaskSource,
+  localizeTaskBoardColumnTitle,
   resolveColumnIconId,
+  sortColumnTasks,
 } from '@shared/task-helpers';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { formatReminderStamp, friendlyErrorMessage } from '../../lib/format';
@@ -65,7 +69,7 @@ interface TasksHubViewProps {
   onTasksChanged?: () => void;
 }
 
-type GroupMode = 'due' | 'orbit';
+type GroupMode = 'due' | 'orbit' | 'note';
 
 const TASKS_VIEW_STORAGE_KEY = 'kapsula.tasks.viewMode';
 const TASKS_SHOW_COL_ICONS_STORAGE_KEY = 'kapsula.tasks.showColumnIcons';
@@ -129,52 +133,52 @@ function renderColumnGlyph(iconId: TaskColumnIconId, color: string, className = 
   }
 }
 
-const COLUMN_COLOR_SWATCHES: Array<{ hex: string; label: string }> = [
-  { hex: '#94A3B8', label: 'Серый' },
-  { hex: '#E86A33', label: 'Терракота' },
-  { hex: '#F5A524', label: 'Янтарь' },
-  { hex: '#2EA06B', label: 'Изумруд' },
-  { hex: '#3B82F6', label: 'Кобальт' },
-  { hex: '#8B5CF6', label: 'Аметист' },
-  { hex: '#EC4899', label: 'Гранат' },
-  { hex: '#14B8A6', label: 'Бирюза' },
-];
+const COLUMN_COLOR_SWATCHES = [
+  { hex: '#94A3B8', labelKey: 'tasks.swatch.slate' },
+  { hex: '#E86A33', labelKey: 'tasks.swatch.terracotta' },
+  { hex: '#F5A524', labelKey: 'tasks.swatch.amber' },
+  { hex: '#2EA06B', labelKey: 'tasks.swatch.emerald' },
+  { hex: '#3B82F6', labelKey: 'tasks.swatch.cobalt' },
+  { hex: '#8B5CF6', labelKey: 'tasks.swatch.violet' },
+  { hex: '#EC4899', labelKey: 'tasks.swatch.rose' },
+  { hex: '#14B8A6', labelKey: 'tasks.swatch.teal' },
+] as const;
 
-const PRIORITY_META: Record<
-  TaskPriority,
-  { label: string; dotColor: string; textColor: string; bgColor: string }
-> = {
+const PRIORITY_META = {
   none: {
-    label: 'Без приоритета',
+    labelKey: 'tasks.priority.none',
     dotColor: 'var(--k-ink-muted)',
     textColor: 'var(--k-ink-muted)',
     bgColor: 'var(--k-bg-surface-2)',
   },
   low: {
-    label: 'Низкий',
+    labelKey: 'tasks.priority.low',
     dotColor: 'var(--k-info)',
     textColor: 'var(--k-info)',
     bgColor: 'var(--k-info-soft)',
   },
   medium: {
-    label: 'Средний',
+    labelKey: 'tasks.priority.medium',
     dotColor: 'var(--k-amber)',
     textColor: 'var(--k-amber)',
     bgColor: 'var(--k-amber-soft)',
   },
   high: {
-    label: 'Высокий',
+    labelKey: 'tasks.priority.high',
     dotColor: 'var(--k-accent)',
     textColor: 'var(--k-accent)',
     bgColor: 'var(--k-accent-soft)',
   },
   urgent: {
-    label: 'Срочный',
+    labelKey: 'tasks.priority.urgent',
     dotColor: 'var(--k-danger)',
     textColor: 'var(--k-danger)',
     bgColor: 'var(--k-danger-soft)',
   },
-};
+} as const satisfies Record<
+  TaskPriority,
+  { labelKey: 'tasks.priority.none' | 'tasks.priority.low' | 'tasks.priority.medium' | 'tasks.priority.high' | 'tasks.priority.urgent'; dotColor: string; textColor: string; bgColor: string }
+>;
 
 function getCanonicalTaskKey(task: VaultTaskEntry): string {
   return task.taskKey || (task.sourceType === 'voice_action' ? `va:${task.taskIndex}` : `md:${task.taskIndex}`);
@@ -239,7 +243,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   onAddQuickTask,
   onTasksChanged,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
+  const taskColumnIcons = useMemo(() => getTaskColumnIcons(locale), [locale]);
   const [internalViewMode, setInternalViewMode] = useState<TasksViewMode>(readPersistedTasksViewMode);
   const viewMode = controlledViewMode ?? internalViewMode;
 
@@ -253,10 +259,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     onViewModeChange?.(next);
   };
 
-  // Board columns from backend (fallback DEFAULT_TASK_BOARD_COLUMNS)
+  // Board columns from backend (fallback getDefaultTaskBoardColumns(locale))
   const [columns, setColumns] = useState<TaskBoardColumn[]>(() => {
     const savedIcons = readPersistedColumnIcons();
-    return DEFAULT_TASK_BOARD_COLUMNS.map((c) => ({
+    return getDefaultTaskBoardColumns(locale).map((c) => ({
       ...c,
       icon: savedIcons[c.id] ?? c.icon,
     }));
@@ -264,7 +270,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   const [showColumnIcons, setShowColumnIcons] = useState<boolean>(readPersistedShowColumnIcons);
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
-  const [newColColor, setNewColColor] = useState(COLUMN_COLOR_SWATCHES[4]!.hex);
+  const [newColColor, setNewColColor] = useState<string>(COLUMN_COLOR_SWATCHES[4]!.hex);
   const [newColIcon, setNewColIcon] = useState<TaskColumnIconId>('folder');
   const [openColMenuId, setOpenColMenuId] = useState<string | null>(null);
   const [renamingColId, setRenamingColId] = useState<string | null>(null);
@@ -296,6 +302,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   // Filters (shared across List & Board modes)
   const [searchFilter, setSearchFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
+  const [orbitFilter, setOrbitFilter] = useState<string>('all');
   const [showDone, setShowDone] = useState(true);
   const [listStatusFilter, setListStatusFilter] = useState<'active' | 'done' | 'all'>('active');
   const [groupBy, setGroupBy] = useState<GroupMode>('due');
@@ -445,6 +452,12 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       if (priorityFilter !== 'all' && (task.priority ?? 'none') !== priorityFilter) {
         return false;
       }
+      if (orbitFilter === '__none__' && task.orbit) {
+        return false;
+      }
+      if (orbitFilter !== 'all' && orbitFilter !== '__none__' && task.orbit !== orbitFilter) {
+        return false;
+      }
       if (viewMode === 'board' && !showDone && task.done) {
         return false;
       }
@@ -455,7 +468,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       }
       return true;
     });
-  }, [effectiveTasks, priorityFilter, viewMode, showDone, searchFilter, orbitMap]);
+  }, [effectiveTasks, priorityFilter, orbitFilter, viewMode, showDone, searchFilter, orbitMap]);
 
   const tasksByColumn = useMemo(() => {
     const map = new Map<string, VaultTaskEntry[]>();
@@ -466,12 +479,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       const colId = task.columnId && map.has(task.columnId) ? task.columnId : inboxColId;
       map.get(colId)?.push(task);
     }
-    for (const list of map.values()) {
-      list.sort((a, b) => {
-        const orderDiff = (a.boardOrder ?? 0) - (b.boardOrder ?? 0);
-        if (orderDiff !== 0) return orderDiff;
-        return b.updatedAt - a.updatedAt;
-      });
+    for (const [colId, list] of map.entries()) {
+      map.set(colId, sortColumnTasks(list));
     }
     return map;
   }, [sortedColumns, filteredTasks, inboxColId]);
@@ -506,9 +515,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         );
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить колонки'));
+      toast.error(friendlyErrorMessage(err, t('tasks.err.saveColumns'), locale));
     }
-  }, []);
+  }, [t, locale]);
 
   const handleMoveTaskToColumn = useCallback(
     async (task: VaultTaskEntry, targetColumnId: string, boardOrder?: number) => {
@@ -546,10 +555,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           delete next[task.id];
           return next;
         });
-        toast.error(friendlyErrorMessage(err, 'Не удалось перенести задачу'));
+        toast.error(friendlyErrorMessage(err, t('tasks.err.moveTask'), locale));
       }
     },
-    [sortedColumns, onTasksChanged]
+    [sortedColumns, onTasksChanged, t, locale]
   );
 
   const handleToggleWithUndo = useCallback(
@@ -576,9 +585,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           inFlightToggleSeqRef.current.delete(task.id);
         }
         if (!wasDone) {
-          toast('Задача выполнена', {
+          toast(t('tasks.toast.done'), {
             action: {
-              label: 'Отменить',
+              label: t('common.undo'),
               onClick: () => {
                 const undoSeq = ++toggleSeqCounterRef.current;
                 inFlightToggleSeqRef.current.set(task.id, undoSeq);
@@ -621,7 +630,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         }
       }
     },
-    [onToggleTask, doneColId, inboxColId, sortedColumns]
+    [onToggleTask, doneColId, inboxColId, sortedColumns, t]
   );
 
   const handleUpdatePriority = useCallback(
@@ -639,10 +648,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         });
         onTasksChanged?.();
       } catch (err) {
-        toast.error(friendlyErrorMessage(err, 'Не удалось обновить приоритет'));
+        toast.error(friendlyErrorMessage(err, t('tasks.err.updatePriority'), locale));
       }
     },
-    [onTasksChanged]
+    [onTasksChanged, t, locale]
   );
 
   const handleUpdateDueAt = useCallback(
@@ -660,13 +669,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           taskKey,
           dueAt,
         });
-        toast.success(dueAt ? 'Срок обновлён' : 'Срок снят');
+        toast.success(dueAt ? t('tasks.toast.dueUpdated') : t('tasks.toast.dueCleared'));
         onTasksChanged?.();
       } catch (err) {
-        toast.error(friendlyErrorMessage(err, 'Не удалось обновить срок'));
+        toast.error(friendlyErrorMessage(err, t('tasks.err.updateDue'), locale));
       }
     },
-    [onTasksChanged]
+    [onTasksChanged, t, locale]
   );
 
   const handleCommitRename = useCallback(
@@ -687,10 +696,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         });
         onTasksChanged?.();
       } catch (err) {
-        toast.error(friendlyErrorMessage(err, 'Не удалось переименовать задачу'));
+        toast.error(friendlyErrorMessage(err, t('tasks.err.rename'), locale));
       }
     },
-    [editingTaskDraft, onTasksChanged]
+    [editingTaskDraft, onTasksChanged, t, locale]
   );
 
   const handleDeleteTask = useCallback(
@@ -705,7 +714,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           itemId: task.itemId,
           taskKey,
         });
-        toast.success('Задача удалена');
+        toast.success(t('tasks.toast.deleted'));
         onTasksChanged?.();
       } catch (err) {
         setOptimisticMap((prev) => {
@@ -713,10 +722,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           delete next[task.id];
           return next;
         });
-        toast.error(friendlyErrorMessage(err, 'Не удалось удалить задачу'));
+        toast.error(friendlyErrorMessage(err, t('tasks.err.delete'), locale));
       }
     },
-    [onTasksChanged]
+    [onTasksChanged, t, locale]
   );
 
   // Column CRUD handlers
@@ -742,7 +751,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         });
       }
     });
-    toast.success(`Колонка «${title}» добавлена`);
+    toast.success(t('tasks.toast.colAdded', { title }));
   };
 
   const handleCommitRenameColumn = async (colId: string) => {
@@ -796,7 +805,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     const nextCols = sortedColumns.filter((c) => c.id !== col.id);
     await persistColumns(nextCols);
     onTasksChanged?.();
-    toast.success(`Колонка «${col.title}» удалена`);
+    toast.success(t('tasks.toast.colDeleted', { title: localizeTaskBoardColumnTitle(col, locale) }));
   };
 
   // Hit-testing columns and card midpoints during custom Pointer Events DnD
@@ -945,21 +954,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         const siblings = (tasksByColumnRef.current.get(targetColId) ?? []).filter(
           (t) => t.id !== draggedTask.id
         );
-        let nextOrder: number;
-        if (siblings.length === 0) {
-          nextOrder = 1000;
-        } else if (insertIdx <= 0) {
-          nextOrder = (siblings[0]!.boardOrder ?? 1000) - 1000;
-        } else if (insertIdx >= siblings.length) {
-          nextOrder = (siblings[siblings.length - 1]!.boardOrder ?? siblings.length * 1000) + 1000;
-        } else {
-          const prevOrder = siblings[insertIdx - 1]!.boardOrder ?? insertIdx * 1000;
-          const afterOrder = siblings[insertIdx]!.boardOrder ?? (insertIdx + 1) * 1000;
-          nextOrder =
-            Math.abs(afterOrder - prevOrder) > 1
-              ? Math.round((prevOrder + afterOrder) / 2)
-              : prevOrder + 1;
-        }
+        const nextOrder = computeColumnDropOrder(siblings, insertIdx);
         playTactileSound('soft');
         void handleMoveTaskToColumn(draggedTask, targetColId, nextOrder);
       }
@@ -980,12 +975,12 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'submenu',
       id: 'move-col',
-      label: 'Перенести в колонку',
+      label: t('tasks.ctx.moveToColumn'),
       icon: <Kanban className="w-3.5 h-3.5" />,
       items: sortedColumns.map((col) => ({
         type: 'item',
         id: `col-${col.id}`,
-        label: col.title,
+        label: localizeTaskBoardColumnTitle(col, locale),
         dotColor: col.color,
         active: task.columnId === col.id,
         onSelect: () => void handleMoveTaskToColumn(task, col.id),
@@ -994,12 +989,12 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'submenu',
       id: 'priority',
-      label: 'Приоритет',
+      label: t('tasks.ctx.priority'),
       icon: <Flag className="w-3.5 h-3.5" />,
       items: (['urgent', 'high', 'medium', 'low', 'none'] as TaskPriority[]).map((p) => ({
         type: 'item',
         id: `prio-${p}`,
-        label: PRIORITY_META[p].label,
+        label: t(PRIORITY_META[p].labelKey),
         dotColor: PRIORITY_META[p].dotColor,
         active: (task.priority ?? 'none') === p,
         onSelect: () => void handleUpdatePriority(task, p),
@@ -1008,25 +1003,25 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'submenu',
       id: 'due',
-      label: 'Срок',
+      label: t('tasks.ctx.due'),
       icon: <CalendarBlank className="w-3.5 h-3.5" />,
       items: [
         {
           type: 'item',
           id: 'due-today',
-          label: 'Сегодня вечером',
+          label: t('tasks.ctx.tonight'),
           onSelect: () => void handleUpdateDueAt(task, 'today'),
         },
         {
           type: 'item',
           id: 'due-tomorrow',
-          label: 'Завтра в 10:00',
+          label: t('tasks.ctx.tomorrow10'),
           onSelect: () => void handleUpdateDueAt(task, 'tomorrow'),
         },
         {
           type: 'item',
           id: 'due-week',
-          label: 'Через 3 дня',
+          label: t('tasks.ctx.in3Days'),
           onSelect: () => void handleUpdateDueAt(task, 'week'),
         },
         ...(getEffectiveDueAt(task)
@@ -1035,7 +1030,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               {
                 type: 'item' as const,
                 id: 'due-clear',
-                label: 'Убрать срок',
+                label: t('tasks.ctx.clearDue'),
                 danger: true,
                 onSelect: () => void handleUpdateDueAt(task, 'clear'),
               },
@@ -1047,7 +1042,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'item',
       id: 'rename',
-      label: 'Переименовать',
+      label: t('common.rename'),
       icon: <PencilSimple className="w-3.5 h-3.5" />,
       onSelect: () => {
         setEditingTaskId(task.id);
@@ -1057,7 +1052,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'item',
       id: 'open-note',
-      label: 'Открыть заметку',
+      label: t('cards.openNote'),
       icon: <ArrowSquareOut className="w-3.5 h-3.5" />,
       onSelect: () => onOpenItem(task.itemId),
     },
@@ -1065,7 +1060,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     {
       type: 'item',
       id: 'delete',
-      label: 'Удалить задачу',
+      label: t('tasks.ctx.deleteTask'),
       icon: <Trash className="w-3.5 h-3.5" />,
       danger: true,
       onSelect: () => void handleDeleteTask(task),
@@ -1090,7 +1085,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   >(() => {
     if (listStatusFilter === 'done' && showDone) {
       return listDisplayed.length > 0
-        ? [{ key: 'done', label: 'Завершённые', accent: 'var(--k-emerald)', items: listDisplayed }]
+        ? [{ key: 'done', label: t('tasks.group.done'), accent: 'var(--k-emerald)', items: listDisplayed }]
         : [];
     }
 
@@ -1099,18 +1094,39 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         string,
         { key: string; label: string; accent?: string; color?: string; items: VaultTaskEntry[] }
       >();
-      for (const t of listDisplayed) {
-        const orb = t.orbit ? orbitMap.get(t.orbit) : undefined;
+      for (const taskItem of listDisplayed) {
+        const orb = taskItem.orbit ? orbitMap.get(taskItem.orbit) : undefined;
         const key = orb ? orb.id : '__none__';
         if (!buckets.has(key)) {
           buckets.set(key, {
             key,
-            label: orb ? orb.name : 'Без раздела',
+            label: orb ? orb.name : t('nav.noSection'),
             color: orb?.color,
             items: [],
           });
         }
-        buckets.get(key)!.items.push(t);
+        buckets.get(key)!.items.push(taskItem);
+      }
+      return Array.from(buckets.values());
+    }
+
+    if (groupBy === 'note') {
+      const buckets = new Map<
+        string,
+        { key: string; label: string; accent?: string; color?: string; items: VaultTaskEntry[] }
+      >();
+      for (const taskItem of listDisplayed) {
+        const orb = taskItem.orbit ? orbitMap.get(taskItem.orbit) : undefined;
+        const key = taskItem.itemId || '__standalone__';
+        if (!buckets.has(key)) {
+          buckets.set(key, {
+            key,
+            label: taskItem.itemTitle || t('common.untitled'),
+            color: orb?.color,
+            items: [],
+          });
+        }
+        buckets.get(key)!.items.push(taskItem);
       }
       return Array.from(buckets.values());
     }
@@ -1122,26 +1138,26 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     const upcoming: VaultTaskEntry[] = [];
     const nodate: VaultTaskEntry[] = [];
 
-    for (const t of listDisplayed) {
-      const due = getEffectiveDueAt(t);
+    for (const taskItem of listDisplayed) {
+      const due = getEffectiveDueAt(taskItem);
       if (!due) {
-        nodate.push(t);
-      } else if (due < todayStart && !t.done) {
-        overdue.push(t);
+        nodate.push(taskItem);
+      } else if (due < todayStart && !taskItem.done) {
+        overdue.push(taskItem);
       } else if (due < tomorrowStart) {
-        today.push(t);
+        today.push(taskItem);
       } else {
-        upcoming.push(t);
+        upcoming.push(taskItem);
       }
     }
 
     const out: Array<{ key: string; label: string; accent?: string; color?: string; items: VaultTaskEntry[] }> = [];
-    if (overdue.length > 0) out.push({ key: 'overdue', label: 'Просрочено', accent: 'var(--k-danger)', items: overdue });
-    if (today.length > 0) out.push({ key: 'today', label: 'Сегодня', accent: 'var(--k-accent)', items: today });
-    if (upcoming.length > 0) out.push({ key: 'upcoming', label: 'Скоро', accent: 'var(--k-amber)', items: upcoming });
-    if (nodate.length > 0) out.push({ key: 'nodate', label: 'Без срока', items: nodate });
+    if (overdue.length > 0) out.push({ key: 'overdue', label: t('tasks.group.overdue'), accent: 'var(--k-danger)', items: overdue });
+    if (today.length > 0) out.push({ key: 'today', label: t('tasks.group.today'), accent: 'var(--k-accent)', items: today });
+    if (upcoming.length > 0) out.push({ key: 'upcoming', label: t('tasks.group.upcoming'), accent: 'var(--k-amber)', items: upcoming });
+    if (nodate.length > 0) out.push({ key: 'nodate', label: t('tasks.group.nodate'), items: nodate });
     return out;
-  }, [listDisplayed, listStatusFilter, showDone, groupBy, orbitMap]);
+  }, [listDisplayed, listStatusFilter, showDone, groupBy, orbitMap, t]);
 
   const handleCreateTopTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1187,7 +1203,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     return (
       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10.5px] font-medium k-tabular ${toneClass}`}>
         <CalendarBlank weight={isOverdue || isToday ? 'fill' : 'regular'} className="w-3 h-3 shrink-0" />
-        <span>{formatReminderStamp(due)}</span>
+        <span>{formatReminderStamp(due, locale)}</span>
       </span>
     );
   };
@@ -1201,7 +1217,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10.5px] font-medium shrink-0"
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: meta.dotColor }} />
-        <span>{meta.label}</span>
+        <span>{t(meta.labelKey)}</span>
       </span>
     );
   };
@@ -1224,7 +1240,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               checked={task.done}
               onChange={() => void handleToggleWithUndo(task)}
               data-testid={`task-toggle-${task.id}`}
-              label={task.done ? 'Вернуть в работу' : 'Отметить выполненной'}
+              label={task.done ? t('tasks.markUndone') : t('tasks.markDone')}
             />
           </div>
 
@@ -1254,7 +1270,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                   setEditingTaskId(task.id);
                   setEditingTaskDraft(task.text);
                 }}
-                title="Двойной клик — переименовать"
+                title={t('tasks.dblClickRename')}
                 className={`text-[13px] leading-[1.42] break-words select-none ${
                   task.done
                     ? 'line-through text-[var(--k-ink-muted)]'
@@ -1283,7 +1299,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 type="button"
                 data-no-drag="true"
                 data-testid={`task-source-chip-${task.id}`}
-                title={`Открыть заметку «${task.itemTitle}»`}
+                title={`${t('cards.openNote')}: ${task.itemTitle}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenItem(task.itemId);
@@ -1310,16 +1326,16 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       {/* Top Toolbar: compact single-row responsive layout (never wraps into 3 awkward rows at 1024px) */}
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
-          {/* Smooth layoutId pill for Список | Доска */}
+          {/* Smooth layoutId pill for List | Board */}
           <div
             role="tablist"
-            aria-label="Режим отображения задач"
+            aria-label={t('tasks.viewModeAria')}
             className="inline-flex items-center gap-0.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-0.5 shrink-0"
           >
             {(
               [
-                { value: 'list', label: 'Список', icon: <ListBullets className="w-3.5 h-3.5" /> },
-                { value: 'board', label: 'Доска', icon: <Kanban className="w-3.5 h-3.5" /> },
+                { value: 'list', label: t('tasks.view.list'), icon: <ListBullets className="w-3.5 h-3.5" /> },
+                { value: 'board', label: t('tasks.view.board'), icon: <Kanban className="w-3.5 h-3.5" /> },
               ] as const
             ).map((opt) => {
               const active = viewMode === opt.value;
@@ -1361,7 +1377,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               data-testid="tasks-search-input"
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
-              placeholder="Поиск задач…"
+              placeholder={t('tasks.searchPlaceholder')}
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
             {searchFilter ? (
@@ -1369,7 +1385,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 type="button"
                 onClick={() => setSearchFilter('')}
                 className="text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-                aria-label="Очистить поиск"
+                aria-label={t('common.clearSearch')}
               >
                 <X weight="bold" className="w-3 h-3" />
               </button>
@@ -1383,11 +1399,28 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             className="min-w-[120px] whitespace-nowrap shrink-0"
             data-testid="tasks-priority-filter"
             options={[
-              { value: 'all', label: 'Приоритет' },
-              { value: 'urgent', label: 'Срочный', dotColor: PRIORITY_META.urgent.dotColor },
-              { value: 'high', label: 'Высокий', dotColor: PRIORITY_META.high.dotColor },
-              { value: 'medium', label: 'Средний', dotColor: PRIORITY_META.medium.dotColor },
-              { value: 'low', label: 'Низкий', dotColor: PRIORITY_META.low.dotColor },
+              { value: 'all', label: t('tasks.priority.filterLabel') },
+              { value: 'urgent', label: t(PRIORITY_META.urgent.labelKey), dotColor: PRIORITY_META.urgent.dotColor },
+              { value: 'high', label: t(PRIORITY_META.high.labelKey), dotColor: PRIORITY_META.high.dotColor },
+              { value: 'medium', label: t(PRIORITY_META.medium.labelKey), dotColor: PRIORITY_META.medium.dotColor },
+              { value: 'low', label: t(PRIORITY_META.low.labelKey), dotColor: PRIORITY_META.low.dotColor },
+            ]}
+          />
+
+          <SelectMenu
+            size="sm"
+            value={orbitFilter}
+            onChange={setOrbitFilter}
+            className="min-w-[124px] max-w-[175px] whitespace-nowrap shrink-0"
+            data-testid="tasks-orbit-filter"
+            options={[
+              { value: 'all', label: t('tasks.orbitFilterAll') },
+              { value: '__none__', label: t('nav.noSection') },
+              ...orbits.map((orb) => ({
+                value: orb.id,
+                label: orb.name,
+                dotColor: orb.color,
+              })),
             ]}
           />
 
@@ -1402,7 +1435,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             }`}
           >
             {showDone ? <Eye className="w-3.5 h-3.5 shrink-0" /> : <EyeSlash className="w-3.5 h-3.5 shrink-0" />}
-            <span>{showDone ? 'Скрыть готовые' : 'Показать готовые'}</span>
+            <span>{showDone ? t('tasks.hideDone') : t('tasks.showDone')}</span>
           </button>
 
           {viewMode === 'board' ? (
@@ -1410,7 +1443,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               type="button"
               data-testid="tasks-toggle-col-icons"
               aria-pressed={showColumnIcons}
-              title={showColumnIcons ? 'Скрыть иконки колонок' : 'Показать иконки колонок'}
+              title={showColumnIcons ? t('tasks.hideColIcons') : t('tasks.showColIcons')}
               onClick={toggleShowColumnIcons}
               className={`k-interactive inline-flex items-center gap-1.5 h-8 px-2 rounded-xl border text-[12px] font-medium whitespace-nowrap shrink-0 cursor-pointer ${
                 showColumnIcons
@@ -1419,13 +1452,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               }`}
             >
               <Shapes weight={showColumnIcons ? 'duotone' : 'regular'} className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden @[720px]:inline">Иконки</span>
+              <span className="hidden @[720px]:inline">{t('tasks.iconsShort')}</span>
             </button>
           ) : null}
         </div>
 
         <div className="ml-auto text-[12px] text-[var(--k-ink-muted)] k-tabular whitespace-nowrap shrink-0">
-          Открыто:{' '}
+          {t('tasks.openCountLabel')}{' '}
           <strong className="text-[var(--k-ink-primary)]">
             <NumberFlow value={activeTasksAll.length} />
           </strong>
@@ -1446,24 +1479,25 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               const isProtectedCol =
                 col.id === 'inbox' || isDoneColumn(col.id, sortedColumns) || sortedColumns.length <= 2;
               const resolvedColIcon = resolveColumnIconId(col.icon, col.id, col.isDone);
+              const colTitle = localizeTaskBoardColumnTitle(col, locale);
 
               const colMenuEntries: ContextMenuEntry[] = [
                 {
                   type: 'item',
                   id: 'rename-col',
-                  label: 'Переименовать',
+                  label: t('common.rename'),
                   icon: <PencilSimple className="w-3.5 h-3.5" />,
                   onSelect: () => {
                     setRenamingColId(col.id);
-                    setRenameColDraft(col.title);
+                    setRenameColDraft(colTitle);
                   },
                 },
                 {
                   type: 'submenu',
                   id: 'icon-col',
-                  label: 'Изменить иконку',
+                  label: t('tasks.col.changeIcon'),
                   icon: <Shapes className="w-3.5 h-3.5" />,
-                  items: TASK_COLUMN_ICONS.map((iconOpt) => ({
+                  items: taskColumnIcons.map((iconOpt) => ({
                     type: 'item',
                     id: `col-icon-${iconOpt.id}`,
                     label: iconOpt.label,
@@ -1475,12 +1509,12 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 {
                   type: 'submenu',
                   id: 'color-col',
-                  label: 'Изменить цвет',
+                  label: t('tasks.col.changeColor'),
                   icon: <Palette className="w-3.5 h-3.5" />,
                   items: COLUMN_COLOR_SWATCHES.map((swatch) => ({
                     type: 'item',
                     id: `col-color-${swatch.hex}`,
-                    label: swatch.label,
+                    label: t(swatch.labelKey),
                     dotColor: swatch.hex,
                     active: col.color.toLowerCase() === swatch.hex.toLowerCase(),
                     onSelect: () => void handleRecolorColumn(col.id, swatch.hex),
@@ -1489,7 +1523,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 {
                   type: 'item',
                   id: 'move-left',
-                  label: 'Сдвинуть влево',
+                  label: t('tasks.col.moveLeft'),
                   icon: <ArrowLeft className="w-3.5 h-3.5" />,
                   disabled: colIndex === 0,
                   onSelect: () => void handleStepColumn(col.id, -1),
@@ -1497,7 +1531,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 {
                   type: 'item',
                   id: 'move-right',
-                  label: 'Сдвинуть вправо',
+                  label: t('tasks.col.moveRight'),
                   icon: <ArrowRight className="w-3.5 h-3.5" />,
                   disabled: colIndex === sortedColumns.length - 1,
                   onSelect: () => void handleStepColumn(col.id, 1),
@@ -1506,7 +1540,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 {
                   type: 'item',
                   id: 'delete-col',
-                  label: 'Удалить колонку',
+                  label: t('tasks.col.delete'),
                   icon: <Trash className="w-3.5 h-3.5" />,
                   danger: true,
                   disabled: isProtectedCol,
@@ -1566,7 +1600,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                           />
                         ) : (
                           <span className="text-[13px] font-semibold text-[var(--k-ink-primary)] truncate">
-                            {col.title}
+                            {colTitle}
                           </span>
                         )}
                         <span
@@ -1586,7 +1620,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                           <button
                             type="button"
                             data-testid={`kanban-col-menu-${col.id}`}
-                            aria-label={`Настройки колонки ${col.title}`}
+                            aria-label={t('tasks.col.settingsAria', { title: colTitle })}
                             className="k-interactive w-6.5 h-6.5 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
                           >
                             <DotsThree weight="bold" className="w-4 h-4" />
@@ -1599,35 +1633,35 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                             onClick={() => {
                               setOpenColMenuId(null);
                               setRenamingColId(col.id);
-                              setRenameColDraft(col.title);
+                              setRenameColDraft(colTitle);
                             }}
                             className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                           >
                             <PencilSimple className="w-3.5 h-3.5 opacity-80" />
-                            <span>Переименовать</span>
+                            <span>{t('common.rename')}</span>
                           </button>
 
                           <div className="px-2.5 py-1.5">
                             <div className="text-[10.5px] text-[var(--k-ink-muted)] mb-1.5">
-                              Цвет колонки
+                              {t('tasks.col.colorLabel')}
                             </div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap">
                               {COLUMN_COLOR_SWATCHES.map((swatch) => (
                                 <button
                                   key={swatch.hex}
                                   type="button"
-                                  title={swatch.label}
+                                  title={t(swatch.labelKey)}
                                   onClick={() => {
                                     void handleRecolorColumn(col.id, swatch.hex);
                                     setOpenColMenuId(null);
                                   }}
                                   className={`w-4.5 h-4.5 rounded-full cursor-pointer transition-transform ${
                                     col.color.toLowerCase() === swatch.hex.toLowerCase()
-                                      ? 'scale-115 ring-2 ring-[var(--k-ink-primary)] ring-offset-1 ring-offset-[var(--k-bg-elevated)]'
-                                      : 'hover:scale-110'
+                                      ? 'ring-[1.5px] ring-[var(--k-ink-primary)] ring-offset-[1.5px] ring-offset-[var(--k-bg-elevated)]'
+                                      : 'hover:scale-105'
                                   }`}
                                   style={{ backgroundColor: swatch.hex }}
-                                  aria-label={`Цвет ${swatch.label}`}
+                                  aria-label={t(swatch.labelKey)}
                                 />
                               ))}
                             </div>
@@ -1635,17 +1669,17 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
 
                           <div className="px-2.5 py-1.5 border-t border-[var(--k-border-hairline)]">
                             <div className="text-[10.5px] text-[var(--k-ink-muted)] mb-1.5">
-                              Иконка колонки
+                              {t('tasks.col.iconLabel')}
                             </div>
                             <div className="grid grid-cols-6 gap-1">
-                              {TASK_COLUMN_ICONS.map((iconOpt) => {
+                              {taskColumnIcons.map((iconOpt) => {
                                 const active = resolvedColIcon === iconOpt.id;
                                 return (
                                   <button
                                     key={iconOpt.id}
                                     type="button"
                                     title={iconOpt.label}
-                                    aria-label={`Иконка ${iconOpt.label}`}
+                                    aria-label={iconOpt.label}
                                     onClick={() => {
                                       void handleChangeColumnIcon(col.id, iconOpt.id);
                                       setOpenColMenuId(null);
@@ -1671,7 +1705,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               className="k-interactive flex items-center justify-center gap-1 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer disabled:opacity-40 disabled:cursor-default"
                             >
                               <ArrowLeft className="w-3 h-3" />
-                              <span>Влево</span>
+                              <span>{t('tasks.col.leftShort')}</span>
                             </button>
                             <button
                               type="button"
@@ -1679,7 +1713,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               onClick={() => void handleStepColumn(col.id, 1)}
                               className="k-interactive flex items-center justify-center gap-1 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer disabled:opacity-40 disabled:cursor-default"
                             >
-                              <span>Вправо</span>
+                              <span>{t('tasks.col.rightShort')}</span>
                               <ArrowRight className="w-3 h-3" />
                             </button>
                           </div>
@@ -1691,7 +1725,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
                             >
                               <Trash className="w-3.5 h-3.5" />
-                              <span>Удалить колонку</span>
+                              <span>{t('tasks.col.delete')}</span>
                             </button>
                           ) : null}
                         </div>
@@ -1704,8 +1738,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                     {colCards.length === 0 && !isDropTarget ? (
                       <div className="py-10 px-4 text-center text-[12px] text-[var(--k-ink-muted)]/75 select-none">
                         {!showDone && isDoneColumn(col.id, sortedColumns)
-                          ? 'Готовые задачи скрыты фильтром'
-                          : 'Пока пусто'}
+                          ? t('tasks.col.emptyFiltered')
+                          : t('tasks.col.empty')}
                       </div>
                     ) : null}
 
@@ -1783,7 +1817,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               setColQuickAddText('');
                             }
                           }}
-                          placeholder="Название задачи…"
+                          placeholder={t('tasks.col.addTaskPlaceholder')}
                           className="w-full h-8.5 px-2.5 rounded-lg border border-[var(--k-border-focus)] bg-[var(--k-bg-surface-1)] text-[12.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none"
                         />
                         <div className="flex items-center justify-end gap-1.5">
@@ -1795,14 +1829,14 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                             }}
                             className="k-interactive h-7 px-2 rounded-lg text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                           >
-                            Отмена
+                            {t('common.cancel')}
                           </button>
                           <button
                             type="submit"
                             disabled={!colQuickAddText.trim() || colCreating}
                             className="k-interactive h-7 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11.5px] font-medium cursor-pointer disabled:opacity-50"
                           >
-                            Добавить
+                            {t('common.add')}
                           </button>
                         </div>
                       </motion.form>
@@ -1817,7 +1851,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                         className="k-interactive w-full h-8 px-2.5 rounded-xl flex items-center gap-1.5 text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                       >
                         <Plus weight="bold" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                        <span>Добавить задачу</span>
+                        <span>{t('tasks.col.addTaskBtn')}</span>
                       </button>
                     )}
                   </div>
@@ -1825,7 +1859,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               );
             })}
 
-            {/* + Колонка at Right Edge */}
+            {/* + Column at Right Edge */}
             <div ref={addColCardRef} className={addingColumn ? 'w-[272px] shrink-0' : 'shrink-0'}>
               {addingColumn ? (
                 <motion.form
@@ -1862,43 +1896,43 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                           setNewColTitle('');
                         }
                       }}
-                      placeholder="Название колонки…"
+                      placeholder={t('tasks.col.newColPlaceholder')}
                       className="flex-1 min-w-0 h-8.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12.5px] outline-none focus:border-[var(--k-border-focus)]"
                     />
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="text-[10.5px] text-[var(--k-ink-muted)]">Цвет</div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="text-[10.5px] text-[var(--k-ink-muted)]">{t('nav.color')}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
                       {COLUMN_COLOR_SWATCHES.map((swatch) => (
                         <button
                           key={swatch.hex}
                           type="button"
-                          title={swatch.label}
+                          title={t(swatch.labelKey)}
                           onClick={() => setNewColColor(swatch.hex)}
                           className={`w-4.5 h-4.5 rounded-full cursor-pointer transition-transform ${
                             newColColor === swatch.hex
-                              ? 'scale-115 ring-2 ring-[var(--k-ink-primary)] ring-offset-1 ring-offset-[var(--k-bg-surface-1)]'
+                              ? 'ring-[1.5px] ring-[var(--k-ink-primary)] ring-offset-[1.5px] ring-offset-[var(--k-bg-surface-1)]'
                               : 'opacity-80 hover:opacity-100'
                           }`}
                           style={{ backgroundColor: swatch.hex }}
-                          aria-label={`Цвет ${swatch.label}`}
+                          aria-label={t(swatch.labelKey)}
                         />
                       ))}
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="text-[10.5px] text-[var(--k-ink-muted)]">Иконка</div>
+                    <div className="text-[10.5px] text-[var(--k-ink-muted)]">{t('nav.icon')}</div>
                     <div className="grid grid-cols-6 gap-1">
-                      {TASK_COLUMN_ICONS.map((iconOpt) => {
+                      {taskColumnIcons.map((iconOpt) => {
                         const active = newColIcon === iconOpt.id;
                         return (
                           <button
                             key={iconOpt.id}
                             type="button"
                             title={iconOpt.label}
-                            aria-label={`Иконка ${iconOpt.label}`}
+                            aria-label={iconOpt.label}
                             onClick={() => setNewColIcon(iconOpt.id)}
                             className={`k-interactive w-7 h-7 rounded-lg inline-flex items-center justify-center cursor-pointer border ${
                               active
@@ -1922,14 +1956,14 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                       }}
                       className="k-interactive h-7.5 px-2.5 rounded-lg text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                     >
-                      Отмена
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="submit"
                       disabled={!newColTitle.trim()}
                       className="k-interactive h-7.5 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-50"
                     >
-                      Создать
+                      {t('common.create')}
                     </button>
                   </div>
                 </motion.form>
@@ -1937,12 +1971,12 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 <button
                   type="button"
                   data-testid="kanban-add-col-btn"
-                  title="Добавить колонку"
+                  title={t('tasks.col.addColTitle')}
                   onClick={() => setAddingColumn(true)}
                   className="k-interactive h-11 px-3.5 rounded-2xl border border-dashed border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)]/50 hover:bg-[var(--k-bg-surface-1)] text-[12.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                 >
                   <Plus weight="bold" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
-                  <span>Колонка</span>
+                  <span>{t('tasks.col.addColShort')}</span>
                 </button>
               )}
             </div>
@@ -1982,7 +2016,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               data-testid="quick-task-input"
               value={newTaskText}
               onChange={(e) => setNewTaskText(e.target.value)}
-              placeholder="Новая задача, например: «Подготовить презентацию к завтра»…"
+              placeholder={t('tasks.list.quickAddPlaceholder')}
               className="flex-1 bg-transparent border-none outline-none text-[13.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
             <button
@@ -1990,7 +2024,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               disabled={!newTaskText.trim() || creating}
               className="k-interactive h-8 px-3.5 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default shrink-0"
             >
-              Добавить
+              {t('common.add')}
             </button>
           </form>
 
@@ -2001,9 +2035,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 value={listStatusFilter}
                 onChange={setListStatusFilter}
                 options={[
-                  { value: 'active', label: `В работе (${activeTasksAll.length})` },
-                  { value: 'done', label: `Готовые (${doneTasksAll.length})` },
-                  { value: 'all', label: 'Все' },
+                  { value: 'active', label: t('tasks.list.tabActive', { count: activeTasksAll.length }) },
+                  { value: 'done', label: t('tasks.list.tabDone', { count: doneTasksAll.length }) },
+                  { value: 'all', label: t('common.all') },
                 ]}
               />
             ) : null}
@@ -2012,8 +2046,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 value={groupBy}
                 onChange={setGroupBy}
                 options={[
-                  { value: 'due', label: 'По срокам' },
-                  { value: 'orbit', label: 'По разделам' },
+                  { value: 'due', label: t('tasks.list.groupByDue') },
+                  { value: 'orbit', label: t('tasks.list.groupBySection') },
+                  { value: 'note', label: t('tasks.list.groupByNote') },
                 ]}
               />
             ) : null}
@@ -2024,26 +2059,27 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             <div className="rounded-2xl border border-dashed border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)]/60 px-6 py-12 text-center space-y-2.5">
               <CheckSquare weight="duotone" className="w-10 h-10 text-[var(--k-accent)] mx-auto opacity-80" />
               <div className="text-[15px] font-medium text-[var(--k-ink-primary)]">
-                {searchFilter.trim() || priorityFilter !== 'all'
-                  ? 'По выбранным фильтрам задач нет'
+                {searchFilter.trim() || priorityFilter !== 'all' || orbitFilter !== 'all'
+                  ? t('tasks.empty.filtered')
                   : listStatusFilter === 'done'
-                    ? 'Пока нет завершённых задач'
-                    : 'Активных задач пока нет'}
+                    ? t('tasks.empty.done')
+                    : t('tasks.empty.active')}
               </div>
               <p className="mt-1 mb-0 text-[13px] text-[var(--k-ink-secondary)] max-w-md mx-auto">
-                Добавь задачу строкой выше, переключись в режим «Доска» или поставь чек-лист внутри любой заметки — все дела автоматически соберутся здесь.
+                {t('tasks.empty.desc')}
               </p>
               <div className="flex items-center justify-center gap-2 pt-1">
-                {searchFilter.trim() || priorityFilter !== 'all' ? (
+                {searchFilter.trim() || priorityFilter !== 'all' || orbitFilter !== 'all' ? (
                   <button
                     type="button"
                     onClick={() => {
                       setSearchFilter('');
                       setPriorityFilter('all');
+                      setOrbitFilter('all');
                     }}
                     className="k-interactive h-8 px-3.5 rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[12.5px] font-medium cursor-pointer"
                   >
-                    Сбросить фильтры
+                    {t('tasks.empty.resetFilters')}
                   </button>
                 ) : (
                   <button
@@ -2052,7 +2088,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-3.5 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer"
                   >
                     <Kanban className="w-3.5 h-3.5" />
-                    <span>Открыть Канбан-доску</span>
+                    <span>{t('tasks.empty.openKanban')}</span>
                   </button>
                 )}
               </div>
@@ -2107,7 +2143,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                   checked={task.done}
                                   onChange={() => void handleToggleWithUndo(task)}
                                   data-testid={`task-toggle-${task.id}`}
-                                  label={task.done ? 'Вернуть в работу' : 'Отметить выполненной'}
+                                  label={task.done ? t('tasks.markUndone') : t('tasks.markDone')}
                                   className="mt-0.5"
                                 />
 
@@ -2176,7 +2212,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                             style={{ backgroundColor: colObj.color }}
                                           />
                                         )}
-                                        <span>{colObj.title}</span>
+                                        <span>{localizeTaskBoardColumnTitle(colObj, locale)}</span>
                                       </span>
                                     ) : null}
 
@@ -2206,7 +2242,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                   trigger={
                                     <button
                                       type="button"
-                                      title="Поставить срок задачи"
+                                      title={t('tasks.dueBtnTitle')}
                                       className={`k-interactive h-7 px-2 rounded-lg text-[11.5px] inline-flex items-center gap-1 cursor-pointer ${
                                         dueAt
                                           ? 'text-[var(--k-amber)] bg-[var(--k-amber-soft)]'
@@ -2214,7 +2250,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                       }`}
                                     >
                                       <CalendarBlank className="w-3.5 h-3.5" />
-                                      <span>{dueAt ? 'Срок' : 'Дата'}</span>
+                                      <span>{dueAt ? t('tasks.dueLabelShort') : t('tasks.dateLabelShort')}</span>
                                     </button>
                                   }
                                 >
@@ -2224,21 +2260,21 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                       onClick={() => void handleUpdateDueAt(task, 'today')}
                                       className="k-interactive w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                                     >
-                                      Сегодня вечером
+                                      {t('tasks.ctx.tonight')}
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => void handleUpdateDueAt(task, 'tomorrow')}
                                       className="k-interactive w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                                     >
-                                      Завтра в 10:00
+                                      {t('tasks.ctx.tomorrow10')}
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => void handleUpdateDueAt(task, 'week')}
                                       className="k-interactive w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                                     >
-                                      Через 3 дня
+                                      {t('tasks.ctx.in3Days')}
                                     </button>
                                     {dueAt ? (
                                       <button
@@ -2246,7 +2282,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                         onClick={() => void handleUpdateDueAt(task, 'clear')}
                                         className="k-interactive w-full text-left px-2.5 py-1.5 rounded-lg text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
                                       >
-                                        Убрать срок
+                                        {t('tasks.ctx.clearDue')}
                                       </button>
                                     ) : null}
                                   </div>

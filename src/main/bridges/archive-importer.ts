@@ -227,14 +227,17 @@ export async function importArchiveJson(
           continue;
         }
 
-        const text = [href, author ? `Автор: ${author}` : '', extraVal].filter(Boolean).join('\n');
+        const isEn = repo.getLocale() === 'en';
+        const text = [href, author ? `${isEn ? 'Author' : 'Автор'}: ${author}` : '', extraVal]
+          .filter(Boolean)
+          .join('\n');
         await pipeline.capture({
           text,
           url: href,
-          title: author ? `Instagram · ${author}` : 'Сохранёнка Instagram',
+          title: author ? `Instagram · ${author}` : isEn ? 'Instagram Saved Post' : 'Сохранёнка Instagram',
           platform: 'instagram',
           mode: 'buffer',
-          tags: ['instagram', 'архив'],
+          tags: ['instagram', isEn ? 'archive' : 'архив'],
           source: 'archive_import',
           externalId: extId,
           createdAt: timestamp,

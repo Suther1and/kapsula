@@ -34,6 +34,7 @@ import { toast } from 'sonner';
 import type {
   AiProvider,
   AppearanceConfig,
+  AppLocale,
   AppUpdaterState,
   BudgetSummary,
   CalendarSyncStatus,
@@ -41,14 +42,17 @@ import type {
   SettingsState,
   ThemeMode,
 } from '@shared/types';
+import { APP_VERSION } from '@shared/app-version';
+import { useI18n } from '@shared/i18n/react';
+import type { I18nTranslator } from '@shared/i18n/types';
 import { isMacPlatform } from '@shared/shortcuts';
-import { friendlyErrorMessage, pluralRu } from '../../lib/format';
+import { formatFileSize, friendlyErrorMessage } from '../../lib/format';
 import {
-  ACCENT_PRESETS,
-  DARK_BG_PRESETS,
-  LIGHT_BG_PRESETS,
   computeThemeTokens,
   contrastRatio,
+  getAccentPresets,
+  getDarkBgPresets,
+  getLightBgPresets,
   getSavedAppearance,
   hexToHsl,
   hslToHex,
@@ -58,6 +62,14 @@ import {
   setSavedAppearance,
   type UiDensity,
 } from '../../lib/appearance';
+import {
+  HIDEABLE_NAV_SECTIONS,
+  HIDEABLE_SECTION_LABEL_KEYS,
+  readHiddenNavSections,
+  SIDEBAR_PREFS_EVENT,
+  writeHiddenNavSections,
+  type HideableNavSection,
+} from '../../lib/sidebar-prefs';
 import { ModalDialog } from '../ui/ModalDialog';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectMenu } from '../ui/SelectMenu';
@@ -89,12 +101,16 @@ function normalizeTab(tab: SettingsTab): Exclude<SettingsTab, 'general'> {
   return tab === 'general' ? 'appearance' : tab;
 }
 
-function formatSyncTimestamp(ts: number | null | undefined): string {
+function formatSyncTimestamp(
+  ts: number | null | undefined,
+  t: I18nTranslator['t'],
+  dateLocale: string
+): string {
   if (!ts) return '';
   const diffMin = Math.floor((Date.now() - ts) / 60_000);
-  if (diffMin < 1) return 'только что';
-  if (diffMin < 60) return `${diffMin} мин. назад`;
-  return new Date(ts).toLocaleString('ru-RU', {
+  if (diffMin < 1) return t('date.justNow');
+  if (diffMin < 60) return t('date.minutesAgoDot', { count: diffMin });
+  return new Date(ts).toLocaleString(dateLocale, {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -102,15 +118,17 @@ function formatSyncTimestamp(ts: number | null | undefined): string {
   });
 }
 
-function formatUsdRu(amount: number): string {
-  const safe = Number.isFinite(amount) ? Math.max(0, amount) : 0;
-  return `$${safe.toFixed(2).replace('.', ',')}`;
-}
-
-function buildBookmarkletCode(port: number, token: string): string {
+function buildBookmarkletCode(
+  port: number,
+  token: string,
+  savedAlert: string,
+  openAlert: string
+): string {
   const safePort = port > 0 ? port : 41731;
   const safeToken = (token || '').replace(/['"\\]/g, '');
-  return `javascript:(function(){var t=(window.getSelection&&window.getSelection().toString())||'';fetch('http://127.0.0.1:${safePort}/clip',{method:'POST',headers:{'Content-Type':'application/json','X-Kapsula-Token':'${safeToken}'},body:JSON.stringify({url:location.href,title:document.title,text:t||document.title})}).then(function(){alert('Сохранено в Kapsula');}).catch(function(){alert('Открой Kapsula на компьютере');});})();`;
+  const safeSaved = savedAlert.replace(/['"\\]/g, '');
+  const safeOpen = openAlert.replace(/['"\\]/g, '');
+  return `javascript:(function(){var t=(window.getSelection&&window.getSelection().toString())||'';fetch('http://127.0.0.1:${safePort}/clip',{method:'POST',headers:{'Content-Type':'application/json','X-Kapsula-Token':'${safeToken}'},body:JSON.stringify({url:location.href,title:document.title,text:t||document.title})}).then(function(){alert('${safeSaved}');}).catch(function(){alert('${safeOpen}');});})();`;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -122,10 +140,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onVaultChanged,
   onRecoveryKeyVisibleChange,
 }) => {
+  const { t, locale, dateLocale, pluralNoun, formatCurrencyUsd } = useI18n();
   const isMac = isMacPlatform(window.kapsula?.platform ?? 'win32');
   const [tab, setTab] = useState<Exclude<SettingsTab, 'general'>>(() => normalizeTab(initialTab));
   const [appearance, setAppearance] = useState<AppearanceConfig>(() => getSavedAppearance());
   const [hexDraft, setHexDraft] = useState<string>(() => getSavedAppearance().accentHex);
+  const [hiddenNavSections, setHiddenNavSections] = useState<HideableNavSection[]>(readHiddenNavSections);
+
+  useEffect(() => {
+    const syncPrefs = () => {
+      setHiddenNavSections(readHiddenNavSections());
+    };
+    window.addEventListener(SIDEBAR_PREFS_EVENT, syncPrefs);
+    window.addEventListener('storage', syncPrefs);
+    return () => {
+      window.removeEventListener(SIDEBAR_PREFS_EVENT, syncPrefs);
+      window.removeEventListener('storage', syncPrefs);
+    };
+  }, []);
 
   const [budget, setBudget] = useState<BudgetSummary | null>(null);
   const [cloudQuota, setCloudQuota] = useState<CloudAiQuotaStatus | null>(null);
@@ -223,7 +255,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   }, [open, initialTab]);
 
+  const accentPresets = useMemo(() => getAccentPresets(locale), [locale]);
   const theme: ThemeMode = settings?.theme ?? 'dark';
+  const bgPresets = useMemo(
+    () => (theme === 'dark' ? getDarkBgPresets(locale) : getLightBgPresets(locale)),
+    [theme, locale]
+  );
 
   const computedPreview = useMemo(
     () => computeThemeTokens(theme, appearance),
@@ -250,7 +287,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const next = await window.kapsula.updateSettings(delta);
       onSettingsUpdated(next);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить настройку.'));
+      toast.error(friendlyErrorMessage(err, t('settings.saveErr'), locale));
     }
   };
 
@@ -264,7 +301,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
     setAppearance(applied);
     if (applied.accentMode === 'preset') {
-      const p = ACCENT_PRESETS.find((x) => x.id === applied.accentPreset);
+      const p = accentPresets.find((x) => x.id === applied.accentPreset);
       if (p) setHexDraft(theme === 'light' ? p.swatchLight : p.swatchDark);
     }
   };
@@ -276,7 +313,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const next = await window.kapsula.setApiKey(keyProviderTarget, cleaned);
     onSettingsUpdated(next);
     setApiKeyDraft('');
-    toast.success('Ключ сохранён и зашифрован на устройстве');
+    toast.success(t('settings.ai.keySavedToast'));
     window.kapsula.getBudget().then(setBudget).catch(() => {});
     refreshCloudQuota();
   };
@@ -291,7 +328,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (res.ok) toast.success(res.message);
       else toast.error(res.message);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Ошибка проверки ключа.'));
+      toast.error(friendlyErrorMessage(err, t('settings.ai.keyTestErr'), locale));
     } finally {
       setTestingKey(false);
     }
@@ -301,7 +338,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     const clean = pinDraft.trim();
     if (clean.length < 4) {
-      toast.info('Придумай мастер-код минимум из 4 символов');
+      toast.info(t('settings.security.pinMinError'));
       return;
     }
     setPinSaving(true);
@@ -310,7 +347,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const next = await window.kapsula.getSettings();
       onSettingsUpdated(next);
       setPinDraft('');
-      toast.success('Мастер-код для Сейфа установлен');
+      toast.success(t('settings.security.pinSetToast'));
     } finally {
       setPinSaving(false);
     }
@@ -319,7 +356,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleModalOpenChange = (nextOpen: boolean) => {
     if (!nextOpen && freshRecoveryKey) {
       setTab('sync');
-      toast.info('Сначала скопируй резервный ключ и нажми «Готово, я сохранил»');
+      toast.info(t('settings.saveRecoveryFirst'));
       return;
     }
     onOpenChange(nextOpen);
@@ -333,16 +370,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     await patch({ theme: nextTheme });
   };
 
-  const bgPresets = theme === 'dark' ? DARK_BG_PRESETS : LIGHT_BG_PRESETS;
-
   const handleCopyDiagnostics = async () => {
     setDiagCopying(true);
     try {
       const report = await window.kapsula.getDiagnosticsReport();
       await window.kapsula.copyText(report);
-      toast.success('Диагностика скопирована — можно отправить разработчику');
+      toast.success(t('settings.diag.copiedToast'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось собрать диагностику.'));
+      toast.error(friendlyErrorMessage(err, t('settings.diag.errToast'), locale));
     } finally {
       setDiagCopying(false);
     }
@@ -353,14 +388,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const next = await window.kapsula.checkForUpdates();
       setUpdaterState(next);
       if (next.status === 'available' && next.latestVersion) {
-        toast.success(`Доступна новая версия v${next.latestVersion}`);
+        toast.success(t('settings.updates.availableToast', { version: next.latestVersion }));
       } else if (next.status === 'up-to-date') {
-        toast.success('У тебя установлена последняя версия Kapsula');
+        toast.success(t('settings.updates.upToDateToast'));
       } else if (next.status === 'error' && next.error) {
         toast.error(next.error);
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось проверить обновления.'));
+      toast.error(friendlyErrorMessage(err, t('settings.updates.checkErr'), locale));
     }
   };
 
@@ -374,10 +409,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const next = await window.kapsula.downloadUpdate();
       setUpdaterState(next);
       if (next.mode === 'manual-download') {
-        toast.success(isMac ? 'Открываю загрузку образа для Mac в браузере' : 'Открываю загрузку обновления в браузере');
+        toast.success(isMac ? t('settings.updates.openingMac') : t('settings.updates.openingWin'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось загрузить обновление.'));
+      toast.error(friendlyErrorMessage(err, t('settings.updates.downloadErr'), locale));
     }
   };
 
@@ -392,14 +427,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (res.importedCount === 0 && res.skippedCount === 0 && (!res.errors || res.errors.length === 0)) {
         return;
       }
-      const parts = [`Импортировано: ${res.importedCount}`];
-      if (res.orbitsCreated > 0) parts.push(`разделов: ${res.orbitsCreated}`);
-      if (res.skippedCount > 0) parts.push(`пропущено дублей: ${res.skippedCount}`);
+      const parts = [t('settings.integrations.importedSummary', { imported: res.importedCount })];
+      if (res.orbitsCreated > 0) {
+        parts.push(t('settings.integrations.importedOrbits', { count: res.orbitsCreated }));
+      }
+      if (res.skippedCount > 0) {
+        parts.push(t('settings.integrations.importedSkipped', { count: res.skippedCount }));
+      }
       toast.success(res.importedCount > 0 ? parts.join(' · ') : emptyMsg);
       onVaultChanged?.();
       window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось выполнить импорт.'));
+      toast.error(friendlyErrorMessage(err, t('settings.integrations.importErr'), locale));
     } finally {
       setImportBusy(null);
     }
@@ -410,8 +449,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       open={open}
       onOpenChange={handleModalOpenChange}
       topAligned
-      title="Настройки Kapsula"
-      subtitle="Внешний вид, облачная синхронизация, защита Сейфа, ИИ и интеграции"
+      title={t('settings.title')}
+      subtitle={t('settings.subtitle')}
       maxWidthClass="max-w-[860px]"
     >
       <div className="px-5 pt-3.5 pb-5 flex flex-col gap-4">
@@ -421,34 +460,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           size="sm"
           fullWidth
           options={[
-            { value: 'appearance', label: 'Внешний вид', icon: <Palette className="w-3.5 h-3.5" /> },
-            { value: 'sync', label: 'Синхронизация', icon: <CloudCheck className="w-3.5 h-3.5" /> },
-            { value: 'security', label: 'Безопасность', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
-            { value: 'ai', label: 'ИИ', icon: <Cpu className="w-3.5 h-3.5" /> },
-            { value: 'integrations', label: 'Интеграции', icon: <PlugsConnected className="w-3.5 h-3.5" /> },
-            { value: 'data', label: 'Данные', icon: <Database className="w-3.5 h-3.5" /> },
-            { value: 'shortcuts', label: 'Клавиши', icon: <Keyboard className="w-3.5 h-3.5" /> },
+            { value: 'appearance', label: t('settings.tab.appearance'), icon: <Palette className="w-3.5 h-3.5" /> },
+            { value: 'sync', label: t('settings.tab.sync'), icon: <CloudCheck className="w-3.5 h-3.5" /> },
+            { value: 'security', label: t('settings.tab.security'), icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+            { value: 'ai', label: t('settings.tab.ai'), icon: <Cpu className="w-3.5 h-3.5" /> },
+            { value: 'integrations', label: t('settings.tab.integrations'), icon: <PlugsConnected className="w-3.5 h-3.5" /> },
+            { value: 'data', label: t('settings.tab.data'), icon: <Database className="w-3.5 h-3.5" /> },
+            { value: 'shortcuts', label: t('settings.tab.shortcuts'), icon: <Keyboard className="w-3.5 h-3.5" /> },
           ]}
         />
 
         {/* Fixed-height tab body prevents modal jumping when switching sections */}
         <div className="h-[460px] overflow-y-auto k-scroll-stable pr-1 flex flex-col gap-3">
-          {/* 1. ВНЕШНИЙ ВИД */}
+          {/* 1. APPEARANCE */}
           {tab === 'appearance' ? (
             <>
+              <div
+                data-testid="settings-language-card"
+                className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3"
+              >
+                <div>
+                  <div className="text-[13.5px] font-medium">{t('lang.label')}</div>
+                  <div className="text-[12px] text-[var(--k-ink-secondary)]">
+                    {t('lang.hint')}
+                  </div>
+                </div>
+                <div data-testid="settings-language-switcher">
+                  <SegmentedControl<AppLocale>
+                    value={locale}
+                    onChange={(nextLocale) => {
+                      if (nextLocale === locale) return;
+                      onSettingsUpdated({ ...settings, locale: nextLocale });
+                      void patch({ locale: nextLocale });
+                    }}
+                    options={[
+                      { value: 'ru', label: t('lang.name.ru') },
+                      { value: 'en', label: t('lang.name.en') },
+                    ]}
+                  />
+                </div>
+              </div>
+
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Тема оформления</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.appearance.themeTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Переключай тёмную и светлую палитру в один клик
+                    {t('settings.appearance.themeDesc')}
                   </div>
                 </div>
                 <SegmentedControl<ThemeMode>
                   value={theme}
                   onChange={(nextTheme) => void handleThemeSwitch(nextTheme)}
                   options={[
-                    { value: 'dark', label: 'Тёмная', icon: <Moon className="w-3.5 h-3.5" /> },
-                    { value: 'light', label: 'Светлая', icon: <Sun className="w-3.5 h-3.5" /> },
+                    { value: 'dark', label: t('onboarding.step2.dark'), icon: <Moon className="w-3.5 h-3.5" /> },
+                    { value: 'light', label: t('onboarding.step2.light'), icon: <Sun className="w-3.5 h-3.5" /> },
                   ]}
                 />
               </div>
@@ -460,13 +525,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-[13.5px] font-medium">Акцентный цвет</div>
+                    <div className="text-[13.5px] font-medium">{t('settings.appearance.accentTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                      Цвет кнопок, выделений и активных вкладок с автоподбором контраста
+                      {t('settings.appearance.accentDesc')}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0" data-testid="accent-preset-picker">
-                    {ACCENT_PRESETS.map((preset) => {
+                    {accentPresets.map((preset) => {
                       const active =
                         appearance.accentMode === 'preset' && appearance.accentPreset === preset.id;
                       const swatch = theme === 'light' ? preset.swatchLight : preset.swatchDark;
@@ -489,9 +554,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               { immediate: true }
                             );
                           }}
-                          className={`k-interactive w-6 h-6 rounded-full cursor-pointer transition-transform ${
+                          className={`k-interactive w-[22px] h-[22px] rounded-full cursor-pointer transition-transform ${
                             active
-                              ? 'scale-110 ring-2 ring-[var(--k-ink-primary)] ring-offset-2 ring-offset-[var(--k-bg-surface-2)]'
+                              ? 'ring-[1.5px] ring-[var(--k-ink-primary)] ring-offset-[1.5px] ring-offset-[var(--k-bg-surface-2)]'
                               : 'opacity-85 hover:opacity-100 hover:scale-105'
                           }`}
                           style={{ backgroundColor: swatch }}
@@ -505,7 +570,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] items-center gap-3 pt-1 border-t border-[var(--k-border-hairline)]">
                   <div className="flex flex-col gap-1.5">
                     <div className="flex items-center justify-between text-[11.5px] text-[var(--k-ink-secondary)]">
-                      <span>Свой оттенок акцента</span>
+                      <span>{t('settings.appearance.customAccent')}</span>
                       <span className="k-mono k-tabular text-[var(--k-ink-muted)]">{accentHue}°</span>
                     </div>
                     <input
@@ -514,7 +579,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       max={360}
                       step={1}
                       data-testid="accent-hue-slider"
-                      aria-label="Оттенок акцента"
+                      aria-label={t('settings.appearance.accentHueAria')}
                       value={accentHue}
                       onChange={(e) => {
                         const hue = Number(e.target.value);
@@ -557,7 +622,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           if (!norm) setHexDraft(computedPreview.accentHex);
                           else setHexDraft(norm);
                         }}
-                        aria-label="Код цвета HEX"
+                        aria-label={t('settings.appearance.hexAria')}
                         className="w-[74px] bg-transparent border-none outline-none k-mono text-[12px] text-[var(--k-ink-primary)]"
                       />
                     </div>
@@ -569,9 +634,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         color: computedPreview.inkOnAccent,
                       }}
                       className="h-8 px-3 rounded-lg inline-flex items-center gap-1.5 text-[12px] font-medium shadow-xs select-none"
-                      title={`Контраст текста: ${accentContrast.toFixed(1)}:1`}
+                      title={t('settings.appearance.contrastTitle', { ratio: accentContrast.toFixed(1) })}
                     >
-                      <span>Кнопка</span>
+                      <span>{t('settings.appearance.previewButton')}</span>
                       <span className="k-mono text-[10px] opacity-80">
                         {accentContrast.toFixed(1)}:1
                       </span>
@@ -587,9 +652,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-[13.5px] font-medium">Цвет фона и поверхностей</div>
+                    <div className="text-[13.5px] font-medium">{t('settings.appearance.bgTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                      Выбери готовую палитру или настрой тон, насыщенность и глубину вручную
+                      {t('settings.appearance.bgDesc')}
                     </div>
                   </div>
                   <button
@@ -598,14 +663,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onClick={() => {
                       const reset = resetSavedAppearance(theme);
                       setAppearance(reset);
-                      const p = ACCENT_PRESETS[0]!;
+                      const p = accentPresets[0]!;
                       setHexDraft(theme === 'light' ? p.swatchLight : p.swatchDark);
-                      toast.success('Оформление сброшено по умолчанию');
+                      toast.success(t('settings.appearance.resetToast'));
                     }}
                     className="k-interactive inline-flex items-center gap-1.5 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer shrink-0"
                   >
                     <ArrowCounterClockwise className="w-3.5 h-3.5" />
-                    <span>Сбросить по умолчанию</span>
+                    <span>{t('settings.appearance.resetDefault')}</span>
                   </button>
                 </div>
 
@@ -613,7 +678,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" data-testid="bg-preset-picker">
                   {bgPresets.map((preset) => {
                     const active = appearance.bgPreset === preset.id;
-                    const displayLabel = preset.id === 'paper' ? 'Тёплая бумага' : preset.label;
+                    const displayLabel =
+                      preset.id === 'paper' ? t('onboarding.step2.paperWarm') : preset.label;
                     return (
                       <button
                         key={preset.id}
@@ -678,17 +744,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/70 p-3 flex flex-col gap-2.5">
                   <div className="flex items-center justify-between text-[12px]">
                     <span className="font-medium text-[var(--k-ink-primary)]">
-                      Свой цвет фона
+                      {t('settings.appearance.customBgTitle')}
                     </span>
                     <span className="k-mono text-[11px] text-[var(--k-ink-muted)]">
-                      {appearance.bgPreset === 'custom' ? computedPreview.canvasHex : 'Пресет'}
+                      {appearance.bgPreset === 'custom'
+                        ? computedPreview.canvasHex
+                        : t('settings.appearance.presetBadge')}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <label className="flex flex-col gap-1.5">
                       <span className="flex items-center justify-between text-[11.5px] text-[var(--k-ink-secondary)]">
-                        <span>Оттенок</span>
+                        <span>{t('settings.appearance.hue')}</span>
                         <span className="k-mono k-tabular text-[var(--k-ink-muted)]">
                           {Math.round(appearance.bgHue)}°
                         </span>
@@ -713,7 +781,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <label className="flex flex-col gap-1.5">
                       <span className="flex items-center justify-between text-[11.5px] text-[var(--k-ink-secondary)]">
-                        <span>Насыщенность тона</span>
+                        <span>{t('settings.appearance.saturation')}</span>
                         <span className="k-mono k-tabular text-[var(--k-ink-muted)]">
                           {Math.round(appearance.bgTint)}%
                         </span>
@@ -741,7 +809,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <label className="flex flex-col gap-1.5">
                       <span className="flex items-center justify-between text-[11.5px] text-[var(--k-ink-secondary)]">
-                        <span>Глубина / яркость</span>
+                        <span>{t('settings.appearance.lightness')}</span>
                         <span className="k-mono k-tabular text-[var(--k-ink-muted)]">
                           {Math.round(appearance.bgLightness)}%
                         </span>
@@ -775,9 +843,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Плотность интерфейса</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.appearance.densityTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Воздушные карточки или больше записей на одном экране
+                    {t('settings.appearance.densityDesc')}
                   </div>
                 </div>
                 <SegmentedControl<UiDensity>
@@ -786,15 +854,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     applyAppearanceChange({ ...appearance, density }, { immediate: true })
                   }
                   options={[
-                    { value: 'comfortable', label: 'Просторно' },
-                    { value: 'compact', label: 'Компактно' },
+                    { value: 'comfortable', label: t('settings.appearance.comfortable') },
+                    { value: 'compact', label: t('settings.appearance.compact') },
                   ]}
                 />
+              </div>
+
+              <div
+                data-testid="appearance-sidebar-sections-card"
+                className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3 flex flex-col gap-2.5"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[13.5px] font-medium">{t('nav.customizeSidebar')}</div>
+                    <div className="text-[12px] text-[var(--k-ink-secondary)]">
+                      {t('nav.customizeSidebarDesc')}
+                    </div>
+                  </div>
+                  {hiddenNavSections.length > 0 ? (
+                    <button
+                      type="button"
+                      data-testid="settings-sidebar-show-all"
+                      onClick={() => setHiddenNavSections(writeHiddenNavSections([]))}
+                      className="text-[12px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer shrink-0"
+                    >
+                      {t('nav.showAllSidebar')}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {HIDEABLE_NAV_SECTIONS.map((sec) => {
+                    const visible = !hiddenNavSections.includes(sec);
+                    return (
+                      <button
+                        key={sec}
+                        type="button"
+                        data-testid={`settings-sidebar-toggle-${sec}`}
+                        onClick={() => {
+                          const next = hiddenNavSections.includes(sec)
+                            ? hiddenNavSections.filter((s) => s !== sec)
+                            : [...hiddenNavSections, sec];
+                          setHiddenNavSections(writeHiddenNavSections(next));
+                        }}
+                        className={`k-interactive inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer ${
+                          visible
+                            ? 'border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)]'
+                            : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-secondary)]'
+                        }`}
+                      >
+                        <Check
+                          weight="bold"
+                          className={`w-3.5 h-3.5 ${visible ? 'text-[var(--k-accent)] opacity-100' : 'opacity-25'}`}
+                        />
+                        <span>{t(HIDEABLE_SECTION_LABEL_KEYS[sec])}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </>
           ) : null}
 
-          {/* 2. СИНХРОНИЗАЦИЯ */}
+          {/* 2. SYNC */}
           {tab === 'sync' ? (
             <SyncSettingsPanel
               onVaultChanged={onVaultChanged}
@@ -804,7 +925,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
           ) : null}
 
-          {/* 3. БЕЗОПАСНОСТЬ */}
+          {/* 3. SECURITY */}
           {tab === 'security' ? (
             <>
               <form
@@ -813,11 +934,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-[13.5px] font-medium">Мастер-код для Сейфа</div>
+                    <div className="text-[13.5px] font-medium">{t('settings.security.pinTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
                       {settings.hasMasterPin
-                        ? 'Защита включена — без кода карты, пароли, ключи и 2FA скрыты'
-                        : 'Дополнительная блокировка карт, паролей, ключей и 2FA-кодов'}
+                        ? t('settings.security.pinEnabledDesc')
+                        : t('settings.security.pinDisabledDesc')}
                     </div>
                   </div>
                   {settings.hasMasterPin ? (
@@ -827,11 +948,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         await window.kapsula.setMasterPin(null);
                         const next = await window.kapsula.getSettings();
                         onSettingsUpdated(next);
-                        toast.success('Мастер-код отключён');
+                        toast.success(t('settings.security.pinDisabledToast'));
                       }}
                       className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-danger)] cursor-pointer"
                     >
-                      Снять код
+                      {t('settings.security.pinRemoveBtn')}
                     </button>
                   ) : null}
                 </div>
@@ -843,8 +964,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onChange={(e) => setPinDraft(e.target.value)}
                     placeholder={
                       settings.hasMasterPin
-                        ? 'Новый код (от 4 символов)'
-                        : 'Задать код (от 4 символов)'
+                        ? t('settings.security.pinNewPlaceholder')
+                        : t('settings.security.pinSetPlaceholder')
                     }
                     className="flex-1 h-9 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[13px] outline-none focus:border-[var(--k-border-focus)]"
                   />
@@ -853,36 +974,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     disabled={pinSaving || pinDraft.trim().length < 4}
                     className="k-interactive h-9 px-3.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                   >
-                    Сохранить
+                    {t('common.save')}
                   </button>
                 </div>
               </form>
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Автоблокировка Сейфа</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.security.autoLockTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Через сколько минут бездействия автоматически закрывать Сейф
+                    {t('settings.security.autoLockDesc')}
                   </div>
                 </div>
                 <SelectMenu
                   value={String(settings.vaultAutoLockMinutes ?? 5)}
                   onChange={(v) => void patch({ vaultAutoLockMinutes: Number(v) })}
                   options={[
-                    { value: '1', label: '1 мин' },
-                    { value: '5', label: '5 мин' },
-                    { value: '15', label: '15 мин' },
-                    { value: '30', label: '30 мин' },
-                    { value: '0', label: 'Выкл' },
+                    { value: '1', label: t('settings.security.autoLock1') },
+                    { value: '5', label: t('settings.security.autoLock5') },
+                    { value: '15', label: t('settings.security.autoLock15') },
+                    { value: '30', label: t('settings.security.autoLock30') },
+                    { value: '0', label: t('settings.security.autoLock0') },
                   ]}
                 />
               </div>
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Блокировать Сейф при сворачивании окна</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.security.lockMinimizeTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Сразу скрывает расшифрованные данные, когда ты сворачиваешь Kapsula
+                    {t('settings.security.lockMinimizeDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -893,9 +1014,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Блокировать после закрытия быстрой панели</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.security.lockHudTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Закрывает доступ к Сейфу сразу после скрытия быстрого поиска
+                    {t('settings.security.lockHudDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -907,10 +1028,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
                   <div className="text-[13.5px] font-medium">
-                    Защита Сейфа от записи экрана и скриншотов
+                    {t('settings.security.screenShieldTitle')}
                   </div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Скрывает окно на скриншотах только когда открыт Сейф или ключ восстановления
+                    {t('settings.security.screenShieldDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -919,7 +1040,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     try {
                       await patch({ enableScreenProtection: enabled });
                     } catch (err) {
-                      toast.error(friendlyErrorMessage(err));
+                      toast.error(friendlyErrorMessage(err, undefined, locale));
                     }
                   }}
                 />
@@ -931,12 +1052,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Fingerprint className="w-4.5 h-4.5 text-[var(--k-accent)] mt-0.5 shrink-0" />
                     <div>
                       <div className="text-[13.5px] font-medium">
-                        {isMac ? 'Touch ID для входа в Сейф' : 'Биометрия для входа в Сейф'}
+                        {isMac ? t('settings.security.touchIdTitle') : t('settings.security.biometricTitle')}
                       </div>
                       <div className="text-[12px] text-[var(--k-ink-secondary)]">
                         {settings.hasMasterPin
-                          ? 'Открывать Сейф отпечатком пальца или системной проверкой вместо ввода кода'
-                          : 'Сначала задай мастер-код выше, чтобы включить вход по отпечатку'}
+                          ? t('settings.security.biometricEnabledDesc')
+                          : t('settings.security.biometricDisabledDesc')}
                       </div>
                     </div>
                   </div>
@@ -949,7 +1070,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         const next = await window.kapsula.updateSettings({ biometricUnlockEnabled });
                         onSettingsUpdated(next);
                       } catch (err) {
-                        toast.error(friendlyErrorMessage(err));
+                        toast.error(friendlyErrorMessage(err, undefined, locale));
                       }
                     }}
                   />
@@ -958,26 +1079,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Автоочистка буфера обмена</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.security.clipWipeTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Через сколько секунд стирать скопированный пароль, карту или CVV
+                    {t('settings.security.clipWipeDesc')}
                   </div>
                 </div>
                 <SelectMenu
                   value={String(settings.clipboardAutoWipeSeconds)}
                   onChange={(v) => void patch({ clipboardAutoWipeSeconds: Number(v) })}
                   options={[
-                    { value: '15', label: '15 секунд' },
-                    { value: '30', label: '30 секунд' },
-                    { value: '60', label: '60 секунд' },
-                    { value: '0', label: 'Не очищать' },
+                    { value: '15', label: t('settings.security.wipe15') },
+                    { value: '30', label: t('settings.security.wipe30') },
+                    { value: '60', label: t('settings.security.wipe60') },
+                    { value: '0', label: t('settings.security.wipe0') },
                   ]}
                 />
               </div>
             </>
           ) : null}
 
-          {/* 4. ИИ */}
+          {/* 4. AI */}
           {tab === 'ai' ? (
             <>
               {/* Shared Built-In Kapsula AI Card */}
@@ -991,18 +1112,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <Sparkle weight="duotone" className="w-4.5 h-4.5" />
                     </div>
                     <div>
-                      <div className="text-[13.5px] font-semibold">Встроенный ИИ Kapsula</div>
+                      <div className="text-[13.5px] font-semibold">
+                        {settings.hasGoogleAiKey || settings.hasOpenRouterKey || cloudQuota?.usingPersonalKey
+                          ? t('settings.ai.customActiveTitle')
+                          : t('settings.ai.builtInTitle')}
+                      </div>
                       {settings.hasGoogleAiKey || settings.hasOpenRouterKey || cloudQuota?.usingPersonalKey ? (
                         <div className="text-[12px] text-[var(--k-emerald)] mt-0.5 font-medium">
-                          Работает через твой личный ключ (без лимита Kapsula)
+                          {t('settings.ai.personalKeyNote')}
                         </div>
                       ) : cloudQuota?.signedIn ? (
                         <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-                          Разбор картинок, расшифровка голоса, ассистент и сортировка работают сразу без настройки ключей.
+                          {t('settings.ai.builtInSignedInDesc')}
                         </div>
                       ) : (
                         <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
-                          Войди в аккаунт во вкладке «Синхронизация», чтобы бесплатно пользоваться встроенным ИИ (лимит $1/мес)
+                          {t('settings.ai.builtInSignedOutDesc')}
                         </div>
                       )}
                     </div>
@@ -1013,7 +1138,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         type="button"
                         disabled={quotaLoading}
                         onClick={refreshCloudQuota}
-                        title="Обновить остаток лимита"
+                        title={t('settings.ai.refreshQuotaTitle')}
                         className="k-interactive w-8 h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50"
                       >
                         <ArrowsClockwise className={`w-3.5 h-3.5 ${quotaLoading ? 'animate-spin' : ''}`} />
@@ -1024,7 +1149,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onClick={() => setTab('sync')}
                         className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0"
                       >
-                        Войти в аккаунт
+                        {t('settings.ai.signInBtn')}
                       </button>
                     )
                   ) : null}
@@ -1056,22 +1181,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-[var(--k-ink-secondary)] k-tabular">
                       <span>
-                        Потрачено {formatUsdRu(cloudQuota.spentUsd)} из {formatUsdRu(cloudQuota.limitUsd)} в этом месяце · осталось{' '}
-                        <strong className="text-[var(--k-ink-primary)]">
-                          {formatUsdRu(cloudQuota.remainingUsd)}
-                        </strong>
+                        {t('settings.ai.quotaSpent', {
+                          spent: formatCurrencyUsd(cloudQuota.spentUsd),
+                          limit: formatCurrencyUsd(cloudQuota.limitUsd),
+                          remaining: formatCurrencyUsd(cloudQuota.remainingUsd),
+                        })}
                       </span>
                       {cloudQuota.requestCount > 0 ? (
                         <span className="text-[11px] text-[var(--k-ink-muted)]">
-                          Запросов: {cloudQuota.requestCount}
+                          {t('settings.ai.quotaRequests', { count: cloudQuota.requestCount })}
                         </span>
                       ) : null}
                     </div>
                     {cloudQuota.blocked || cloudQuota.globalExhausted || cloudQuota.remainingUsd <= 0 ? (
                       <div className="text-[11.5px] text-[var(--k-amber)]">
                         {cloudQuota.globalExhausted
-                          ? 'Общий месячный лимит встроенного ИИ исчерпан — добавь свой ключ ниже или дождись 1-го числа.'
-                          : 'Месячный лимит встроенного ИИ исчерпан — добавь свой ключ ниже или дождись 1-го числа.'}
+                          ? t('settings.ai.quotaGlobalExhausted')
+                          : t('settings.ai.quotaUserExhausted')}
                       </div>
                     ) : cloudQuota.error ? (
                       <div className="text-[11.5px] text-[var(--k-ink-muted)]">{cloudQuota.error}</div>
@@ -1083,16 +1209,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-[13.5px] font-medium">Режим умной обработки</div>
+                    <div className="text-[13.5px] font-medium">{t('settings.ai.modeTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                      Для разбора картинок, расшифровки голоса, «Разобрать» и «Свести в заметку»
+                      {t('settings.ai.modeDesc')}
                     </div>
                   </div>
                   <SelectMenu
                     value={settings.aiProvider}
                     onChange={(val) => void patch({ aiProvider: val as AiProvider })}
                     options={[
-                      { value: 'local', label: 'Только на устройстве' },
+                      { value: 'local', label: t('settings.ai.modeLocal') },
                       { value: 'google_ai_studio', label: 'Google Gemini' },
                       { value: 'openrouter', label: 'OpenRouter' },
                     ]}
@@ -1105,14 +1231,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       weight="fill"
                       className={`w-3.5 h-3.5 ${settings.hasGoogleAiKey ? 'text-[var(--k-emerald)]' : 'text-[var(--k-ink-muted)]'}`}
                     />
-                    Свой ключ Gemini: {settings.hasGoogleAiKey ? 'подключён' : 'не задан'}
+                    {t('settings.ai.geminiStatus', {
+                      status: settings.hasGoogleAiKey ? t('settings.ai.keyConnected') : t('settings.ai.keyUnset'),
+                    })}
                   </span>
                   <span className="inline-flex items-center gap-1.5">
                     <CheckCircle
                       weight="fill"
                       className={`w-3.5 h-3.5 ${settings.hasOpenRouterKey ? 'text-[var(--k-emerald)]' : 'text-[var(--k-ink-muted)]'}`}
                     />
-                    Свой ключ OpenRouter: {settings.hasOpenRouterKey ? 'подключён' : 'не задан'}
+                    {t('settings.ai.openRouterStatus', {
+                      status: settings.hasOpenRouterKey ? t('settings.ai.keyConnected') : t('settings.ai.keyUnset'),
+                    })}
                   </span>
                 </div>
               </div>
@@ -1124,7 +1254,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1.5 text-[13px] font-medium">
                     <Key className="w-4 h-4 text-[var(--k-accent)]" />
-                    Свой ключ (необязательно — для работы без лимита)
+                    {t('settings.ai.customKeyTitle')}
                   </span>
                   <SegmentedControl<'google_ai_studio' | 'openrouter'>
                     value={keyProviderTarget}
@@ -1140,7 +1270,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="password"
                     value={apiKeyDraft}
                     onChange={(e) => setApiKeyDraft(e.target.value)}
-                    placeholder="Вставь свой ключ Gemini или OpenRouter…"
+                    placeholder={t('settings.ai.customKeyPlaceholder')}
                     className="flex-1 h-9 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[13px] outline-none focus:border-[var(--k-border-focus)]"
                   />
                   <button
@@ -1149,24 +1279,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onClick={() => void handleTestKey()}
                     className="k-interactive h-9 px-3 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] text-[12px] font-medium hover:border-[var(--k-ink-secondary)] cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:border-[var(--k-border-hairline)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
                   >
-                    {testingKey ? 'Проверка…' : 'Проверить'}
+                    {testingKey ? t('settings.ai.testing') : t('settings.ai.testBtn')}
                   </button>
                   <button
                     type="submit"
                     disabled={!apiKeyDraft.trim()}
                     className="k-interactive h-9 px-3.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
                   >
-                    Сохранить
+                    {t('common.save')}
                   </button>
                   {(keyProviderTarget === 'google_ai_studio' && settings.hasGoogleAiKey) ||
                   (keyProviderTarget === 'openrouter' && settings.hasOpenRouterKey) ? (
                     <button
                       type="button"
-                      title="Удалить сохранённый ключ"
+                      title={t('settings.ai.deleteKeyTitle')}
                       onClick={async () => {
                         const next = await window.kapsula.setApiKey(keyProviderTarget, '');
                         onSettingsUpdated(next);
-                        toast.success('Ключ удалён');
+                        toast.success(t('settings.ai.keyDeletedToast'));
                         refreshCloudQuota();
                       }}
                       className="k-interactive w-9 h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-danger)] inline-flex items-center justify-center cursor-pointer"
@@ -1181,9 +1311,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-2">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-[13px] font-medium">Месячный лимит для своего ключа</div>
+                      <div className="text-[13px] font-medium">{t('settings.ai.capTitle')}</div>
                       <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                        Защита от лишних трат по личному ключу — после лимита обработка переходит в локальный режим
+                        {t('settings.ai.capDesc')}
                       </div>
                     </div>
                     <SelectMenu
@@ -1191,17 +1321,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value={String(settings.monthlyCapUsd)}
                       onChange={(v) => void patch({ monthlyCapUsd: Number(v) })}
                       options={[
-                        { value: '0.5', label: '$0.50 / мес' },
-                        { value: '1.5', label: '$1.50 / мес' },
-                        { value: '3', label: '$3.00 / мес' },
-                        { value: '5', label: '$5.00 / мес' },
-                        { value: '10', label: '$10.00 / мес' },
+                        { value: '0.5', label: t('settings.ai.capPerMonth', { amount: '0.50' }) },
+                        { value: '1.5', label: t('settings.ai.capPerMonth', { amount: '1.50' }) },
+                        { value: '3', label: t('settings.ai.capPerMonth', { amount: '3.00' }) },
+                        { value: '5', label: t('settings.ai.capPerMonth', { amount: '5.00' }) },
+                        { value: '10', label: t('settings.ai.capPerMonth', { amount: '10.00' }) },
                       ]}
                     />
                   </div>
                   {budget ? (
                     <div className="text-[12px] text-[var(--k-ink-secondary)] k-tabular">
-                      Потрачено по своему ключу в этом месяце: ${budget.spentUsd.toFixed(4)} из ${budget.capUsd.toFixed(2)}
+                      {t('settings.ai.capSpentLine', {
+                        spent: budget.spentUsd.toFixed(4),
+                        cap: budget.capUsd.toFixed(2),
+                      })}
                     </div>
                   ) : null}
                 </div>
@@ -1209,7 +1342,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </>
           ) : null}
 
-          {/* 5. ИНТЕГРАЦИИ (Google Calendar, Browser Extension, Email -> Kapsula, Importers — ZERO legacy Telegram MTProto) */}
+          {/* 5. INTEGRATIONS */}
           {tab === 'integrations' ? (
             <>
               {/* 1. Google Calendar + 1-click .ics import/export */}
@@ -1217,12 +1350,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <CalendarBlank weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)]" />
-                    <span className="text-[13.5px] font-semibold">Google Календарь и файлы .ics</span>
+                    <span className="text-[13.5px] font-semibold">{t('settings.integrations.calTitle')}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {calStatus?.lastSyncAt ? (
                       <span className="px-2 py-0.5 rounded-full bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[11px] text-[var(--k-ink-muted)] k-tabular">
-                        Обновлено: {formatSyncTimestamp(calStatus.lastSyncAt)}
+                        {t('settings.integrations.updatedAt', {
+                          when: formatSyncTimestamp(calStatus.lastSyncAt, t, dateLocale),
+                        })}
                       </span>
                     ) : null}
                     <span
@@ -1230,7 +1365,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         calStatus?.connected ? 'text-[var(--k-emerald)]' : 'text-[var(--k-ink-muted)]'
                       }`}
                     >
-                      {calStatus?.connected ? calStatus.email || 'Подключён' : 'Не подключён'}
+                      {calStatus?.connected
+                        ? calStatus.email || t('settings.integrations.connected')
+                        : t('settings.integrations.notConnected')}
                     </span>
                   </div>
                 </div>
@@ -1238,7 +1375,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {!calStatus?.connected && !showGcalSetup ? (
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                      Синхронизируй встречи с Google Календарём в один клик или переноси расписание через файлы .ics
+                      {t('settings.integrations.calDesc')}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                       {calStatus?.builtInOAuthAvailable ? (
@@ -1252,24 +1389,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               try {
                                 const st = await window.kapsula.connectGoogleCalendar();
                                 setCalStatus(st);
-                                toast.success('Google Календарь подключён');
+                                toast.success(t('settings.integrations.calConnectedToast'));
                                 onVaultChanged?.();
                               } catch (err) {
-                                toast.error(friendlyErrorMessage(err));
+                                toast.error(friendlyErrorMessage(err, undefined, locale));
                               } finally {
                                 setCalBusy(false);
                               }
                             }}
                             className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-60"
                           >
-                            {calBusy ? 'Открываю браузер…' : 'Подключить Google Календарь'}
+                            {calBusy ? t('settings.integrations.calOpeningBrowser') : t('settings.integrations.calConnectBtn')}
                           </button>
                           <button
                             type="button"
                             onClick={() => setShowGcalSetup(true)}
                             className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                           >
-                            Ссылка .ics
+                            {t('settings.integrations.icsLinkBtn')}
                           </button>
                         </>
                       ) : (
@@ -1278,7 +1415,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => setShowGcalSetup(true)}
                           className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                         >
-                          Подключить Google
+                          {t('settings.integrations.calConnectGoogleShort')}
                         </button>
                       )}
                       <button
@@ -1287,32 +1424,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           try {
                             const r = await window.kapsula.importCalendarIcs();
                             if (r.imported > 0) {
-                              toast.success(`Импортировано событий: ${r.imported}`);
+                              toast.success(t('settings.integrations.eventsImported', { count: r.imported }));
                               onVaultChanged?.();
                             }
                           } catch (err) {
-                            toast.error(friendlyErrorMessage(err));
+                            toast.error(friendlyErrorMessage(err, undefined, locale));
                           }
                         }}
                         className="k-interactive inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] hover:border-[var(--k-border-strong)] cursor-pointer"
                       >
                         <UploadSimple className="w-3.5 h-3.5" />
-                        <span>Импорт .ics</span>
+                        <span>{t('settings.integrations.icsImport')}</span>
                       </button>
                       <button
                         type="button"
                         onClick={async () => {
                           try {
                             const r = await window.kapsula.exportCalendarIcs();
-                            if (r.path) toast.success(`Экспортировано событий: ${r.exported}`);
+                            if (r.path) toast.success(t('settings.integrations.eventsExported', { count: r.exported }));
                           } catch (err) {
-                            toast.error(friendlyErrorMessage(err));
+                            toast.error(friendlyErrorMessage(err, undefined, locale));
                           }
                         }}
                         className="k-interactive inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] hover:border-[var(--k-border-strong)] cursor-pointer"
                       >
                         <DownloadSimple className="w-3.5 h-3.5" />
-                        <span>Экспорт .ics</span>
+                        <span>{t('settings.integrations.icsExport')}</span>
                       </button>
                     </div>
                   </div>
@@ -1321,7 +1458,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {calStatus?.connected && calStatus.authMode !== 'ical' ? (
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                          Двусторонняя синхронизация активна{calStatus.email ? ` (${calStatus.email})` : ''}.
+                          {t('settings.integrations.calTwoWayActive')}
+                          {calStatus.email ? ` (${calStatus.email})` : ''}.
                         </div>
                         <button
                           type="button"
@@ -1332,11 +1470,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               const res = await window.kapsula.syncCalendarNow();
                               setCalStatus(res.status);
                               toast.success(
-                                `Синхронизировано: получено ${res.imported}, отправлено ${res.pushed}`
+                                t('settings.integrations.syncedDelta', {
+                                  imported: res.imported,
+                                  pushed: res.pushed,
+                                })
                               );
                               onVaultChanged?.();
                             } catch (err) {
-                              toast.error(friendlyErrorMessage(err));
+                              toast.error(friendlyErrorMessage(err, undefined, locale));
                             } finally {
                               setCalBusy(false);
                             }
@@ -1344,7 +1485,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-60"
                         >
                           <ArrowsClockwise className={`w-3.5 h-3.5 ${calBusy ? 'animate-spin' : ''}`} />
-                          <span>{calBusy ? 'Синхронизирую…' : 'Синхронизировать сейчас'}</span>
+                          <span>{calBusy ? t('settings.integrations.syncingNow') : t('settings.integrations.syncNowBtn')}</span>
                         </button>
                       </div>
                     ) : (
@@ -1352,7 +1493,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {calStatus?.builtInOAuthAvailable && !calStatus.connected ? (
                           <div className="flex items-center justify-between gap-2 pb-1">
                             <span className="text-[12px] text-[var(--k-ink-secondary)]">
-                              Двусторонняя синхронизация встреч в один клик:
+                              {t('settings.integrations.calTwoWayHint')}
                             </span>
                             <button
                               type="button"
@@ -1362,23 +1503,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 try {
                                   const st = await window.kapsula.connectGoogleCalendar();
                                   setCalStatus(st);
-                                  toast.success('Google Календарь подключён');
+                                  toast.success(t('settings.integrations.calConnectedToast'));
                                   onVaultChanged?.();
                                 } catch (err) {
-                                  toast.error(friendlyErrorMessage(err));
+                                  toast.error(friendlyErrorMessage(err, undefined, locale));
                                 } finally {
                                   setCalBusy(false);
                                 }
                               }}
                               className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0 disabled:opacity-60"
                             >
-                              {calBusy ? 'Открываю браузер…' : 'Подключить Google Календарь'}
+                              {calBusy ? t('settings.integrations.calOpeningBrowser') : t('settings.integrations.calConnectBtn')}
                             </button>
                           </div>
                         ) : null}
 
                         <div className="text-[11.5px] text-[var(--k-ink-secondary)]">
-                          Подключение по <strong>секретной ссылке календаря (.ics)</strong> из настроек Google Календаря:
+                          {t('settings.integrations.calIcalHint')}
                         </div>
                         <div className="flex items-center gap-2">
                           <input
@@ -1396,16 +1537,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 await window.kapsula.saveCalendarConfig({ icalUrl: gcalIcalDraft });
                                 const res = await window.kapsula.syncCalendarNow();
                                 setCalStatus(res.status);
-                                toast.success(`Загружено событий: ${res.imported}`);
+                                toast.success(t('settings.integrations.calLoadedCount', { count: res.imported }));
                               } catch (err) {
-                                toast.error(friendlyErrorMessage(err));
+                                toast.error(friendlyErrorMessage(err, undefined, locale));
                               } finally {
                                 setCalBusy(false);
                               }
                             }}
                             className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0 disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:cursor-default"
                           >
-                            Синхронизировать
+                            {t('settings.integrations.syncBtn')}
                           </button>
                         </div>
 
@@ -1418,14 +1559,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <CaretDown
                               className={`w-3 h-3 transition-transform duration-150 ${showCustomGcalClient ? 'rotate-180' : ''}`}
                             />
-                            <span>Свой идентификатор клиента (необязательно)</span>
+                            <span>{t('settings.integrations.calCustomClient')}</span>
                           </button>
                           {showCustomGcalClient ? (
                             <div className="flex items-center gap-2 mt-2">
                               <input
                                 value={gcalClientIdDraft}
                                 onChange={(e) => setGcalClientIdDraft(e.target.value)}
-                                placeholder="Свой идентификатор приложения Google…"
+                                placeholder={t('settings.integrations.calClientIdPlaceholder')}
                                 className="flex-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] k-mono text-[11.5px] outline-none"
                               />
                               <button
@@ -1436,16 +1577,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   try {
                                     const st = await window.kapsula.connectGoogleCalendar(gcalClientIdDraft);
                                     setCalStatus(st);
-                                    toast.success('Google Календарь подключён');
+                                    toast.success(t('settings.integrations.calConnectedToast'));
                                   } catch (err) {
-                                    toast.error(friendlyErrorMessage(err));
+                                    toast.error(friendlyErrorMessage(err, undefined, locale));
                                   } finally {
                                     setCalBusy(false);
                                   }
                                 }}
                                 className="k-interactive h-8 px-3 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] text-[12px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:cursor-default shrink-0"
                               >
-                                Войти через браузер
+                                {t('settings.integrations.calSignInBrowser')}
                               </button>
                             </div>
                           ) : null}
@@ -1460,25 +1601,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={async () => {
                             const r = await window.kapsula.importCalendarIcs();
                             if (r.imported > 0) {
-                              toast.success(`Импортировано событий: ${r.imported}`);
+                              toast.success(t('settings.integrations.eventsImported', { count: r.imported }));
                               onVaultChanged?.();
                             }
                           }}
                           className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] cursor-pointer"
                         >
                           <UploadSimple className="w-3.5 h-3.5" />
-                          <span>Импорт .ics</span>
+                          <span>{t('settings.integrations.icsImport')}</span>
                         </button>
                         <button
                           type="button"
                           onClick={async () => {
                             const r = await window.kapsula.exportCalendarIcs();
-                            if (r.path) toast.success(`Экспортировано событий: ${r.exported}`);
+                            if (r.path) toast.success(t('settings.integrations.eventsExported', { count: r.exported }));
                           }}
                           className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] cursor-pointer"
                         >
                           <DownloadSimple className="w-3.5 h-3.5" />
-                          <span>Экспорт .ics</span>
+                          <span>{t('settings.integrations.icsExport')}</span>
                         </button>
                       </div>
                       {calStatus?.connected ? (
@@ -1489,11 +1630,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             setCalStatus(st);
                             setGcalIcalDraft('');
                             setShowGcalSetup(false);
-                            toast.success('Календарь отключён');
+                            toast.success(t('settings.integrations.calDisconnectedToast'));
                           }}
                           className="k-interactive h-7.5 px-2.5 rounded-lg text-[12px] text-[var(--k-danger)] cursor-pointer"
                         >
-                          Отключить
+                          {t('settings.integrations.calDisconnect')}
                         </button>
                       ) : (
                         <button
@@ -1501,7 +1642,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => setShowGcalSetup(false)}
                           className="k-interactive h-7.5 px-2.5 rounded-lg text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                         >
-                          Свернуть
+                          {t('common.collapse')}
                         </button>
                       )}
                     </div>
@@ -1514,7 +1655,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Browser weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)]" />
-                    <span className="text-[13.5px] font-semibold">Расширение для браузера</span>
+                    <span className="text-[13.5px] font-semibold">{t('settings.integrations.extTitle')}</span>
                   </div>
                   <span
                     className={`inline-flex items-center gap-1.5 text-[11.5px] k-tabular ${
@@ -1529,20 +1670,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       }`}
                     />
                     {settings.clipperPort > 0
-                      ? `Локальный приёмник активен (порт ${settings.clipperPort})`
-                      : 'Локальный приёмник выключен'}
+                      ? t('settings.integrations.extActive', { port: settings.clipperPort })
+                      : t('settings.integrations.extOff')}
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11.5px] text-[var(--k-ink-secondary)]">
                   <div className="rounded-lg bg-[var(--k-bg-surface-1)]/70 border border-[var(--k-border-hairline)] px-2.5 py-2">
-                    <strong className="text-[var(--k-ink-primary)]">1.</strong> Открой папку расширения кнопкой ниже
+                    <strong className="text-[var(--k-ink-primary)]">1.</strong> {t('settings.integrations.extStep1')}
                   </div>
                   <div className="rounded-lg bg-[var(--k-bg-surface-1)]/70 border border-[var(--k-border-hairline)] px-2.5 py-2">
-                    <strong className="text-[var(--k-ink-primary)]">2.</strong> В Chrome / Edge открой «Расширения» → «Режим разработчика»
+                    <strong className="text-[var(--k-ink-primary)]">2.</strong> {t('settings.integrations.extStep2')}
                   </div>
                   <div className="rounded-lg bg-[var(--k-bg-surface-1)]/70 border border-[var(--k-border-hairline)] px-2.5 py-2">
-                    <strong className="text-[var(--k-ink-primary)]">3.</strong> Нажми «Загрузить распакованное» и выбери эту папку
+                    <strong className="text-[var(--k-ink-primary)]">3.</strong> {t('settings.integrations.extStep3')}
                   </div>
                 </div>
 
@@ -1553,17 +1694,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                   >
                     <FolderOpen className="w-3.5 h-3.5" />
-                    <span>Открыть папку расширения</span>
+                    <span>{t('settings.integrations.extOpenFolder')}</span>
                     <ArrowSquareOut className="w-3 h-3 opacity-80" />
                   </button>
                   <button
                     type="button"
                     data-testid="copy-bookmarklet-btn"
                     onClick={async () => {
-                      const code = buildBookmarkletCode(settings.clipperPort, settings.clipperToken);
+                      const code = buildBookmarkletCode(
+                        settings.clipperPort,
+                        settings.clipperToken,
+                        t('settings.integrations.bookmarkletSavedAlert'),
+                        t('settings.integrations.bookmarkletOpenAlert')
+                      );
                       await window.kapsula.copyText(code);
                       setCopiedBookmarklet(true);
-                      toast.success('Букмарклет скопирован — вставь его в закладки браузера');
+                      toast.success(t('settings.integrations.bookmarkletCopied'));
                       window.setTimeout(() => setCopiedBookmarklet(false), 2000);
                     }}
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] text-[12px] font-medium cursor-pointer"
@@ -1573,17 +1719,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     ) : (
                       <Copy className="w-3.5 h-3.5" />
                     )}
-                    <span>{copiedBookmarklet ? 'Скопировано' : 'Скопировать букмарклет'}</span>
+                    <span>
+                      {copiedBookmarklet ? t('common.copied') : t('settings.integrations.bookmarkletCopy')}
+                    </span>
                   </button>
                 </div>
               </div>
 
-              {/* 3. Email -> Kapsula (local .eml import — unlaunched inbound forwarding hidden cleanly) */}
+              {/* 3. Email -> Kapsula */}
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <EnvelopeSimple weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)]" />
-                    <span className="text-[13.5px] font-semibold">Почта → Kapsula</span>
+                    <span className="text-[13.5px] font-semibold">{t('settings.integrations.emailTitle')}</span>
                   </div>
                   <button
                     type="button"
@@ -1593,27 +1741,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       void runImport(
                         'eml',
                         () => window.kapsula.importEmlFiles(),
-                        'Новых писем для импорта не найдено'
+                        t('settings.integrations.noNewEmails')
                       )
                     }
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer disabled:opacity-60"
                   >
                     <UploadSimple className="w-3.5 h-3.5" />
-                    <span>{importBusy === 'eml' ? 'Импортирую…' : 'Импортировать письма (.eml)'}</span>
+                    <span>
+                      {importBusy === 'eml'
+                        ? t('settings.integrations.importing')
+                        : t('settings.integrations.importEml')}
+                    </span>
                   </button>
                 </div>
 
                 <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                  Файлы писем <span className="k-mono text-[11.5px]">.eml</span> можно также просто перетащить прямо в поле быстрого ввода — тема, текст и вложения сохранятся аккуратной заметкой.
+                  {t('settings.integrations.emlHint')}
                 </div>
               </div>
 
               {/* 4. Import from other apps: Obsidian/Markdown, Notion (.zip), Chat/Notes Archives */}
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-3">
                 <div>
-                  <div className="text-[13.5px] font-semibold">Импорт из других приложений</div>
+                  <div className="text-[13.5px] font-semibold">{t('settings.integrations.importTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Перенеси существующие базы заметок с сохранением структуры разделов и тегов
+                    {t('settings.integrations.importDesc')}
                   </div>
                 </div>
 
@@ -1626,17 +1778,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       void runImport(
                         'markdown',
                         () => window.kapsula.importMarkdownFolder(),
-                        'В выбранной папке не найдено новых Markdown-заметок'
+                        t('settings.integrations.noMdFound')
                       )
                     }
                     className="k-interactive flex flex-col items-start gap-1.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] p-3 text-left cursor-pointer disabled:opacity-55"
                   >
                     <BookOpen weight="duotone" className="w-5 h-5 text-[var(--k-accent)]" />
                     <div className="text-[12.5px] font-semibold text-[var(--k-ink-primary)]">
-                      {importBusy === 'markdown' ? 'Импортирую…' : 'Obsidian / Markdown'}
+                      {importBusy === 'markdown' ? t('settings.integrations.importing') : 'Obsidian / Markdown'}
                     </div>
                     <div className="text-[11px] text-[var(--k-ink-muted)] leading-snug">
-                      Папка с .md файлами, тегами и картинками
+                      {t('settings.integrations.mdDesc')}
                     </div>
                   </button>
 
@@ -1648,17 +1800,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       void runImport(
                         'notion',
                         () => window.kapsula.importNotionZip(),
-                        'В архиве Notion не найдено новых страниц'
+                        t('settings.integrations.noNotionFound')
                       )
                     }
                     className="k-interactive flex flex-col items-start gap-1.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] p-3 text-left cursor-pointer disabled:opacity-55"
                   >
                     <FileArchive weight="duotone" className="w-5 h-5 text-[var(--k-accent)]" />
                     <div className="text-[12.5px] font-semibold text-[var(--k-ink-primary)]">
-                      {importBusy === 'notion' ? 'Импортирую…' : 'Notion (.zip)'}
+                      {importBusy === 'notion' ? t('settings.integrations.importing') : 'Notion (.zip)'}
                     </div>
                     <div className="text-[11px] text-[var(--k-ink-muted)] leading-snug">
-                      Экспорт пространства Notion в формате Markdown & CSV
+                      {t('settings.integrations.notionDesc')}
                     </div>
                   </button>
 
@@ -1672,11 +1824,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         const r = await window.kapsula.pickAndImportArchive();
                         if (r.canceled) return;
                         toast.success(
-                          `Импортировано: ${r.imported} (пропущено дублей: ${r.skippedDuplicates})`
+                          `${t('settings.integrations.importedSummary', { imported: r.imported })} (${t('settings.integrations.importedSkipped', { count: r.skippedDuplicates })})`
                         );
                         onVaultChanged?.();
                       } catch (err) {
-                        toast.error(friendlyErrorMessage(err));
+                        toast.error(friendlyErrorMessage(err, undefined, locale));
                       } finally {
                         setImportBusy(null);
                       }
@@ -1685,10 +1837,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <FileText weight="duotone" className="w-5 h-5 text-[var(--k-accent)]" />
                     <div className="text-[12.5px] font-semibold text-[var(--k-ink-primary)]">
-                      {importBusy === 'archive' ? 'Импортирую…' : 'Архивы чатов и заметок'}
+                      {importBusy === 'archive' ? t('settings.integrations.importing') : t('settings.integrations.archiveBtn')}
                     </div>
                     <div className="text-[11px] text-[var(--k-ink-muted)] leading-snug">
-                      Выгрузки сохранённых записей в HTML или JSON
+                      {t('settings.integrations.archiveDesc')}
                     </div>
                   </button>
                 </div>
@@ -1696,20 +1848,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </>
           ) : null}
 
-          {/* 6. ДАННЫЕ */}
+          {/* 6. DATA */}
           {tab === 'data' ? (
             <>
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Локальное хранилище</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.data.storageTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)] k-tabular mt-0.5">
                     {storageInfo
-                      ? `Записей: ${storageInfo.itemCount} · Вложений: ${storageInfo.mediaFilesCount} · Занято: ${
-                          storageInfo.totalBytes < 1024 * 1024
-                            ? `${Math.max(1, Math.round(storageInfo.totalBytes / 1024))} КБ`
-                            : `${(storageInfo.totalBytes / (1024 * 1024)).toFixed(1)} МБ`
-                        }`
-                      : 'Загружаю статистику хранилища…'}
+                      ? t('settings.data.storageSummary', {
+                          items: storageInfo.itemCount,
+                          media: storageInfo.mediaFilesCount,
+                          size: formatFileSize(storageInfo.totalBytes, locale),
+                        })
+                      : t('settings.data.storageLoading')}
                   </div>
                 </div>
                 <button
@@ -1718,15 +1870,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer shrink-0"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
-                  <span>Открыть папку</span>
+                  <span>{t('settings.data.openFolder')}</span>
                 </button>
               </div>
 
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Экспорт в Markdown + медиа (.zip)</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.data.exportZipTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5">
-                    Выгрузить все заметки в чистые файлы .md с картинками и вложениями — открывается в любом редакторе
+                    {t('settings.data.exportZipDesc')}
                   </div>
                 </div>
                 <button
@@ -1738,12 +1890,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     try {
                       const res = await window.kapsula.exportMarkdownZip();
                       if (res.ok && res.filePath) {
-                        toast.success(`Экспортировано заметок: ${res.count ?? 0}`);
+                        toast.success(t('settings.data.exportZipToast', { count: res.count ?? 0 }));
                       } else if (res.error) {
                         toast.error(res.error);
                       }
                     } catch (err) {
-                      toast.error(friendlyErrorMessage(err, 'Не удалось экспортировать архив.'));
+                      toast.error(friendlyErrorMessage(err, t('settings.data.exportZipErr'), locale));
                     } finally {
                       setExportingMdZip(false);
                     }
@@ -1751,16 +1903,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0 disabled:opacity-60"
                 >
                   <FileArchive className="w-3.5 h-3.5" />
-                  <span>{exportingMdZip ? 'Собираю архив…' : 'Экспорт Markdown (.zip)'}</span>
+                  <span>{exportingMdZip ? t('settings.data.exportZipBusy') : t('settings.data.exportZipBtn')}</span>
                 </button>
               </div>
 
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-[13.5px] font-medium">Резервная копия (JSON)</div>
+                    <div className="text-[13.5px] font-medium">{t('settings.data.backupTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5">
-                      Сохранить или восстановить заметки, разделы, холсты и календарь. Записи из Сейфа остаются зашифрованными.
+                      {t('settings.data.backupDesc')}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -1774,15 +1926,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           const res = await window.kapsula.importJsonBackup();
                           if (res.importedCount > 0 || res.skippedCount > 0) {
                             toast.success(
-                              `Восстановлено записей: ${res.importedCount}${
-                                res.skippedCount > 0 ? ` · пропущено: ${res.skippedCount}` : ''
+                              `${t('settings.data.restoredCount', { count: res.importedCount })}${
+                                res.skippedCount > 0
+                                  ? t('settings.data.restoredSkipped', { count: res.skippedCount })
+                                  : ''
                               }`
                             );
                             onVaultChanged?.();
                             window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
                           }
                         } catch (err) {
-                          toast.error(friendlyErrorMessage(err, 'Не удалось восстановить копию.'));
+                          toast.error(friendlyErrorMessage(err, t('settings.data.restoreErr'), locale));
                         } finally {
                           setRestoringBackup(false);
                         }
@@ -1790,7 +1944,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium hover:bg-[var(--k-bg-surface-3)] cursor-pointer disabled:opacity-60"
                     >
                       <UploadSimple className="w-3.5 h-3.5" />
-                      <span>{restoringBackup ? 'Восстанавливаю…' : 'Восстановить из копии'}</span>
+                      <span>{restoringBackup ? t('settings.data.restoringBtn') : t('settings.data.restoreBtn')}</span>
                     </button>
                     <button
                       type="button"
@@ -1801,11 +1955,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           const res = await window.kapsula.exportBackup();
                           if (!res.canceled) {
                             toast.success(
-                              `Резервная копия сохранена (${pluralRu(res.itemCount, 'запись', 'записи', 'записей')})`
+                              t('settings.data.backupSaved', {
+                                count: res.itemCount,
+                                word: pluralNoun(res.itemCount, 'item').replace(/^\d+\s+/, ''),
+                              })
                             );
                           }
                         } catch (err) {
-                          toast.error(friendlyErrorMessage(err, 'Не удалось сохранить резервную копию.'));
+                          toast.error(friendlyErrorMessage(err, t('settings.data.backupErr'), locale));
                         } finally {
                           setExportingBackup(false);
                         }
@@ -1813,7 +1970,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium hover:border-[var(--k-border-strong)] cursor-pointer disabled:opacity-60"
                     >
                       <DownloadSimple className="w-3.5 h-3.5" />
-                      <span>{exportingBackup ? 'Сохраняю…' : 'Сохранить копию'}</span>
+                      <span>{exportingBackup ? t('common.saving') : t('settings.data.saveCopyBtn')}</span>
                     </button>
                   </div>
                 </div>
@@ -1821,9 +1978,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Автопревью ссылок</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.data.unfurlTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Автоматически загружать заголовки, описания и обложки для сохранённых веб-страниц
+                    {t('settings.data.unfurlDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -1833,19 +1990,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-3.5 text-[12px] text-[var(--k-ink-secondary)] leading-relaxed">
-                Все заметки, картинки, голосовые записи и зашифрованные данные Сейфа хранятся локально на этом компьютере — приложение работает даже без интернета.
+                {t('settings.data.localBanner')}
               </div>
             </>
           ) : null}
 
-          {/* 7. КЛАВИШИ */}
+          {/* 7. SHORTCUTS */}
           {tab === 'shortcuts' ? (
             <>
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Быстрая панель поверх всех окон</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.shortcuts.hudTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Поиск, быстрые заметки, Сейф и задачи из любого приложения
+                    {t('settings.shortcuts.hudDesc')}
                   </div>
                 </div>
                 <ShortcutRecorder
@@ -1857,9 +2014,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Мгновенно сохранить из буфера</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.shortcuts.snatchTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Быстрый перехват текста, ссылки или картинки из буфера обмена
+                    {t('settings.shortcuts.snatchDesc')}
                   </div>
                 </div>
                 <ShortcutRecorder
@@ -1871,9 +2028,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Запускать при старте системы</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.shortcuts.autostartTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Чтобы горячие клавиши и напоминания работали сразу после входа
+                    {t('settings.shortcuts.autostartDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -1884,9 +2041,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3">
                 <div>
-                  <div className="text-[13.5px] font-medium">Тихие тактильные звуки</div>
+                  <div className="text-[13.5px] font-medium">{t('settings.shortcuts.soundsTitle')}</div>
                   <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                    Мягкий отклик при сохранении и копировании
+                    {t('settings.shortcuts.soundsDesc')}
                   </div>
                 </div>
                 <SwitchToggle
@@ -1897,14 +2054,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 space-y-2">
                 <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
-                  Основные сочетания внутри окна
+                  {t('settings.shortcuts.inAppHeader')}
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
                   {[
-                    [isMac ? '⌘ F' : 'Ctrl + F', 'Поиск по всем записям'],
-                    [isMac ? '⌘ N' : 'Ctrl + N', 'Новая заметка'],
-                    ['Пробел', 'Быстрый просмотр карточки'],
-                    ['Esc', 'Закрыть панель или снять выбор'],
+                    [isMac ? '⌘ F' : 'Ctrl + F', t('settings.shortcuts.find')],
+                    [isMac ? '⌘ N' : 'Ctrl + N', t('settings.shortcuts.newNote')],
+                    [t('settings.shortcuts.space'), t('settings.shortcuts.quickLook')],
+                    ['Esc', t('settings.shortcuts.escDesc')],
                   ].map(([keyCombo, desc]) => (
                     <div key={keyCombo} className="flex items-center justify-between gap-2 py-0.5">
                       <span className="text-[var(--k-ink-secondary)]">{desc}</span>
@@ -1927,24 +2084,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2.5">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 min-w-0">
               <span className="text-[12.5px] font-semibold text-[var(--k-ink-primary)] k-tabular">
-                Kapsula v{updaterState?.currentVersion ?? '1.0.1'}
+                Kapsula v{updaterState?.currentVersion ?? APP_VERSION}
               </span>
               {updaterState?.status === 'checking' ? (
-                <span className="text-[11.5px] text-[var(--k-ink-muted)]">Проверяю обновления…</span>
+                <span className="text-[11.5px] text-[var(--k-ink-muted)]">{t('settings.updates.checking')}</span>
               ) : updaterState?.status === 'available' && updaterState.latestVersion ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[11px] font-medium k-tabular">
-                  Доступна v{updaterState.latestVersion}
+                  {t('workspace.sidebar.updateAvailable', { version: updaterState.latestVersion })}
                 </span>
               ) : updaterState?.status === 'downloading' ? (
                 <span className="text-[11.5px] text-[var(--k-accent)] font-medium k-tabular">
-                  Загружаю обновление… {updaterState.percent ?? 0}%
+                  {t('settings.updates.downloading', { percent: updaterState.percent ?? 0 })}
                 </span>
               ) : updaterState?.status === 'downloaded' ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] text-[11px] font-medium">
-                  Обновление готово к установке
+                  {t('settings.updates.ready')}
                 </span>
               ) : updaterState?.status === 'up-to-date' ? (
-                <span className="text-[11.5px] text-[var(--k-emerald)]">Актуальная версия</span>
+                <span className="text-[11.5px] text-[var(--k-emerald)]">{t('settings.updates.upToDate')}</span>
               ) : updaterState?.status === 'error' && updaterState.error ? (
                 <span className="text-[11.5px] text-[var(--k-amber)]">{updaterState.error}</span>
               ) : null}
@@ -1959,7 +2116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-7.5 px-3 rounded-lg bg-[var(--k-emerald)] text-white text-[12px] font-medium cursor-pointer"
                 >
                   <ArrowsClockwise className="w-3.5 h-3.5" />
-                  <span>Перезапустить и обновить</span>
+                  <span>{t('settings.updates.restartBtn')}</span>
                 </button>
               ) : updaterState?.status === 'available' ? (
                 <button
@@ -1969,7 +2126,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-7.5 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                 >
                   <DownloadSimple className="w-3.5 h-3.5" />
-                  <span>{isMac ? 'Скачать образ для Mac' : 'Скачать обновление'}</span>
+                  <span>{isMac ? t('settings.updates.downloadMac') : t('settings.updates.downloadWin')}</span>
                 </button>
               ) : (
                 <button
@@ -1982,7 +2139,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <ArrowsClockwise
                     className={`w-3.5 h-3.5 ${updaterState?.status === 'checking' ? 'animate-spin text-[var(--k-accent)]' : ''}`}
                   />
-                  <span>Проверить обновления</span>
+                  <span>{t('settings.updates.checkBtn')}</span>
                 </button>
               )}
 
@@ -1994,7 +2151,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="k-interactive inline-flex items-center gap-1.5 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer disabled:opacity-55"
               >
                 <Copy className="w-3.5 h-3.5" />
-                <span>{diagCopying ? 'Собираю…' : 'Скопировать диагностику'}</span>
+                <span>{diagCopying ? t('settings.diag.collecting') : t('settings.diag.copyBtn')}</span>
               </button>
             </div>
           </div>

@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { CaptureInput, OrbitDef, TextTransformPreset, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { isMacPlatform } from '@shared/shortcuts';
 import { friendlyErrorMessage } from '../../lib/format';
@@ -33,7 +34,7 @@ interface OmniComposerProps {
 const GENERIC_CLIPBOARD_IMAGE_RE = /^image(?:\.[a-z0-9]+)?$/i;
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 
-function fileToBase64(file: File): Promise<string> {
+function fileToBase64(file: File, readErrorMsg: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -41,7 +42,7 @@ function fileToBase64(file: File): Promise<string> {
       const commaIdx = result.indexOf(',');
       resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
     };
-    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    reader.onerror = () => reject(new Error(readErrorMsg));
     reader.readAsDataURL(file);
   });
 }
@@ -54,6 +55,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
   onCaptured,
   onOpenBlankDraft,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
@@ -86,9 +88,9 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     if (clean.length < 5 || /^https?:\/\/\S+$/i.test(clean) || dismissedEventText === clean) {
       return null;
     }
-    const parsed = parseRussianEvent(clean);
+    const parsed = parseRussianEvent(clean, Date.now(), undefined, locale);
     return parsed?.isEventIntent ? parsed : null;
-  }, [text, dismissedEventText]);
+  }, [text, dismissedEventText, locale]);
 
   const submitCapture = async (openInStudio = false) => {
     const trimmed = text.trim();
@@ -116,7 +118,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
       };
       const created = await window.kapsula.capture(input);
       if (activeParsedEvent && !isSingleUrl && !isDismissed && created.dna !== 'secret') {
-        toast.success('Сохранено и добавлено в Календарь');
+        toast.success(t('composer.savedWithCalendar'));
       }
       setText('');
       setRemindAt(null);
@@ -127,7 +129,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
       playTactileTick(soundEnabled, 'success');
       onCaptured(created, openInStudio);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить запись'));
+      toast.error(friendlyErrorMessage(err, t('composer.saveFailed'), locale));
     } finally {
       setSubmitting(false);
     }
@@ -135,6 +137,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
 
   const handleFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files);
+    const readErr = t('error.readFileFailed');
     for (const file of arr) {
       try {
         const nativePath = window.kapsula.getPathForFile(file);
@@ -143,7 +146,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           : file.name.replace(/\.[^.]+$/, '');
 
         if (file.type.startsWith('image/')) {
-          const b64 = nativePath ? undefined : await fileToBase64(file);
+          const b64 = nativePath ? undefined : await fileToBase64(file, readErr);
           const created = await window.kapsula.capture({
             ...(b64 ? { imageBase64: b64 } : {}),
             ...(nativePath ? { imageFilePath: nativePath } : {}),
@@ -154,7 +157,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           });
           onCaptured(created);
         } else if (file.type.startsWith('video/') || VIDEO_EXT_RE.test(file.name)) {
-          const b64 = nativePath ? undefined : await fileToBase64(file);
+          const b64 = nativePath ? undefined : await fileToBase64(file, readErr);
           const created = await window.kapsula.capture({
             ...(nativePath ? { videoPath: nativePath } : { videoBase64: b64 }),
             videoMime: file.type || 'video/mp4',
@@ -166,7 +169,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           });
           onCaptured(created);
         } else if (file.type.startsWith('audio/')) {
-          const b64 = await fileToBase64(file);
+          const b64 = await fileToBase64(file, readErr);
           const created = await window.kapsula.capture({
             audioBase64: b64,
             audioMime: file.type,
@@ -177,7 +180,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           });
           onCaptured(created);
         } else {
-          const b64 = nativePath ? undefined : await fileToBase64(file);
+          const b64 = nativePath ? undefined : await fileToBase64(file, readErr);
           const created = await window.kapsula.capture({
             ...(nativePath ? { filePath: nativePath } : {}),
             ...(b64 ? { fileBase64: b64 } : {}),
@@ -190,9 +193,9 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           onCaptured(created);
         }
         playTactileTick(soundEnabled, 'success');
-        toast.success(`Сохранено: ${safeName || 'скриншот'}`);
+        toast.success(t('composer.savedNamed', { name: safeName || t('composer.screenshot') }));
       } catch (err) {
-        toast.error(friendlyErrorMessage(err, `Ошибка загрузки ${file.name}`));
+        toast.error(friendlyErrorMessage(err, t('error.uploadFileFailed', { name: file.name }), locale));
       }
     }
   };
@@ -209,14 +212,14 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         playTactileTick(soundEnabled, 'success');
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось оформить текст'));
+      toast.error(friendlyErrorMessage(err, t('composer.beautifyFailed'), locale));
     } finally {
       setBeautifying(false);
     }
   };
 
   const orbitOptions = [
-    { value: '', label: 'Авто-раздел' },
+    { value: '', label: t('nav.autoSection') },
     ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
   ];
 
@@ -311,7 +314,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               textareaRef.current?.blur();
             }
           }}
-          placeholder="Быстрая мысль, ссылка, скриншот, видео или задача…"
+          placeholder={t('composer.placeholder')}
           className={`flex-1 min-w-0 resize-none bg-transparent border-none outline-none text-[13.5px] leading-[22px] py-[3px] min-h-[28px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] k-selectable ${
             !expanded ? 'pr-[156px]' : 'pr-0'
           }`}
@@ -336,7 +339,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           <button
             type="button"
             data-testid="omni-dictate-btn"
-            title="Голосовая заметка"
+            title={t('composer.voiceTitle')}
             onClick={() => {
               setFocused(true);
               setRecordingOpen(true);
@@ -347,7 +350,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           </button>
           <button
             type="button"
-            title="Прикрепить файл"
+            title={t('composer.attachFile')}
             onClick={() => fileInputRef.current?.click()}
             className="k-interactive w-7 h-7 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
           >
@@ -359,14 +362,14 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               data-testid="new-blank-note-btn"
               title={
                 isMacPlatform(window.kapsula?.platform)
-                  ? 'Открыть чистую заметку (⌘N)'
-                  : 'Открыть чистую заметку (Ctrl+N)'
+                  ? t('composer.openBlankMac')
+                  : t('composer.openBlankWin')
               }
               onClick={onOpenBlankDraft}
               className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer ml-0.5"
             >
               <NotePencil className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-              <span>Заметка</span>
+              <span>{t('dna.note')}</span>
             </button>
           ) : null}
         </div>
@@ -387,13 +390,13 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--k-accent)]/30 bg-[var(--k-accent-soft)] px-2.5 py-1 text-[11.5px] text-[var(--k-ink-primary)]">
                 <CalendarBlank weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
                 <span>
-                  Календарь: <strong>{activeParsedEvent.label}</strong>
+                  {t('composer.calendarDetected')} <strong>{activeParsedEvent.label}</strong>
                   {activeParsedEvent.location ? ` · ${activeParsedEvent.location}` : ''}
                 </span>
                 <button
                   type="button"
                   onClick={() => setDismissedEventText(text.trim())}
-                  aria-label="Не добавлять в календарь"
+                  aria-label={t('composer.calendarSkipAria')}
                   className="text-[11px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                 >
                   ✕
@@ -426,13 +429,13 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   playTactileTick(soundEnabled, 'success');
                   if (res.savedItem) {
                     onCaptured(res.savedItem);
-                    toast.success('Голосовая заметка и аудио сохранены');
+                    toast.success(t('composer.voiceAndAudioSaved'));
                     return;
                   }
                   const snippet = res.formattedText || res.transcript;
                   if (snippet) {
                     setText((prev) => (prev.trim() ? `${prev.trim()}\n\n${snippet}` : snippet));
-                    toast.success('Голос расшифрован и аудио сохранено');
+                    toast.success(t('composer.voiceTranscribedSaved'));
                   } else if (wav.wavBase64) {
                     void window.kapsula
                       .capture({
@@ -446,7 +449,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                       })
                       .then((created) => {
                         onCaptured(created);
-                        toast.success('Аудиозапись сохранена');
+                        toast.success(t('note.studio.audioSaved'));
                       });
                   }
                 }}
@@ -462,7 +465,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                     mediaMeta: { waveformPeaks: wav.peaks },
                   });
                   onCaptured(created);
-                  toast.success('Аудиозапись сохранена');
+                  toast.success(t('note.studio.audioSaved'));
                 }}
                 onCancel={() => setRecordingOpen(false)}
               />
@@ -507,7 +510,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   }`}
                 >
                   <Microphone weight={recordingOpen ? 'fill' : 'regular'} className="w-3.5 h-3.5" />
-                  <span>Голос</span>
+                  <span>{t('workspace.filter.voice')}</span>
                 </button>
 
                 <button
@@ -516,7 +519,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] text-[12px] font-medium cursor-pointer"
                 >
                   <Paperclip className="w-3.5 h-3.5" />
-                  <span>Файл</span>
+                  <span>{t('dna.doc')}</span>
                 </button>
 
                 {text.trim().length > 0 ? (
@@ -530,7 +533,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                     }`}
                   >
                     <Sparkle weight="fill" className="w-3.5 h-3.5" />
-                    <span>{beautifying ? 'Оформляю…' : 'Украсить'}</span>
+                    <span>{beautifying ? t('composer.beautifying') : t('composer.beautify')}</span>
                   </button>
                 ) : null}
 
@@ -544,7 +547,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                     className="k-interactive inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                   >
                     <ArrowCounterClockwise className="w-3.5 h-3.5" />
-                    <span>Вернуть</span>
+                    <span>{t('composer.revert')}</span>
                   </button>
                 ) : null}
 
@@ -573,7 +576,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   onClick={() => void submitCapture(true)}
                   className="k-interactive inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                 >
-                  <span>В редактор</span>
+                  <span>{t('composer.toEditor')}</span>
                   <ArrowUpRight className="w-3.5 h-3.5" />
                 </button>
 
@@ -585,7 +588,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   className="k-interactive k-focus-ring inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                 >
                   <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />
-                  <span>Сохранить</span>
+                  <span>{t('common.save')}</span>
                 </button>
               </div>
             </div>

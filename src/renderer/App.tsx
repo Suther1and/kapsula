@@ -3,6 +3,7 @@ import { MotionConfig } from 'motion/react';
 import { Tooltip } from '@base-ui/react/tooltip';
 import { Toaster } from 'sonner';
 import type { SettingsState } from '@shared/types';
+import { I18nProvider } from '@shared/i18n/react';
 import {
   applyAppearanceToDocument,
   hydrateAppearanceFromSettings,
@@ -60,32 +61,34 @@ export const App: React.FC = () => {
   }
 
   return (
-    <MotionConfig reducedMotion="user">
-      <Tooltip.Provider delay={280} closeDelay={80}>
-        <Suspense fallback={null}>
-          {surface === 'vault' ? (
-            <StudioWorkspace settings={settings} onSettingsUpdated={setSettings} />
-          ) : (
-            <CommandHudSurface settings={settings} onSettingsUpdated={setSettings} />
-          )}
-        </Suspense>
-        <Toaster
-          position="bottom-right"
-          visibleToasts={1}
-          duration={2200}
-          theme={settings.theme}
-          toastOptions={{
-            style: {
-              zIndex: 200,
-              background: 'var(--k-bg-elevated)',
-              color: 'var(--k-ink-primary)',
-              border: '1px solid var(--k-border-strong)',
-              borderRadius: '14px',
-              fontFamily: 'var(--k-font-sans)',
-            },
-          }}
-        />
-      </Tooltip.Provider>
-    </MotionConfig>
+    <I18nProvider locale={settings.locale ?? 'ru'}>
+      <MotionConfig reducedMotion="user">
+        <Tooltip.Provider delay={280} closeDelay={80}>
+          <Suspense fallback={null}>
+            {surface === 'vault' ? (
+              <StudioWorkspace settings={settings} onSettingsUpdated={setSettings} />
+            ) : (
+              <CommandHudSurface settings={settings} onSettingsUpdated={setSettings} />
+            )}
+          </Suspense>
+          <Toaster
+            position="bottom-right"
+            visibleToasts={1}
+            duration={2200}
+            theme={settings.theme}
+            toastOptions={{
+              style: {
+                zIndex: 200,
+                background: 'var(--k-bg-elevated)',
+                color: 'var(--k-ink-primary)',
+                border: '1px solid var(--k-border-strong)',
+                borderRadius: '14px',
+                fontFamily: 'var(--k-font-sans)',
+              },
+            }}
+          />
+        </Tooltip.Provider>
+      </MotionConfig>
+    </I18nProvider>
   );
 };

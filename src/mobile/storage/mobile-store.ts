@@ -1,6 +1,15 @@
+import type { AppLocale } from '@shared/i18n/core';
+import { normalizeLocale } from '@shared/i18n/core';
 import {
   DEFAULT_APPEARANCE_CONFIG,
 } from '@shared/color-engine';
+import {
+  getMobileIntlLocale,
+  resolveMobileLocale,
+  setRuntimeMobileLocale,
+  tm,
+  writeStoredMobileLocale,
+} from '../lib/mobile-i18n';
 import {
   extractInlineMediaFilenames,
   type SyncEntityType,
@@ -333,12 +342,12 @@ class RealIdbAdapter {
         }
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('Не удалось открыть локальное хранилище'));
+      req.onerror = () => reject(req.error ?? new Error(tm('store.idbOpenErr')));
     });
   }
 
   private getDb(): IDBDatabase {
-    if (!this.db) throw new Error('Локальное хранилище не инициализировано');
+    if (!this.db) throw new Error(tm('store.idbNotInitErr'));
     return this.db;
   }
 
@@ -348,7 +357,7 @@ class RealIdbAdapter {
       const tx = db.transaction(store, 'readonly');
       const req = tx.objectStore(store).get(key);
       req.onsuccess = () => resolve((req.result as T | undefined) ?? null);
-      req.onerror = () => reject(req.error ?? new Error('Ошибка чтения локального хранилища'));
+      req.onerror = () => reject(req.error ?? new Error(tm('store.idbReadErr')));
     });
   }
 
@@ -358,7 +367,7 @@ class RealIdbAdapter {
       const tx = db.transaction(store, 'readonly');
       const req = tx.objectStore(store).getAll();
       req.onsuccess = () => resolve((req.result ?? []) as T[]);
-      req.onerror = () => reject(req.error ?? new Error('Ошибка чтения локального хранилища'));
+      req.onerror = () => reject(req.error ?? new Error(tm('store.idbReadErr')));
     });
   }
 
@@ -368,7 +377,7 @@ class RealIdbAdapter {
       const tx = db.transaction(store, 'readwrite');
       tx.objectStore(store).put(value);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Ошибка записи в локальное хранилище'));
+      tx.onerror = () => reject(tx.error ?? new Error(tm('store.idbWriteErr')));
     });
   }
 
@@ -378,7 +387,7 @@ class RealIdbAdapter {
       const tx = db.transaction(store, 'readwrite');
       tx.objectStore(store).delete(key);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Ошибка удаления из локального хранилища'));
+      tx.onerror = () => reject(tx.error ?? new Error(tm('store.idbDeleteErr')));
     });
   }
 
@@ -388,7 +397,7 @@ class RealIdbAdapter {
       const tx = db.transaction(store, 'readwrite');
       tx.objectStore(store).clear();
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Ошибка очистки локального хранилища'));
+      tx.onerror = () => reject(tx.error ?? new Error(tm('store.idbClearErr')));
     });
   }
 }
@@ -409,6 +418,7 @@ export class MobileVaultStore {
 
   private dirtySeqCounter = 1;
   private initialized = false;
+  private readonly isMemoryOnly: boolean;
   private deviceNameLabel = 'Android';
   private mutationListener: ((entityType: SyncEntityType, entityId: string) => void) | null = null;
   private changeListeners = new Set<() => void>();
@@ -416,6 +426,7 @@ export class MobileVaultStore {
 
   constructor(options: MobileStoreOptions = {}) {
     const useMemory = Boolean(options.memoryOnly) || typeof indexedDB === 'undefined';
+    this.isMemoryOnly = Boolean(options.memoryOnly);
     this.backend = useMemory
       ? new MemoryIdbAdapter()
       : new RealIdbAdapter(options.dbName ?? 'kapsula_mobile_v1');
@@ -582,17 +593,18 @@ export class MobileVaultStore {
     nowMs = Date.now()
   ): Promise<{ ok: boolean; lockoutRemainingSec: number; error?: string }> {
     const remaining = this.getPinLockoutRemainingSec(nowMs);
+    const locale = this.getLocale();
     if (remaining > 0) {
       return {
         ok: false,
         lockoutRemainingSec: remaining,
-        error: `Слишком много неверных попыток — подожди ${remaining} с`,
+        error: tm('store.pinLockout', { sec: remaining }, locale),
       };
     }
 
     const storedHash = await this.getSecureValue('vault_master_pin_hash');
     if (!storedHash) {
-      return { ok: false, lockoutRemainingSec: 0, error: 'Мастер-ПИН не задан' };
+      return { ok: false, lockoutRemainingSec: 0, error: tm('store.pinNotSet', undefined, locale) };
     }
 
     const matched = await verifyMasterPin(pin, storedHash);
@@ -610,13 +622,13 @@ export class MobileVaultStore {
       return {
         ok: false,
         lockoutRemainingSec: lockSec,
-        error: `Неверный мастер-ПИН. Повторная попытка через ${lockSec} с`,
+        error: tm('store.pinWrongWithDelay', { sec: lockSec }, locale),
       };
     }
     return {
       ok: false,
       lockoutRemainingSec: 0,
-      error: 'Неверный мастер-ПИН',
+      error: tm('vault.pinWrong', undefined, locale),
     };
   }
 
@@ -837,7 +849,8 @@ export class MobileVaultStore {
     }
     if (
       this.getSyncState('task_board_columns_json') ||
-      this.getSyncState('appearance_config_json')
+      this.getSyncState('appearance_config_json') ||
+      this.getSyncState('mobile_locale')
     ) {
       await this.markDirty('workspace_prefs', 'default', true);
       lastType = 'workspace_prefs';
@@ -1218,7 +1231,8 @@ export class MobileVaultStore {
       const { syncVersion: _sv, lastDeviceId: _ld, ...pub } = o;
       out.push({ ...pub, itemCount: counts.get(o.id) ?? 0 });
     });
-    return out.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
+    const intl = getMobileIntlLocale(this.getLocale());
+    return out.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, intl));
   }
 
   public getRawOrbit(id: string): StoredMobileOrbit | null {
@@ -1238,8 +1252,9 @@ export class MobileVaultStore {
       const { syncVersion: _sv, lastDeviceId: _ld, ...pub } = b;
       out.push({ ...pub, itemCount: counts.get(b.id) ?? 0 });
     });
+    const intl = getMobileIntlLocale(this.getLocale());
     return out.sort(
-      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, 'ru')
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, intl)
     );
   }
 
@@ -1478,13 +1493,14 @@ export class MobileVaultStore {
   }
 
   public async saveTaskBoardColumns(columns: TaskBoardColumn[]): Promise<TaskBoardColumn[]> {
+    const locale = this.getLocale();
     const normalized: TaskBoardColumn[] = (columns.length > 0 ? columns : DEFAULT_TASK_BOARD_COLUMNS).map(
       (col, idx) => {
         const rawIcon = typeof col.icon === 'string' ? col.icon.trim().slice(0, 32) : '';
         const icon = rawIcon && /^[a-z0-9_-]+$/i.test(rawIcon) ? rawIcon : undefined;
         return {
           id: col.id.trim() || `col_${idx}`,
-          title: col.title.trim() || 'Колонка',
+          title: col.title.trim() || tm('store.defaultColumn', undefined, locale),
           color: col.color || '#94A3B8',
           order: idx,
           ...(col.isDone ? { isDone: true } : {}),
@@ -1496,7 +1512,7 @@ export class MobileVaultStore {
     if (!normalized.some((c) => c.isDone || c.id === 'done')) {
       normalized.push({
         id: 'done',
-        title: 'Готово',
+        title: tm('store.defaultDoneColumn', undefined, locale),
         color: '#2EA06B',
         order: normalized.length,
         isDone: true,
@@ -1561,6 +1577,30 @@ export class MobileVaultStore {
     return merged;
   }
 
+  public getPersistedLocale(): AppLocale | null {
+    const raw = this.getSyncState('mobile_locale');
+    if (raw === 'ru' || raw === 'en') return raw;
+    return null;
+  }
+
+  public getLocale(): AppLocale {
+    return resolveMobileLocale({
+      persistedLocale: this.getPersistedLocale(),
+    });
+  }
+
+  public async setLocale(locale: AppLocale): Promise<AppLocale> {
+    const normalized = normalizeLocale(locale);
+    await this.setSyncState('mobile_locale', normalized);
+    if (!this.isMemoryOnly) {
+      writeStoredMobileLocale(normalized);
+      setRuntimeMobileLocale(normalized);
+    }
+    await this.bumpWorkspacePrefsVersion();
+    this.emitChange();
+    return normalized;
+  }
+
   private async bumpWorkspacePrefsVersion(): Promise<void> {
     const prevUpdated = Number(this.getSyncState('workspace_prefs_updated_at') || '0') || 0;
     const prevVer = Number(this.getSyncState('workspace_prefs_sync_version') || '0') || 0;
@@ -1578,12 +1618,17 @@ export class MobileVaultStore {
     return {
       v: 1,
       id: 'default',
+      locale: this.getPersistedLocale() ?? this.getLocale(),
       taskBoardColumns: this.listTaskBoardColumns(),
       appearance: this.getAppearanceConfig(),
       updatedAt,
       deletedAt: null,
       syncVersion,
     };
+  }
+
+  public getWorkspacePrefsForSync(): SyncedWorkspacePrefsPayload {
+    return this.getWorkspacePrefsPayload();
   }
 
   public async applySyncedWorkspacePrefs(
@@ -1619,11 +1664,27 @@ export class MobileVaultStore {
         JSON.stringify({ ...DEFAULT_APPEARANCE_CONFIG, ...payload.appearance })
       );
     }
+    if (payload.locale === 'ru' || payload.locale === 'en') {
+      await this.setSyncState('mobile_locale', payload.locale);
+      if (!this.isMemoryOnly) {
+        writeStoredMobileLocale(payload.locale);
+        setRuntimeMobileLocale(payload.locale);
+      }
+    }
     await this.setSyncState('workspace_prefs_updated_at', String(payload.updatedAt));
     await this.setSyncState('workspace_prefs_sync_version', String(payload.syncVersion));
     await this.setSyncState('workspace_prefs_device_id', remoteDeviceId);
     await this.clearDirtyKeyForce('workspace_prefs', 'default');
+    this.emitChange();
     return { applied: true, localStrictlyNewer: false };
+  }
+
+  public async applyRemoteWorkspacePrefs(
+    payload: SyncedWorkspacePrefsPayload,
+    remoteDeviceId = 'remote',
+    localDeviceId = this.getSyncState('device_id') || 'local'
+  ): Promise<{ applied: boolean; localStrictlyNewer: boolean }> {
+    return this.applySyncedWorkspacePrefs(payload, remoteDeviceId, localDeviceId);
   }
 
   // ==================== Local Mutations ====================
@@ -1656,10 +1717,13 @@ export class MobileVaultStore {
     const platform = detectLinkPlatform(url);
     const dna: ContentDna = input.dna ?? (url ? 'link' : 'note');
     const body = input.body ?? '';
+    const locale = this.getLocale();
     const cleanTitle = input.preserveEmptyTitle
       ? (input.title?.trim() ?? '')
       : input.title?.trim() ||
-        (url ? domain || 'Ссылка' : (body.trim().split('\n')[0]?.slice(0, 80) || 'Новая запись'));
+        (url
+          ? domain || tm('store.linkTitle', undefined, locale)
+          : body.trim().split('\n')[0]?.slice(0, 80) || tm('store.newItemTitle', undefined, locale));
 
     const linksOut = this.reconcileLinksOutFromBody(body, id, input.linksOut);
 
@@ -1957,10 +2021,9 @@ export class MobileVaultStore {
       typeof input.totpUriOrSecret === 'string' && input.totpUriOrSecret.trim()
         ? parseOtpAuthUri(input.totpUriOrSecret)
         : null;
+    const locale = this.getLocale();
     if (typeof input.totpUriOrSecret === 'string' && input.totpUriOrSecret.trim() && !parsedTotp) {
-      throw new Error(
-        'Не удалось распознать ключ 2FA — вставь секретный ключ целиком или ссылку из приложения-аутентификатора'
-      );
+      throw new Error(tm('vault.totpParseError', undefined, locale));
     }
 
     const keepExistingTotp = input.totpUriOrSecret === undefined && Boolean(existingDec?.totpSecret);
@@ -2008,14 +2071,14 @@ export class MobileVaultStore {
 
     const secretSummary =
       input.kind === 'bank_card'
-        ? 'Банковская карта'
+        ? tm('vault.kindBankCard', undefined, locale)
         : input.kind === 'password'
-          ? 'Логин и пароль'
+          ? tm('vault.kindPassword', undefined, locale)
           : input.kind === 'api_key'
-            ? 'Ключ доступа'
+            ? tm('vault.kindApiKey', undefined, locale)
             : input.kind === 'seed'
-              ? 'Фраза восстановления'
-              : 'Секретная заметка';
+              ? tm('vault.kindSeed', undefined, locale)
+              : tm('vault.kindNote', undefined, locale);
 
     if (existing) {
       const now = this.nextMonotonicTs(existing.updatedAt);
@@ -2169,7 +2232,7 @@ export class MobileVaultStore {
     const sortOrder = this.orbitsMap.size;
     const stored: StoredMobileOrbit = {
       id,
-      name: input.name.trim() || 'Новый раздел',
+      name: input.name.trim() || tm('store.newOrbitName', undefined, this.getLocale()),
       description: input.description?.trim() ?? '',
       icon: input.icon ?? 'Folder',
       color: input.color ?? '#E86A33',
@@ -2251,7 +2314,7 @@ export class MobileVaultStore {
     const id = generateUuid();
     const stored: StoredMobileBoard = {
       id,
-      name: input.name.trim() || 'Новый холст',
+      name: input.name.trim() || tm('store.newBoardName', undefined, this.getLocale()),
       description: input.description?.trim() ?? '',
       icon: input.icon ?? 'Sparkle',
       color: input.color ?? '#E86A33',
@@ -2331,7 +2394,7 @@ export class MobileVaultStore {
     const id = existing?.id || input.id || generateUuid();
     const record: StoredMobileCalendarEvent = {
       id,
-      title: input.title.trim() || 'Событие',
+      title: input.title.trim() || tm('calendar.defaultEventTitle', undefined, this.getLocale()),
       notes: input.notes ?? existing?.notes ?? '',
       location: input.location ?? existing?.location ?? '',
       startAt: input.startAt,
@@ -2407,7 +2470,7 @@ export class MobileVaultStore {
     item: VaultItem,
     columns: TaskBoardColumn[]
   ): { entries: VaultTaskEntry[]; taskMetaMap: Record<string, TaskBoardItemMeta> } {
-    const itemTitle = item.title?.trim() || 'Заметка без названия';
+    const itemTitle = item.title?.trim() || tm('common.untitledNote', undefined, this.getLocale());
     const mdTasks = sharedParseMarkdownTasks(item.body || '');
     const actions = item.mediaMeta?.actionItems ?? [];
     const checked = new Set(item.mediaMeta?.checkedActionIndices ?? []);
@@ -2963,7 +3026,7 @@ export class MobileVaultStore {
         await this.saveItemRevision(existing.id, 'sync_conflict', {
           title: payload.title,
           content: payload.body,
-          deviceName: `Удалённое устройство (${remoteDeviceId.slice(0, 8)})`,
+          deviceName: tm('store.remoteDevice', { id: remoteDeviceId.slice(0, 8) }, this.getLocale()),
         });
       }
       return {

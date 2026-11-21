@@ -2,6 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { Drawer } from '@base-ui/react/drawer';
 import { X } from '@phosphor-icons/react';
 import { pushBackHandler } from '../lib/back-stack';
+import { useMobileI18n } from '../lib/mobile-i18n';
 
 // Module-level open-sheet stack so stacked sheets (e.g. MobilePickerSheet over QuickCaptureSheet)
 // receive monotonically increasing z-indexes, single-backdrop deduplication, and strict LIFO dismissal.
@@ -76,6 +77,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   footer,
   children,
 }) => {
+  const { t } = useMobileI18n();
   const sheetId = useId();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -202,7 +204,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
                   <div className="flex items-center gap-1.5 shrink-0">
                     {headerRight}
                     <Drawer.Close
-                      aria-label="Закрыть"
+                      aria-label={t('common.close')}
                       className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
                     >
                       <X className="w-4 h-4" />

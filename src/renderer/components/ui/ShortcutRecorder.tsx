@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Keyboard } from '@phosphor-icons/react';
 import { formatShortcutDisplay, keyboardEventToAccelerator } from '@shared/shortcuts';
+import { useI18n } from '@shared/i18n/react';
 
 interface ShortcutRecorderProps {
   value: string;
@@ -13,6 +14,7 @@ export const ShortcutRecorder: React.FC<ShortcutRecorderProps> = ({
   onChange,
   registered = true,
 }) => {
+  const { t, locale } = useI18n();
   const [capturing, setCapturing] = useState(false);
 
   return (
@@ -54,7 +56,7 @@ export const ShortcutRecorder: React.FC<ShortcutRecorderProps> = ({
     >
       <Keyboard className="w-3.5 h-3.5 shrink-0 opacity-75" />
       <span className="k-mono">
-        {capturing ? 'Нажми клавиши…' : formatShortcutDisplay(value, window.kapsula?.platform)}
+        {capturing ? t('ui.pressKeys') : formatShortcutDisplay(value, window.kapsula?.platform, locale)}
       </span>
     </button>
   );

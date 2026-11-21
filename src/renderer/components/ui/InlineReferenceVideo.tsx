@@ -8,6 +8,7 @@ import {
   SpeakerSlash,
 } from '@phosphor-icons/react';
 import { formatDurationMmSs, getMediaUrl } from '../../lib/format';
+import { useI18n } from '@shared/i18n/react';
 
 interface InlineReferenceVideoProps {
   mediaPath: string;
@@ -24,6 +25,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
   heightClass = 'max-h-[210px]',
   onOpenFull,
 }) => {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -83,7 +85,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
         <button
           type="button"
           onClick={togglePlay}
-          aria-label="Воспроизвести видео"
+          aria-label={t('ui.videoPlayAria')}
           className="k-interactive absolute inset-0 m-auto w-10 h-10 rounded-full bg-black/65 border border-white/25 text-white flex items-center justify-center backdrop-blur-sm hover:scale-105 cursor-pointer"
         >
           <Play weight="fill" className="w-4 h-4 ml-0.5" />
@@ -99,7 +101,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
           type="button"
           onClick={togglePlay}
           className="k-interactive w-6 h-6 rounded-md hover:bg-white/15 inline-flex items-center justify-center cursor-pointer"
-          title={playing ? 'Пауза' : 'Играть'}
+          title={playing ? t('ui.videoPause') : t('ui.videoPlay')}
         >
           {playing ? <Pause weight="fill" className="w-3.5 h-3.5" /> : <Play weight="fill" className="w-3.5 h-3.5" />}
         </button>
@@ -119,7 +121,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
             }
           }}
           className="flex-1 h-1 accent-[var(--k-accent)] cursor-pointer"
-          aria-label="Позиция видео"
+          aria-label={t('ui.videoSeekAria')}
         />
 
         <span className="k-mono text-[10.5px] text-white/75 w-10 text-right shrink-0">
@@ -130,7 +132,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
           type="button"
           onClick={() => setSpeedIdx((i) => (i + 1) % SPEEDS.length)}
           className="k-interactive k-mono px-1.5 h-5 rounded bg-white/10 hover:bg-white/20 text-[10.5px] cursor-pointer"
-          title="Скорость воспроизведения"
+          title={t('ui.videoSpeed')}
         >
           {speed}x
         </button>
@@ -141,7 +143,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
           className={`k-interactive w-6 h-5 rounded inline-flex items-center justify-center cursor-pointer ${
             loop ? 'bg-[var(--k-accent)]/30 text-[var(--k-accent)]' : 'hover:bg-white/15 text-white/70'
           }`}
-          title="Повтор"
+          title={t('ui.videoLoop')}
         >
           <Repeat weight="bold" className="w-3 h-3" />
         </button>
@@ -150,7 +152,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
           type="button"
           onClick={() => setMuted((m) => !m)}
           className="k-interactive w-6 h-5 rounded hover:bg-white/15 inline-flex items-center justify-center cursor-pointer"
-          title={muted ? 'Включить звук' : 'Выключить звук'}
+          title={muted ? t('ui.videoUnmute') : t('ui.videoMute')}
         >
           {muted ? <SpeakerSlash className="w-3.5 h-3.5" /> : <SpeakerHigh className="w-3.5 h-3.5" />}
         </button>
@@ -160,7 +162,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
             type="button"
             onClick={() => onOpenFull()}
             className="k-interactive w-6 h-5 rounded hover:bg-white/15 inline-flex items-center justify-center cursor-pointer"
-            title="Открыть отдельно"
+            title={t('ui.videoOpenSeparate')}
           >
             <ArrowsOutSimple className="w-3.5 h-3.5" />
           </button>

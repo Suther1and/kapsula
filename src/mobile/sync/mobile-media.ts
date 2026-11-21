@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SYNC_STORAGE_BUCKET, type SyncMediaRef } from '@shared/sync-contract';
+import { tm } from '../lib/mobile-i18n';
 import type { MobileVaultStore } from '../storage/mobile-store';
 import {
   computePlaintextSha256,
@@ -132,7 +133,9 @@ export class MobileSyncMediaManager {
         .eq('blob_id', blobId)
         .maybeSingle();
       if (lookupErr) {
-        throw new Error(`Ошибка проверки вложения ${localName}: ${lookupErr.message}`);
+        throw new Error(
+          tm('media.checkErr', { name: localName, msg: lookupErr.message }, this.store.getLocale())
+        );
       }
 
       if (!existingBlob) {
@@ -145,7 +148,9 @@ export class MobileSyncMediaManager {
             upsert: true,
           });
         if (uploadErr) {
-          throw new Error(`Ошибка загрузки вложения ${localName}: ${uploadErr.message}`);
+          throw new Error(
+            tm('media.uploadErr', { name: localName, msg: uploadErr.message }, this.store.getLocale())
+          );
         }
 
         const { error: regErr } = await client.from('sync_blobs').upsert(
@@ -158,7 +163,9 @@ export class MobileSyncMediaManager {
           { onConflict: 'user_id,blob_id' }
         );
         if (regErr) {
-          throw new Error(`Ошибка регистрации вложения ${localName}: ${regErr.message}`);
+          throw new Error(
+            tm('media.registerErr', { name: localName, msg: regErr.message }, this.store.getLocale())
+          );
         }
         uploadedCount += 1;
       }
@@ -224,7 +231,9 @@ export class MobileSyncMediaManager {
         if (msg.includes('not found') || msg.includes('404')) {
           continue;
         }
-        throw new Error(`Ошибка скачивания вложения ${safeName}: ${error.message}`);
+        throw new Error(
+          tm('media.downloadErr', { name: safeName, msg: error.message }, this.store.getLocale())
+        );
       }
       if (!data) continue;
 
@@ -233,7 +242,7 @@ export class MobileSyncMediaManager {
       const sha256 = await computePlaintextSha256(plaintext);
       const verifiedBlobId = await deriveOpaqueBlobId(dek, sha256);
       if (verifiedBlobId !== ref.blobId) {
-        throw new Error(`Проверка целостности файла ${safeName} не пройдена`);
+        throw new Error(tm('media.integrityErr', { name: safeName }, this.store.getLocale()));
       }
 
       const mime = guessMimeFromFilename(safeName);

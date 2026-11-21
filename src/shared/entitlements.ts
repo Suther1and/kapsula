@@ -1,3 +1,5 @@
+import type { AppLocale } from './types';
+
 export type PlanTier = 'free' | 'pro';
 
 export type ProFeatureKey =
@@ -81,6 +83,73 @@ export const PRO_FEATURE_CATALOG: Record<ProFeatureKey, ProFeatureMeta> = {
     minTier: 'pro',
   },
 };
+
+export const PRO_FEATURE_CATALOG_EN: Record<ProFeatureKey, ProFeatureMeta> = {
+  cloud_sync: {
+    key: 'cloud_sync',
+    title: 'Cloud Sync',
+    description: 'End-to-end encrypted sync of notes, images, calendar, and Vault across all your devices.',
+    minTier: 'pro',
+  },
+  version_history: {
+    key: 'version_history',
+    title: 'Note Version History',
+    description: 'Automatic snapshots with inline diffs and one-click restore to any earlier version.',
+    minTier: 'pro',
+  },
+  ai_suite: {
+    key: 'ai_suite',
+    title: 'AI Assistant & Transcription',
+    description: 'Voice transcription, note formatting, action extraction, smart triage, and semantic search.',
+    minTier: 'pro',
+  },
+  kanban_board: {
+    key: 'kanban_board',
+    title: 'Kanban Task Board',
+    description: 'Custom columns, priorities, due dates, and drag-and-drop tasks from notes and voice memos.',
+    minTier: 'pro',
+  },
+  reference_board: {
+    key: 'reference_board',
+    title: 'Visual Reference Board',
+    description: 'Freeform canvas for organizing images, notes, links, and project annotations.',
+    minTier: 'pro',
+  },
+  integrations: {
+    key: 'integrations',
+    title: 'Integrations & Import',
+    description: 'Two-way Google Calendar sync, browser clipper extension, and archive imports.',
+    minTier: 'pro',
+  },
+  vault_totp: {
+    key: 'vault_totp',
+    title: '2FA Codes in Vault',
+    description: 'One-time verification codes stored alongside passwords with one-click copy.',
+    minTier: 'pro',
+  },
+  vault_security_audit: {
+    key: 'vault_security_audit',
+    title: 'Advanced Vault Protection',
+    description: 'Auto-lock timer, screen capture shield, biometrics, and automatic clipboard wipe.',
+    minTier: 'pro',
+  },
+  custom_theme_sliders: {
+    key: 'custom_theme_sliders',
+    title: 'Custom Color Palette',
+    description: 'Custom accent and background colors with automatic contrast checks.',
+    minTier: 'pro',
+  },
+  email_forwarding: {
+    key: 'email_forwarding',
+    title: 'Email Forwarding to Kapsula',
+    description: 'Dedicated inbox address to save emails and attachments, plus one-click message import.',
+    minTier: 'pro',
+  },
+};
+
+export function getProFeatureCatalog(locale: AppLocale = 'ru'): Record<ProFeatureKey, ProFeatureMeta> {
+  return locale === 'en' ? PRO_FEATURE_CATALOG_EN : PRO_FEATURE_CATALOG;
+}
 
 /**
  * Global paywall switch. Kept `false` while all Pro capabilities are open;

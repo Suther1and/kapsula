@@ -1,5 +1,6 @@
 import { parseOtpAuthUri } from '@shared/totp';
 import type { SecretMeta, SecretPayload, StructuredSecretInput } from '@shared/types';
+import { tm } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 import {
   base64ToBytes,
@@ -51,7 +52,7 @@ export class MobileLocalCrypto {
         if (requireOsProtection) throw err;
       }
     } else if (requireOsProtection) {
-      throw new Error('Аппаратное хранилище ключей Android недоступно');
+      throw new Error(tm('vaultCrypto.keystoreUnavailable'));
     }
 
     const key = await this.getFallbackKey();
@@ -96,7 +97,7 @@ export class MobileLocalCrypto {
   public async decryptSecretPayload(encoded: string): Promise<SecretPayload> {
     const plain = await this.decryptString(encoded);
     if (!plain) {
-      throw new Error('Не удалось расшифровать запись Сейфа');
+      throw new Error(tm('vaultCrypto.decryptFailed'));
     }
     return JSON.parse(plain) as SecretPayload;
   }
@@ -117,7 +118,7 @@ export function buildSecretMetaFromInput(
   input: StructuredSecretInput,
   existingTotpMeta?: { hasTotp?: boolean; totpDigits?: 6 | 8; totpPeriod?: number }
 ): SecretMeta {
-  const service = input.service.trim() || input.title?.trim() || 'Секрет';
+  const service = input.service.trim() || input.title?.trim() || tm('vault.secretFallback');
   const login = (input.login ?? '').trim();
   const value = input.secretValue.trim();
 
@@ -187,7 +188,7 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
 export async function hashMasterPin(pin: string, iterations = PIN_KDF_ITERATIONS): Promise<string> {
   const clean = pin.trim();
   if (clean.length < 4) {
-    throw new Error('Мастер-ПИН должен содержать не менее 4 символов');
+    throw new Error(tm('vaultCrypto.pinMin4'));
   }
   const salt = new Uint8Array(new ArrayBuffer(16));
   globalThis.crypto.getRandomValues(salt);

@@ -18,6 +18,7 @@ import {
 import type { CalendarEvent, OrbitDef, VaultItem, VaultTaskEntry } from '@shared/types';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { cleanBrokenTextArtifacts, truncateAtWordBoundary } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { isMacPlatform } from '@shared/shortcuts';
 import { formatDateCompact, getDnaHumanLabel, getMediaUrl, stripMarkdownPreview } from '../../lib/format';
 
@@ -89,6 +90,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
   onOpenAssistant,
   onOpenCalendarNew,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [activeIdx, setActiveIdx] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -100,31 +102,31 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     () => [
       {
         id: 'cmd-new-note',
-        label: 'Новая заметка',
+        label: t('ui.searchPop.newNote'),
         hint: isMacPlatform(window.kapsula?.platform) ? '⌘N' : 'Ctrl+N',
         icon: <Plus weight="bold" className="w-3.5 h-3.5 text-[var(--k-accent)]" />,
         run: onOpenNewNote,
       },
       {
         id: 'cmd-new-event',
-        label: 'Новое событие в Календаре',
+        label: t('ui.searchPop.newEvent'),
         icon: <CalendarBlank className="w-3.5 h-3.5 text-[var(--k-accent)]" />,
         run: onOpenCalendarNew,
       },
       {
         id: 'cmd-triage',
-        label: 'Умный разбор записей',
+        label: t('ui.searchPop.triage'),
         icon: <FunnelSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />,
         run: onOpenTriage,
       },
       {
         id: 'cmd-assistant',
-        label: 'Спросить Ассистента',
+        label: t('ui.searchPop.askAssistant'),
         icon: <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)]" />,
         run: onOpenAssistant,
       },
     ],
-    [onOpenNewNote, onOpenCalendarNew, onOpenTriage, onOpenAssistant]
+    [onOpenNewNote, onOpenCalendarNew, onOpenTriage, onOpenAssistant, t]
   );
 
   const entries = useMemo<SearchEntry[]>(() => {
@@ -256,7 +258,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
           <div ref={listRef} className="max-h-[400px] overflow-y-auto p-1.5 space-y-0.5">
             {entries.length === 0 ? (
               <div className="py-8 text-center text-[12.5px] text-[var(--k-ink-muted)]">
-                Ничего не найдено по запросу «{q}»
+                {t('ui.searchPop.nothingFound', { query: q })}
               </div>
             ) : (
               entries.map((entry, idx) => {
@@ -265,10 +267,10 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                   const it = entry.item;
                   const thumb = it.dna !== 'secret' ? getMediaUrl(it.thumbPath || it.imagePath) : null;
                   const orbit = it.orbit ? orbitMap.get(it.orbit) : undefined;
-                  const title = cleanBrokenTextArtifacts(it.title || getDnaHumanLabel(it), true);
+                  const title = cleanBrokenTextArtifacts(it.title || getDnaHumanLabel(it, locale), true);
                   const sub =
                     it.dna === 'secret'
-                      ? it.secretMeta?.loginHint || 'Запись в Сейфе'
+                      ? it.secretMeta?.loginHint || t('dna.vaultRecord')
                       : truncateAtWordBoundary(
                           cleanBrokenTextArtifacts(stripMarkdownPreview(it.summary || it.body || it.url || ''), true),
                           70
@@ -311,7 +313,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                         </span>
                       ) : null}
                       <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                        {formatDateCompact(it.contentUpdatedAt || it.createdAt)}
+                        {formatDateCompact(it.contentUpdatedAt || it.createdAt, locale)}
                       </span>
                     </button>
                   );
@@ -338,16 +340,18 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium truncate">{ev.title}</div>
                         <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                          Событие ·{' '}
-                          {new Date(ev.startAt).toLocaleDateString('ru-RU', {
+                          {t('ui.searchPop.eventPrefix')}{' '}
+                          {new Date(ev.startAt).toLocaleDateString(dateLocale, {
                             day: 'numeric',
                             month: 'short',
                           })}
                           {!ev.allDay
-                            ? ` в ${new Date(ev.startAt).toLocaleTimeString('ru-RU', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}`
+                            ? t('ui.searchPop.atTime', {
+                                time: new Date(ev.startAt).toLocaleTimeString(dateLocale, {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                }),
+                              })
                             : ''}
                         </div>
                       </div>
@@ -357,13 +361,13 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                 }
 
                 if (entry.kind === 'task') {
-                  const t = entry.task;
+                  const taskItem = entry.task;
                   return (
                     <button
                       key={entry.id}
                       type="button"
                       onMouseEnter={() => setActiveIdx(idx)}
-                      onClick={() => onToggleTask(t)}
+                      onClick={() => onToggleTask(taskItem)}
                       className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors cursor-pointer ${
                         isActive ? 'bg-[var(--k-accent-soft)]' : 'hover:bg-[var(--k-bg-surface-2)]'
                       }`}
@@ -372,12 +376,14 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                         <CheckSquare className="w-4 h-4 text-[var(--k-accent)]" />
                       </span>
                       <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-medium truncate">{t.text}</div>
+                        <div className="text-[13px] font-medium truncate">{taskItem.text}</div>
                         <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                          Задача · {t.itemTitle}
+                          {t('ui.searchPop.taskPrefix', { title: taskItem.itemTitle })}
                         </div>
                       </div>
-                      <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">Отметить</span>
+                      <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
+                        {t('ui.searchPop.checkTask')}
+                      </span>
                     </button>
                   );
                 }
@@ -411,8 +417,8 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
             )}
           </div>
           <div className="px-3 py-1.5 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50 flex items-center justify-between text-[11px] text-[var(--k-ink-muted)]">
-            <span>↑↓ выбор · Enter открыть · Esc закрыть</span>
-            <span>Живой поиск по всей Kapsula</span>
+            <span>{t('ui.searchPop.footerKeys')}</span>
+            <span>{t('ui.searchPop.footerBrand')}</span>
           </div>
           </motion.div>
         ) : null}

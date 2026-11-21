@@ -4,10 +4,12 @@ import { initSchema } from '@main/db/schema';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import {
   DEFAULT_TASK_BOARD_COLUMNS,
+  computeColumnDropOrder,
   extractWikiLinkTitles,
   normalizeTaskTextHash,
   parseMarkdownTasks,
   reconcileTaskMeta,
+  sortColumnTasks,
   toggleMarkdownTaskInBody,
 } from '@shared/task-helpers';
 import type { TaskBoardColumn, TaskBoardItemMeta } from '@shared/types';
@@ -228,5 +230,49 @@ describe('Task helpers, inline media extraction, wiki-links & v8 SQLite schema',
     ).not.toThrow();
 
     db.close();
+  });
+
+  it('groups untouched Kanban column tasks by parent note without interleaving while honoring customOrder drags', () => {
+    const noteAOld0 = {
+      id: 'a-0',
+      itemId: 'note-a',
+      itemTitle: 'Note A',
+      sourceType: 'markdown' as const,
+      taskIndex: 0,
+      text: 'Task A1',
+      done: false,
+      orbit: null,
+      remindAt: null,
+      updatedAt: 2000,
+      columnId: 'inbox',
+      boardOrder: 0,
+    };
+    const noteAOld1 = { ...noteAOld0, id: 'a-1', taskIndex: 1, text: 'Task A2', boardOrder: 1000 };
+    const noteBNew0 = {
+      id: 'b-0',
+      itemId: 'note-b',
+      itemTitle: 'Note B',
+      sourceType: 'markdown' as const,
+      taskIndex: 0,
+      text: 'Task B1',
+      done: false,
+      orbit: null,
+      remindAt: null,
+      updatedAt: 3000,
+      columnId: 'inbox',
+      boardOrder: 0,
+    };
+    const noteBNew1 = { ...noteBNew0, id: 'b-1', taskIndex: 1, text: 'Task B2', boardOrder: 1000 };
+
+    const grouped = sortColumnTasks([noteAOld1, noteBNew1, noteAOld0, noteBNew0]);
+    expect(grouped.map((t) => t.id)).toEqual(['b-0', 'b-1', 'a-0', 'a-1']);
+
+    const siblings = grouped.filter((t) => t.id !== 'a-1');
+    const dropOrder = computeColumnDropOrder(siblings, 1);
+    const afterDrag = sortColumnTasks([
+      ...siblings,
+      { ...noteAOld1, customOrder: true, boardOrder: dropOrder },
+    ]);
+    expect(afterDrag.map((t) => t.id)).toEqual(['b-0', 'a-1', 'b-1', 'a-0']);
   });
 });

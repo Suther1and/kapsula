@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { CaptureMode } from '@shared/types';
+import type { AppLocale, CaptureMode } from '@shared/types';
 import { CLIPPER_PORT_BASE, CLIPPER_PORT_RANGE } from '@shared/constants';
 import type { CapturePipeline } from '../pipeline/capture-pipeline';
 import {
@@ -29,7 +29,8 @@ export class ClipperServer {
     private readonly pipeline: CapturePipeline,
     private readonly getToken: () => string,
     private readonly onClipFeedback?: (feedback: ClipFeedbackPayload) => void,
-    private readonly getOrbits?: () => Array<{ id: string; name: string; color: string }>
+    private readonly getOrbits?: () => Array<{ id: string; name: string; color: string }>,
+    private readonly getLocale?: () => AppLocale
   ) {}
 
   public getPort(): number {
@@ -49,7 +50,8 @@ export class ClipperServer {
         // Try next port in range
       }
     }
-    throw new Error('Не удалось запустить локальный клиппер-сервер');
+    const isEn = this.getLocale?.() === 'en';
+    throw new Error(isEn ? 'Could not start local browser clipper server' : 'Не удалось запустить локальный клиппер-сервер');
   }
 
   private bindPort(port: number): Promise<void> {

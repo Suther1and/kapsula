@@ -18,8 +18,9 @@ import {
 } from '@phosphor-icons/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import type { CalendarEvent, OrbitDef, VaultItem, VaultTaskEntry } from '@shared/types';
-import { formatDateCompact, stripLeadingTitle } from '@renderer/lib/format';
-import { filterItemsByQuery, pluralRu, stripMobileInlineMarkdown } from '../lib/mobile-helpers';
+import { stripLeadingTitle } from '@renderer/lib/format';
+import { filterItemsByQuery, stripMobileInlineMarkdown } from '../lib/mobile-helpers';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { pushBackHandler } from '../lib/back-stack';
 import { mobileBridge } from '../native/bridge';
 
@@ -64,6 +65,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
   onOpenSecret,
   onUnlockVault,
 }) => {
+  const { t, plural, formatDateCompact, intlLocale } = useMobileI18n();
   const [scope, setScope] = useState<SearchScope>('all');
   const inputRef = useRef<HTMLInputElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -134,11 +136,11 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
   };
 
   const scopeChips: Array<{ id: SearchScope; label: string; count?: number }> = [
-    { id: 'all', label: 'Всё', count: trimmed ? totalCount : undefined },
-    { id: 'items', label: 'Заметки', count: matchedItems.length },
-    { id: 'tasks', label: 'Задачи', count: matchedTasks.length },
-    { id: 'calendar', label: 'Календарь', count: matchedEvents.length },
-    { id: 'vault', label: 'Сейф', count: vaultLocked ? undefined : matchedSecrets.length },
+    { id: 'all', label: t('search.tabAll'), count: trimmed ? totalCount : undefined },
+    { id: 'items', label: t('search.tabNotes'), count: matchedItems.length },
+    { id: 'tasks', label: t('search.tabTasks'), count: matchedTasks.length },
+    { id: 'calendar', label: t('search.tabCalendar'), count: matchedEvents.length },
+    { id: 'vault', label: t('search.tabVault'), count: vaultLocked ? undefined : matchedSecrets.length },
   ];
 
   return (
@@ -153,7 +155,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
             type="button"
             data-testid="mobile-search-close"
             onClick={closeAndBlur}
-            aria-label="Закрыть поиск"
+            aria-label={t('search.closeAria')}
             className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -167,7 +169,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
               data-testid="mobile-search-input"
               value={query}
               onChange={(e) => onChangeQuery(e.target.value)}
-              placeholder="Поиск по всей Kapsula…"
+              placeholder={t('search.placeholder')}
               className="w-full h-10 pl-9 pr-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
             {query ? (
@@ -177,7 +179,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                   onChangeQuery('');
                   inputRef.current?.focus({ preventScroll: true });
                 }}
-                aria-label="Очистить запрос"
+                aria-label={t('search.clearAria')}
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]"
               >
                 <X className="w-3.5 h-3.5" />
@@ -218,7 +220,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
       >
         {!trimmed ? (
           <div className="text-[11.5px] text-[var(--k-ink-muted)] px-1">
-            Недавние записи · работает поиск на русском и английском (включая раскладку)
+            {t('search.recentHint')}
           </div>
         ) : null}
 
@@ -226,10 +228,10 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
           <div className="flex flex-col items-center justify-center text-center py-12 px-6">
             <MagnifyingGlass weight="duotone" className="w-9 h-9 text-[var(--k-ink-muted)] mb-2.5" />
             <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-              По запросу «{trimmed}» ничего не нашлось
+              {t('search.emptyTitle', { query: trimmed })}
             </div>
             <p className="text-[13px] text-[var(--k-ink-muted)] mt-1 max-w-xs">
-              Попробуй другое слово, тег, домен ссылки или проверь фильтр сверху.
+              {t('search.emptyHint')}
             </p>
           </div>
         ) : null}
@@ -239,10 +241,10 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
           <section className="space-y-1.5">
             <div className="flex items-center justify-between px-1">
               <h3 className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                Заметки и ссылки
+                {t('search.notesHeading')}
               </h3>
               <span className="text-[11.5px] text-[var(--k-ink-muted)]">
-                {pluralRu(matchedItems.length, 'запись', 'записи', 'записей')}
+                {plural('item', matchedItems.length)}
               </span>
             </div>
             {matchedItems.slice(0, 20).map((item) => {
@@ -279,10 +281,10 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
-                        {item.title || 'Без названия'}
+                        {item.title || t('common.noTitle')}
                       </span>
                       <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">
-                        {formatDateCompact(item.contentUpdatedAt || item.updatedAt)}
+                        {formatDateCompact(item.contentUpdatedAt || item.createdAt)}
                       </span>
                     </div>
                     {preview ? (
@@ -315,7 +317,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
         {showTasks ? (
           <section className="space-y-1.5">
             <h3 className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] px-1">
-              Задачи · {matchedTasks.length}
+              {t('search.tasksHeading', { count: matchedTasks.length })}
             </h3>
             {matchedTasks.slice(0, 12).map((task) => (
               <div
@@ -332,7 +334,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                     e.stopPropagation();
                     onToggleTask(task);
                   }}
-                  aria-label={task.done ? 'Снять отметку' : 'Отметить выполненной'}
+                  aria-label={task.done ? t('tasks.actionUncheck') : t('tasks.actionDone')}
                   className="inline-flex items-center justify-center w-9 h-9 -ml-2 -my-1.5 shrink-0"
                 >
                   <span
@@ -369,7 +371,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
         {showEvents ? (
           <section className="space-y-1.5">
             <h3 className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] px-1">
-              Календарь · {matchedEvents.length}
+              {t('search.calendarHeading', { count: matchedEvents.length })}
             </h3>
             {matchedEvents.slice(0, 10).map((ev) => (
               <button
@@ -390,16 +392,16 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                     {ev.title}
                   </div>
                   <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-                    {new Date(ev.startAt).toLocaleDateString('ru-RU', {
+                    {new Date(ev.startAt).toLocaleDateString(intlLocale, {
                       day: 'numeric',
                       month: 'short',
                     })}
                     {!ev.allDay
-                      ? ` · ${new Date(ev.startAt).toLocaleTimeString('ru-RU', {
+                      ? ` · ${new Date(ev.startAt).toLocaleTimeString(intlLocale, {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}`
-                      : ' · Весь день'}
+                      : t('search.allDaySuffix')}
                   </div>
                 </div>
                 <CalendarBlank className="w-4 h-4 text-[var(--k-ink-muted)] shrink-0" />
@@ -421,10 +423,10 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                   <ShieldCheck weight="duotone" className="w-5 h-5 text-[var(--k-accent)] shrink-0" />
                   <div className="min-w-0">
                     <div className="text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
-                      Искать также в Сейфе
+                      {t('search.unlockVaultTitle')}
                     </div>
                     <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-                      Подтверди вход, чтобы увидеть карты и пароли
+                      {t('search.unlockVaultHint')}
                     </div>
                   </div>
                 </div>
@@ -434,7 +436,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
           ) : showSecrets ? (
             <section className="space-y-1.5">
               <h3 className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] px-1">
-                Сейф · {matchedSecrets.length}
+                {t('search.vaultHeading', { count: matchedSecrets.length })}
               </h3>
               {matchedSecrets.slice(0, 10).map((sec) => {
                 const isCard = sec.secretMeta?.kind === 'bank_card';
@@ -458,7 +460,7 @@ export const MobileSearchOverlay: React.FC<MobileSearchOverlayProps> = ({
                       <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
                         {isCard
                           ? `•••• ${sec.secretMeta?.last4 || '••••'}`
-                          : sec.secretMeta?.loginHint || sec.secretMeta?.service || 'Секрет'}
+                          : sec.secretMeta?.loginHint || sec.secretMeta?.service || t('search.secretFallback')}
                       </div>
                     </div>
                   </button>

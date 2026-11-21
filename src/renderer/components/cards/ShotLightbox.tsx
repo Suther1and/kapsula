@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Eyedropper, MapPin, PencilSimple, Trash, X } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { CanvasAnnotation, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { getMediaUrl } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 
@@ -72,6 +73,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
   onEditInStudio,
   onSaveAnnotations,
 }) => {
+  const { t } = useI18n();
   const prefersReduced = useReducedMotion();
   const [swatches, setSwatches] = useState<string[]>([]);
   const [annotateMode, setAnnotateMode] = useState(false);
@@ -103,7 +105,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
 
   const handleEyeDropper = async () => {
     if (!window.EyeDropper) {
-      toast.info('Кликни по любому цветовому образцу сверху — цвет скопируется сразу');
+      toast.info(t('cards.paletteHint'));
       return;
     }
     try {
@@ -113,7 +115,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
         const hex = res.sRGBHex.toUpperCase();
         await window.kapsula.copyText(hex);
         setSwatches((prev) => [hex, ...prev.filter((p) => p !== hex)].slice(0, 7));
-        toast.success(`Цвет ${hex} скопирован`);
+        toast.success(t('ui.quickLook.colorCopied', { hex }));
       }
     } catch {
       // User cancelled EyeDropper
@@ -158,7 +160,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
             className="w-full max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 px-6 pt-5 pb-3 shrink-0 text-[#f4f3ee]"
           >
             <div className="min-w-0">
-              <div className="text-[15px] font-semibold truncate">{item.title || 'Изображение'}</div>
+              <div className="text-[15px] font-semibold truncate">{item.title || t('dna.image')}</div>
               {item.summary && item.summary !== item.title ? (
                 <div className="text-[12px] text-[#aba9a0] truncate max-w-[520px]">
                   {item.summary}
@@ -174,10 +176,10 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                     <button
                       key={hex}
                       type="button"
-                      title={`Скопировать ${hex}`}
+                      title={t('ui.quickLook.copyColor', { hex })}
                       onClick={() => {
                         void window.kapsula.copyText(hex);
-                        toast.success(`Цвет ${hex} скопирован`);
+                        toast.success(t('ui.quickLook.colorCopied', { hex }));
                       }}
                       className="k-interactive flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-white/15 cursor-pointer"
                     >
@@ -192,7 +194,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                     <button
                       type="button"
                       onClick={() => void handleEyeDropper()}
-                      title="Пипетка цвета"
+                      title={t('cards.colorPickerTitle')}
                       className="k-interactive w-6 h-6 rounded-md hover:bg-white/15 inline-flex items-center justify-center cursor-pointer"
                     >
                       <Eyedropper className="w-3.5 h-3.5" />
@@ -212,14 +214,14 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   }`}
                 >
                   <MapPin className="w-3.5 h-3.5" />
-                  <span>{annotateMode ? 'Кликни по картинке…' : 'Пометить точку'}</span>
+                  <span>{annotateMode ? t('cards.annotateActive') : t('cards.annotateStart')}</span>
                 </button>
               ) : null}
 
               {localImagePath ? (
                 <CopySlotPill
-                  label="Копировать фото"
-                  copiedLabel="Скопировано"
+                  label={t('cards.copyPhoto')}
+                  copiedLabel={t('common.copied')}
                   widthPx={156}
                   heightPx={32}
                   tone="secret"
@@ -227,8 +229,8 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                 />
               ) : item.url ? (
                 <CopySlotPill
-                  label="Копировать ссылку"
-                  copiedLabel="Скопировано"
+                  label={t('cards.copyLink')}
+                  copiedLabel={t('common.copied')}
                   widthPx={164}
                   heightPx={32}
                   tone="secret"
@@ -246,13 +248,13 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                 >
                   <PencilSimple className="w-3.5 h-3.5" />
-                  <span>Открыть заметку</span>
+                  <span>{t('cards.openNote')}</span>
                 </button>
               ) : null}
 
               <button
                 type="button"
-                aria-label="Закрыть просмотр"
+                aria-label={t('ui.quickLook.closeAria')}
                 onClick={onClose}
                 className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg bg-white/10 text-white hover:bg-white/20 cursor-pointer"
               >
@@ -336,7 +338,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void commitDraftPin();
                     }}
-                    placeholder="Комментарий к точке…"
+                    placeholder={t('cards.annotationPlaceholder')}
                     className="h-8 rounded-lg border border-white/15 bg-white/10 px-2.5 text-[12px] text-[#f4f4f6] placeholder:text-white/45 outline-none"
                   />
                   <div className="flex justify-end gap-1.5">
@@ -345,14 +347,14 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                       onClick={() => setDraftPin(null)}
                       className="px-2 py-1 text-[11px] text-white/70 hover:text-white cursor-pointer"
                     >
-                      Отмена
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="button"
                       onClick={() => void commitDraftPin()}
                       className="px-2.5 py-1 rounded-md bg-[var(--k-accent)] text-[11px] font-medium text-white cursor-pointer"
                     >
-                      Сохранить
+                      {t('common.save')}
                     </button>
                   </div>
                 </div>

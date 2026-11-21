@@ -105,8 +105,6 @@ jobs:
         run: |
           ls -lh release/*.apk
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk
-          (cd release && sha256sum *.apk > SHA256SUMS-android.txt)
-          cat release/SHA256SUMS-android.txt
           node --input-type=module << 'EOF'
           import { execFileSync } from 'node:child_process';
           import crypto from 'node:crypto';
@@ -160,7 +158,6 @@ jobs:
           name: Kapsula-Android-apk
           path: |
             release/*.apk
-            release/SHA256SUMS-android.txt
             release/android-latest.json
           retention-days: 30
           if-no-files-found: error
@@ -186,5 +183,4 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             release/*.apk
-            release/SHA256SUMS-android.txt
             release/android-latest.json

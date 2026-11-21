@@ -1,4 +1,4 @@
-import type { CaptureMode, ContentDna, OrbitDef } from './types';
+import type { AppLocale, CaptureMode, ContentDna, OrbitDef } from './types';
 
 export const MAX_TAGS_PER_ITEM = 6;
 export const DEFAULT_MONTHLY_CAP_USD = 1.5;
@@ -38,6 +38,7 @@ export const SECTION_COLOR_PALETTE = [
 ];
 
 export const SECTION_ICON_CHOICES = [
+  'Dot',
   'Folder',
   'GameController',
   'Code',
@@ -228,3 +229,183 @@ export const DNA_META: Record<ContentDna, { id: ContentDna; label: string; accen
   voice: { id: 'voice', label: 'Голос', accent: '#F43F5E' },
   doc: { id: 'doc', label: 'Файлы', accent: '#CBD5E1' },
 };
+
+const ORGANIC_SECTION_EN_BY_RU: Record<
+  string,
+  { canonicalName: string; description: string; extraAliases?: string[] }
+> = {
+  'Финансы': {
+    canonicalName: 'Finance',
+    description: 'Bank cards, receipts, invoices, transfers, and promo codes.',
+    extraAliases: ['finance', 'bank', 'card', 'receipt', 'budget', 'tax'],
+  },
+  'Контакты': {
+    canonicalName: 'Contacts',
+    description: 'Phone numbers, handles, emails, and key specialists.',
+    extraAliases: ['contact', 'phone', 'people', 'email'],
+  },
+  'Доступы': {
+    canonicalName: 'Credentials',
+    description: 'Passwords, service keys, and confidential notes.',
+    extraAliases: ['credential', 'password', 'secret', 'vault', 'token', 'login'],
+  },
+  'Код': {
+    canonicalName: 'Code',
+    description: 'Code snippets, terminal commands, repositories, and docs.',
+    extraAliases: ['code', 'dev', 'script', 'terminal', 'snippet'],
+  },
+  'Дизайн': {
+    canonicalName: 'Design',
+    description: 'UI references, color palettes, typography, and inspiration.',
+    extraAliases: ['design', 'reference', 'palette', 'typography', 'mockup'],
+  },
+  'Встречи': {
+    canonicalName: 'Meetings',
+    description: 'Voice memos, call recordings, summaries, and action items.',
+    extraAliases: ['meeting', 'call', 'voice', 'audio', 'sync'],
+  },
+  'Документы': {
+    canonicalName: 'Documents',
+    description: 'PDFs, contracts, tickets, and important paperwork.',
+    extraAliases: ['document', 'docs', 'contract', 'passport', 'manual', 'file'],
+  },
+  'Покупки': {
+    canonicalName: 'Shopping',
+    description: 'Items, orders, prices, and wishlists.',
+    extraAliases: ['shopping', 'shop', 'order', 'store', 'gift'],
+  },
+  'Поездки': {
+    canonicalName: 'Travel',
+    description: 'Tickets, hotel bookings, places, and itineraries.',
+    extraAliases: ['travel', 'trip', 'ticket', 'hotel', 'flight', 'route'],
+  },
+  'Чтение': {
+    canonicalName: 'Reading',
+    description: 'Articles, books, study notes, and deep dives.',
+    extraAliases: ['reading', 'article', 'book', 'guide', 'research'],
+  },
+  'Работа': {
+    canonicalName: 'Work',
+    description: 'Tasks, projects, plans, reports, and agreements.',
+    extraAliases: ['work', 'project', 'client', 'office', 'business', 'career'],
+  },
+  'Учёба': {
+    canonicalName: 'Study',
+    description: 'Lecture notes, courses, cheat sheets, and exam prep.',
+    extraAliases: ['study', 'course', 'lecture', 'exam', 'learning'],
+  },
+  'Идеи': {
+    canonicalName: 'Ideas',
+    description: 'Future notes, creative ideas, drafts, and inspiration.',
+    extraAliases: ['idea', 'ideas', 'thought', 'draft', 'inspiration'],
+  },
+  'Здоровье': {
+    canonicalName: 'Health',
+    description: 'Doctor appointments, workouts, lab results, and recipes.',
+    extraAliases: ['health', 'fitness', 'doctor', 'workout', 'recipe'],
+  },
+  'Игры': {
+    canonicalName: 'Games',
+    description: 'Games, hobbies, tabletop references, and inspirations.',
+    extraAliases: ['game', 'games', 'hobby', 'gaming'],
+  },
+};
+
+export function getOrganicSectionCatalog(locale: AppLocale = 'ru'): OrganicSectionTemplate[] {
+  if (locale !== 'en') return ORGANIC_SECTION_CATALOG;
+  return ORGANIC_SECTION_CATALOG.map((entry) => {
+    const en = ORGANIC_SECTION_EN_BY_RU[entry.canonicalName];
+    return en
+      ? {
+          ...entry,
+          canonicalName: en.canonicalName,
+          description: en.description,
+          aliases: Array.from(
+            new Set([
+              ...entry.aliases,
+              entry.canonicalName.toLowerCase(),
+              ...(en.extraAliases ?? []),
+            ])
+          ),
+        }
+      : entry;
+  });
+}
+
+export const MODE_META_EN: Record<
+  CaptureMode,
+  { id: CaptureMode; label: string; shortLabel: string; hint: string; color: string }
+> = {
+  autopilot: {
+    id: 'autopilot',
+    label: 'Smart Triage',
+    shortLabel: 'Auto',
+    hint: 'Automatically organizes clear entries into matching sections',
+    color: '#E86A33',
+  },
+  buffer: {
+    id: 'buffer',
+    label: 'Quick Capture',
+    shortLabel: 'Draft',
+    hint: 'Saves straight to All Items so you can sort later if needed',
+    color: '#94A3B8',
+  },
+  ghost: {
+    id: 'ghost',
+    label: 'Vault Mode',
+    shortLabel: 'Vault',
+    hint: 'Encrypts immediately on disk and clears the clipboard after 30 seconds',
+    color: '#2EA06B',
+  },
+  focus: {
+    id: 'focus',
+    label: 'Project',
+    shortLabel: 'Project',
+    hint: 'Routes all new captures directly into the selected project',
+    color: '#3B82F6',
+  },
+};
+
+export function getModeMeta(locale: AppLocale = 'ru'): typeof MODE_META {
+  return locale === 'en' ? MODE_META_EN : MODE_META;
+}
+
+export const DNA_META_EN: Record<ContentDna, { id: ContentDna; label: string; accent: string }> = {
+  note: { id: 'note', label: 'Notes', accent: '#94A3B8' },
+  shot: { id: 'shot', label: 'Images', accent: '#E4E4E7' },
+  link: { id: 'link', label: 'Links', accent: '#60A5FA' },
+  secret: { id: 'secret', label: 'Vault', accent: '#2EA06B' },
+  snippet: { id: 'snippet', label: 'Code', accent: '#E86A33' },
+  voice: { id: 'voice', label: 'Voice', accent: '#F43F5E' },
+  doc: { id: 'doc', label: 'Files', accent: '#CBD5E1' },
+};
+
+export function getDnaMeta(locale: AppLocale = 'ru'): typeof DNA_META {
+  return locale === 'en' ? DNA_META_EN : DNA_META;
+}
+
+const DEFAULT_STARTER_TAGS_RU = [
+  'идея',
+  'важно',
+  'работа',
+  'личное',
+  'проект',
+  'задача',
+  'референс',
+  'почитать',
+] as const;
+
+const DEFAULT_STARTER_TAGS_EN = [
+  'idea',
+  'important',
+  'work',
+  'personal',
+  'project',
+  'task',
+  'reference',
+  'to-read',
+] as const;
+
+export function getDefaultStarterTags(locale: AppLocale = 'ru'): readonly string[] {
+  return locale === 'en' ? DEFAULT_STARTER_TAGS_EN : DEFAULT_STARTER_TAGS_RU;
+}

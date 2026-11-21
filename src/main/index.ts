@@ -21,6 +21,7 @@ import {
 } from 'electron';
 import type {
   AiProvider,
+  AppLocale,
   CaptureMode,
   SettingsState,
   ShortcutRegistrationStatus,
@@ -219,16 +220,23 @@ if (!singleInstanceLock) {
     });
 
     repo = new VaultRepository(path.join(dataDir, 'kapsula-vault.sqlite'));
+    repo.setDefaultOsLocale(app.getLocale());
+    const getLocale = (): AppLocale => repo?.getLocale() ?? 'ru';
     let cryptoVault: VaultCrypto;
     try {
-      cryptoVault = new VaultCrypto(dataDir, safeStorage);
+      cryptoVault = new VaultCrypto(dataDir, safeStorage, getLocale());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const isEnStartup = getLocale() === 'en';
       dialog.showErrorBox(
-        'Kapsula — доступ к Связке ключей',
+        isEnStartup ? 'Kapsula — Keychain access' : 'Kapsula — доступ к Связке ключей',
         process.platform === 'darwin'
-          ? `Не удалось получить ключ локального Сейфа из Связки ключей macOS.\n\nПерезапусти Kapsula и нажми «Всегда разрешать» в запросе Связки ключей.\n\nДетали: ${msg}`
-          : `Не удалось открыть системное хранилище ключей Сейфа.\n\nДетали: ${msg}`
+          ? isEnStartup
+            ? `Could not retrieve local Vault key from macOS Keychain.\n\nRestart Kapsula and click "Always Allow" in the Keychain prompt.\n\nDetails: ${msg}`
+            : `Не удалось получить ключ локального Сейфа из Связки ключей macOS.\n\nПерезапусти Kapsula и нажми «Всегда разрешать» в запросе Связки ключей.\n\nДетали: ${msg}`
+          : isEnStartup
+            ? `Could not open system Vault key storage.\n\nDetails: ${msg}`
+            : `Не удалось открыть системное хранилище ключей Сейфа.\n\nДетали: ${msg}`
       );
       try {
         repo.close();
@@ -356,6 +364,7 @@ if (!singleInstanceLock) {
         typeof systemPreferences.canPromptTouchID === 'function' &&
         Boolean(systemPreferences.canPromptTouchID());
       return {
+        locale: getLocale(),
         theme,
         activeMode,
         activeFocusBoardId: repo!.getSetting('active_focus_board_id') || null,
@@ -487,6 +496,7 @@ if (!singleInstanceLock) {
         supabaseUrl: syncEngine.getSupabaseBaseUrl(),
         supabasePublishableKey: syncEngine.getSupabasePublishableKey(),
         getAccessToken: () => syncEngine!.getActiveAccessToken(),
+        getLocale,
       };
     };
 
@@ -573,7 +583,8 @@ if (!singleInstanceLock) {
       () =>
         repo!
           .listOrbits()
-          .map((o) => ({ id: o.id, name: o.name, color: o.color }))
+          .map((o) => ({ id: o.id, name: o.name, color: o.color })),
+      getLocale
     );
 
     if (process.env.KAPSULA_DISABLE_CLIPPER !== '1') {
@@ -626,9 +637,13 @@ if (!singleInstanceLock) {
     reminderScheduler = new ReminderScheduler(repo, (item) => {
       windows?.broadcast('vault:item-upserted', item);
       if (Notification.isSupported()) {
+        const isEn = getLocale() === 'en';
         const notif = new Notification({
-          title: 'Напоминание · Kapsula',
-          body: item.title || item.body.slice(0, 80) || 'Открой запись в хранилище',
+          title: isEn ? 'Reminder · Kapsula' : 'Напоминание · Kapsula',
+          body:
+            item.title ||
+            item.body.slice(0, 80) ||
+            (isEn ? 'Open note in vault' : 'Открой запись в хранилище'),
         });
         notif.on('click', () => {
           windows?.showVault();
@@ -641,16 +656,28 @@ if (!singleInstanceLock) {
 
     const rebuildTrayMenu = () => {
       if (!tray) return;
-      const fallbackHint = process.platform === 'darwin' ? '⌥+Пробел' : 'Alt+Пробел';
+      const loc = getLocale();
+      const isEn = loc === 'en';
+      const fallbackHint =
+        process.platform === 'darwin'
+          ? isEn
+            ? '⌥+Space'
+            : '⌥+Пробел'
+          : isEn
+            ? 'Alt+Space'
+            : 'Alt+Пробел';
       const hudHint =
-        formatShortcutCompact(shortcutStatus.effectiveHudShortcut, process.platform) || fallbackHint;
+        formatShortcutCompact(shortcutStatus.effectiveHudShortcut, process.platform, loc) || fallbackHint;
       tray.setContextMenu(
         Menu.buildFromTemplate([
-          { label: 'Открыть Kapsula', click: () => windows?.showVault() },
-          { label: `Быстрая панель (${hudHint})`, click: () => windows?.toggleHud() },
+          { label: isEn ? 'Open Kapsula' : 'Открыть Kapsula', click: () => windows?.showVault() },
+          {
+            label: isEn ? `Quick HUD (${hudHint})` : `Быстрая панель (${hudHint})`,
+            click: () => windows?.toggleHud(),
+          },
           { type: 'separator' },
           {
-            label: 'Выход из Kapsula',
+            label: isEn ? 'Quit Kapsula' : 'Выход из Kapsula',
             click: () => {
               windows?.setQuitting(true);
               app.quit();
@@ -660,16 +687,18 @@ if (!singleInstanceLock) {
       );
     };
 
-    if (process.platform === 'darwin') {
+    const rebuildAppMenu = () => {
+      if (process.platform !== 'darwin') return;
+      const isEn = getLocale() === 'en';
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
           {
             label: 'Kapsula',
             submenu: [
-              { role: 'about', label: 'О программе Kapsula' },
+              { role: 'about', label: isEn ? 'About Kapsula' : 'О программе Kapsula' },
               { type: 'separator' },
               {
-                label: 'Настройки…',
+                label: isEn ? 'Settings…' : 'Настройки…',
                 accelerator: 'Cmd+,',
                 click: () => {
                   windows?.showVault();
@@ -677,14 +706,14 @@ if (!singleInstanceLock) {
                 },
               },
               { type: 'separator' },
-              { role: 'services', label: 'Службы' },
+              { role: 'services', label: isEn ? 'Services' : 'Службы' },
               { type: 'separator' },
-              { role: 'hide', label: 'Скрыть Kapsula' },
-              { role: 'hideOthers', label: 'Скрыть остальные' },
-              { role: 'unhide', label: 'Показать все' },
+              { role: 'hide', label: isEn ? 'Hide Kapsula' : 'Скрыть Kapsula' },
+              { role: 'hideOthers', label: isEn ? 'Hide Others' : 'Скрыть остальные' },
+              { role: 'unhide', label: isEn ? 'Show All' : 'Показать все' },
               { type: 'separator' },
               {
-                label: 'Выход из Kapsula',
+                label: isEn ? 'Quit Kapsula' : 'Выход из Kapsula',
                 accelerator: 'Cmd+Q',
                 click: () => {
                   windows?.setQuitting(true);
@@ -694,10 +723,10 @@ if (!singleInstanceLock) {
             ],
           },
           {
-            label: 'Файл',
+            label: isEn ? 'File' : 'Файл',
             submenu: [
               {
-                label: 'Новая заметка',
+                label: isEn ? 'New Note' : 'Новая заметка',
                 accelerator: 'Cmd+N',
                 click: () => {
                   windows?.showVault();
@@ -706,7 +735,7 @@ if (!singleInstanceLock) {
               },
               { type: 'separator' },
               {
-                label: 'Закрыть окно',
+                label: isEn ? 'Close Window' : 'Закрыть окно',
                 accelerator: 'Cmd+W',
                 click: () => {
                   const focused = BrowserWindow.getFocusedWindow();
@@ -720,20 +749,23 @@ if (!singleInstanceLock) {
             ],
           },
           {
-            label: 'Правка',
+            label: isEn ? 'Edit' : 'Правка',
             submenu: [
-              { role: 'undo', label: 'Отменить' },
-              { role: 'redo', label: 'Повторить' },
+              { role: 'undo', label: isEn ? 'Undo' : 'Отменить' },
+              { role: 'redo', label: isEn ? 'Redo' : 'Повторить' },
               { type: 'separator' },
-              { role: 'cut', label: 'Вырезать' },
-              { role: 'copy', label: 'Копировать' },
-              { role: 'paste', label: 'Вставить' },
-              { role: 'pasteAndMatchStyle', label: 'Вставить и согласовать стиль' },
-              { role: 'delete', label: 'Удалить' },
-              { role: 'selectAll', label: 'Выбрать всё' },
+              { role: 'cut', label: isEn ? 'Cut' : 'Вырезать' },
+              { role: 'copy', label: isEn ? 'Copy' : 'Копировать' },
+              { role: 'paste', label: isEn ? 'Paste' : 'Вставить' },
+              {
+                role: 'pasteAndMatchStyle',
+                label: isEn ? 'Paste and Match Style' : 'Вставить и согласовать стиль',
+              },
+              { role: 'delete', label: isEn ? 'Delete' : 'Удалить' },
+              { role: 'selectAll', label: isEn ? 'Select All' : 'Выбрать всё' },
               { type: 'separator' },
               {
-                label: 'Найти…',
+                label: isEn ? 'Find…' : 'Найти…',
                 accelerator: 'Cmd+F',
                 click: () => {
                   windows?.showVault();
@@ -743,10 +775,10 @@ if (!singleInstanceLock) {
             ],
           },
           {
-            label: 'Вид',
+            label: isEn ? 'View' : 'Вид',
             submenu: [
               {
-                label: 'Календарь',
+                label: isEn ? 'Calendar' : 'Календарь',
                 accelerator: 'Cmd+Shift+C',
                 click: () => {
                   windows?.showVault();
@@ -754,29 +786,31 @@ if (!singleInstanceLock) {
                 },
               },
               {
-                label: 'Быстрая панель',
+                label: isEn ? 'Quick HUD' : 'Быстрая панель',
                 click: () => windows?.toggleHud(),
               },
               { type: 'separator' },
-              { role: 'togglefullscreen', label: 'Полноэкранный режим' },
+              { role: 'togglefullscreen', label: isEn ? 'Toggle Full Screen' : 'Полноэкранный режим' },
             ],
           },
           {
-            label: 'Окно',
+            label: isEn ? 'Window' : 'Окно',
             submenu: [
-              { role: 'minimize', label: 'Свернуть' },
-              { role: 'zoom', label: 'Масштаб' },
+              { role: 'minimize', label: isEn ? 'Minimize' : 'Свернуть' },
+              { role: 'zoom', label: isEn ? 'Zoom' : 'Масштаб' },
               { type: 'separator' },
               {
-                label: 'Показать Kapsula',
+                label: isEn ? 'Show Kapsula' : 'Показать Kapsula',
                 click: () => windows?.showVault(),
               },
-              { role: 'front', label: 'Все окна — на передний план' },
+              { role: 'front', label: isEn ? 'Bring All to Front' : 'Все окна — на передний план' },
             ],
           },
         ])
       );
-    }
+    };
+
+    rebuildAppMenu();
 
     const runClipboardSnatch = () => {
       void (async () => {
@@ -797,10 +831,13 @@ if (!singleInstanceLock) {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err ?? '');
-          if (msg.includes('Сейф заблокирован')) {
+          if (msg.includes('Сейф заблокирован') || msg.includes('Vault is locked')) {
+            const isEn = getLocale() === 'en';
             showSecurityNotice({
-              title: 'Сейф заблокирован · Kapsula',
-              body: 'Разблокируй Сейф мастер-кодом, чтобы безопасно сохранить конфиденциальные данные из буфера.',
+              title: isEn ? 'Vault is locked · Kapsula' : 'Сейф заблокирован · Kapsula',
+              body: isEn
+                ? 'Unlock Vault with your master PIN to securely save sensitive clipboard data.'
+                : 'Разблокируй Сейф мастер-кодом, чтобы безопасно сохранить конфиденциальные данные из буфера.',
             });
           }
         }
@@ -846,9 +883,11 @@ if (!singleInstanceLock) {
         }
       }
 
+      const loc = getLocale();
+      const isEn = loc === 'en';
       const busyList: string[] = [];
-      if (!hudRegistered) busyList.push(formatShortcutCompact(hudShortcut, process.platform));
-      if (!snatchRegistered) busyList.push(formatShortcutCompact(snatchShortcut, process.platform));
+      if (!hudRegistered) busyList.push(formatShortcutCompact(hudShortcut, process.platform, loc));
+      if (!snatchRegistered) busyList.push(formatShortcutCompact(snatchShortcut, process.platform, loc));
       shortcutStatus = {
         hudRegistered,
         snatchRegistered,
@@ -856,7 +895,9 @@ if (!singleInstanceLock) {
         effectiveSnatchShortcut,
         error:
           busyList.length > 0
-            ? `Клавиши ${busyList.join(', ')} сейчас заняты другой программой`
+            ? isEn
+              ? `Shortcuts ${busyList.join(', ')} are currently used by another app`
+              : `Клавиши ${busyList.join(', ')} сейчас заняты другой программой`
             : null,
       };
       rebuildTrayMenu();
@@ -908,7 +949,13 @@ if (!singleInstanceLock) {
           reminderScheduler?.refresh();
         },
         onWorkspacePrefsChanged: () => {
+          const nextLocale = getLocale();
+          cryptoVault.setLocale(nextLocale);
+          syncEngine?.setLocale(nextLocale);
+          updater?.setLocale(nextLocale);
           applyWindowBackground();
+          reapplyShortcuts();
+          rebuildAppMenu();
           windows?.broadcast('settings:updated', getSettingsState());
         },
         onMediaCleanup: (filenames) => {
@@ -923,6 +970,7 @@ if (!singleInstanceLock) {
       platform: process.platform,
       arch: process.arch,
       isPackaged: app.isPackaged && !process.env.KAPSULA_DATA_DIR,
+      locale: getLocale(),
       onStateChanged: (nextState) => {
         windows?.broadcast('updater:state-changed', nextState);
       },
@@ -974,6 +1022,13 @@ if (!singleInstanceLock) {
         reminderScheduler?.refresh();
       },
       reapplyShortcuts,
+      onLocaleChanged: (nextLocale) => {
+        cryptoVault.setLocale(nextLocale);
+        syncEngine?.setLocale(nextLocale);
+        updater?.setLocale(nextLocale);
+        reapplyShortcuts();
+        rebuildAppMenu();
+      },
     });
 
     windows.vault?.on('focus', () => {

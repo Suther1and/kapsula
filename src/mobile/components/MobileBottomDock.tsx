@@ -11,21 +11,23 @@ import {
   ShieldCheck,
   Sparkle,
 } from '@phosphor-icons/react';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
 import type { SyncStatus } from '@shared/sync-contract';
 import { KapsulaEmblem } from '@renderer/components/ui/KapsulaEmblem';
 import type { MobileTabId } from '../lib/mobile-helpers';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 
 export const MOBILE_NAV_TABS: Array<{
   id: MobileTabId;
-  label: string;
+  labelKey: MobileDictKey;
   icon: typeof Sparkle;
 }> = [
-  { id: 'feed', label: 'Лента', icon: Sparkle },
-  { id: 'notes', label: 'Заметки', icon: NotePencil },
-  { id: 'tasks', label: 'Задачи', icon: CheckSquare },
-  { id: 'calendar', label: 'Календарь', icon: CalendarBlank },
-  { id: 'vault', label: 'Сейф', icon: ShieldCheck },
+  { id: 'feed', labelKey: 'nav.feed', icon: Sparkle },
+  { id: 'notes', labelKey: 'nav.notes', icon: NotePencil },
+  { id: 'tasks', labelKey: 'nav.tasks', icon: CheckSquare },
+  { id: 'calendar', labelKey: 'nav.calendar', icon: CalendarBlank },
+  { id: 'vault', labelKey: 'nav.vault', icon: ShieldCheck },
 ];
 
 interface MobileBottomDockProps {
@@ -55,6 +57,7 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
   onQuickCapture,
   onQuickVoiceCapture,
 }) => {
+  const { t } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressedRef = useRef(false);
@@ -120,7 +123,7 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
             {/* Detached Floating Glass Capsule */}
             <nav
               data-testid="fold-bottom-nav"
-              aria-label="Нижняя навигация"
+              aria-label={t('nav.bottomNavAria')}
               style={{
                 background: 'var(--k-dock-bg)',
                 borderColor: 'var(--k-dock-border)',
@@ -133,12 +136,13 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
               {MOBILE_NAV_TABS.map((tab) => {
                 const Icon = tab.icon;
                 const active = activeTab === tab.id;
+                const tabLabel = t(tab.labelKey);
                 return (
                   <button
                     key={tab.id}
                     type="button"
                     data-testid={`nav-tab-${tab.id}`}
-                    aria-label={tab.label}
+                    aria-label={tabLabel}
                     aria-current={active ? 'page' : undefined}
                     onClick={() => {
                       if (tab.id !== activeTab) mobileBridge.haptic('light');
@@ -172,7 +176,7 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
                           data-testid="dock-active-label"
                           className="text-[11.5px] font-semibold leading-none tracking-[-0.01em] whitespace-nowrap"
                         >
-                          {tab.label}
+                          {tabLabel}
                         </span>
                       ) : null}
                       {active && tab.id === 'tasks' && activeTasksCount > 0 ? (
@@ -219,8 +223,8 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
                   onPointerCancel={clearLongPress}
                   onPointerLeave={clearLongPress}
                   onClick={handleOrbClick}
-                  aria-label="Быстрый захват (удерживай для голоса)"
-                  title="Быстрый захват (удерживай для голосовой заметки)"
+                  aria-label={t('nav.quickCaptureAria')}
+                  title={t('nav.quickCaptureHint')}
                   style={{ boxShadow: 'var(--k-orb-shadow)' }}
                   className="k-tap pointer-events-auto shrink-0 w-[50px] h-[50px] rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] flex items-center justify-center border border-white/15"
                 >
@@ -255,12 +259,13 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
   onQuickCapture,
   onOpenSettings,
 }) => {
+  const { t } = useMobileI18n();
   const prefersReduced = useReducedMotion();
 
   return (
     <nav
       data-testid="fold-nav-rail"
-      aria-label="Основная навигация"
+      aria-label={t('nav.mainNavAria')}
       className="w-[78px] shrink-0 h-full flex flex-col items-center justify-between py-3 px-2 border-r border-[var(--k-border-hairline)] bg-[var(--k-bg-rail)]"
     >
       <div className="flex flex-col items-center gap-2.5 w-full">
@@ -280,7 +285,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
             mobileBridge.haptic('light');
             onQuickCapture();
           }}
-          aria-label="Быстрый захват"
+          aria-label={t('nav.quickCapture')}
           style={{ boxShadow: 'var(--k-orb-shadow)' }}
           className="k-tap w-11 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] flex items-center justify-center"
         >
@@ -325,7 +330,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
                   className="relative z-10 w-5 h-5"
                 />
                 <span className="relative z-10 text-[10px] font-semibold leading-none">
-                  {tab.label}
+                  {t(tab.labelKey)}
                 </span>
                 {tab.id === 'tasks' && activeTasksCount > 0 ? (
                   <span className="absolute z-20 top-1 right-2 min-w-[16px] h-4 px-1 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[9.5px] font-bold flex items-center justify-center">
@@ -343,7 +348,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
           type="button"
           data-testid="cloud-settings-btn"
           onClick={onOpenSettings}
-          aria-label="Облако и настройки"
+          aria-label={t('nav.cloudAndSettings')}
           className="k-tap relative w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
         >
           {syncStatus.state === 'synced' ? (

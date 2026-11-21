@@ -93,6 +93,7 @@ export interface TaskBoardItemMeta {
   columnId: string;
   prevColumnId?: string;
   boardOrder: number;
+  customOrder?: boolean;
   priority?: TaskPriority;
   dueAt?: number | null;
   textHash?: string;
@@ -263,6 +264,8 @@ export interface ShortcutRegistrationStatus {
 
 export type ThemeMode = 'dark' | 'light';
 
+export type AppLocale = 'ru' | 'en';
+
 export type AccentPresetId = 'terracotta' | 'cobalt' | 'emerald' | 'violet' | 'amber' | 'rose';
 
 export type BackgroundPresetId =
@@ -292,6 +295,7 @@ export interface AppearanceConfig {
 
 export interface SettingsState {
   theme: ThemeMode;
+  locale?: AppLocale;
   activeMode: CaptureMode;
   activeFocusBoardId: string | null;
   aiProvider: AiProvider;
@@ -515,6 +519,7 @@ export interface VaultTaskEntry {
   taskKey?: string;
   columnId?: string;
   boardOrder?: number;
+  customOrder?: boolean;
   priority?: TaskPriority;
   dueAt?: number | null;
 }

@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { SecretPayload } from '@shared/types';
+import type { AppLocale, SecretPayload } from '@shared/types';
+import { translate } from '@shared/i18n';
 
 export interface DpapiBridge {
   isEncryptionAvailable(): boolean;
@@ -89,11 +90,13 @@ export class VaultCrypto {
   private readonly configKeyPath: string;
   private readonly configSaltPath: string;
   private readonly usingDpapi: boolean;
+  private locale: AppLocale;
 
-  constructor(dataDir: string, dpapi?: DpapiBridge | null) {
+  constructor(dataDir: string, dpapi?: DpapiBridge | null, locale: AppLocale = 'ru') {
     fs.mkdirSync(dataDir, { recursive: true });
     this.dataDir = dataDir;
     this.dpapi = dpapi ?? null;
+    this.locale = locale === 'en' ? 'en' : 'ru';
     this.keyPath = path.join(dataDir, 'master.key.dpapi');
     this.pinKeyPath = path.join(dataDir, 'vault.vdk.pin.json');
     this.bioKeyPath = path.join(dataDir, 'vault.vdk.bio.dpapi');
@@ -118,7 +121,7 @@ export class VaultCrypto {
         const hex = dpapi.decryptString(sealed);
         const key = Buffer.from(hex, 'hex');
         if (key.length !== 32) {
-          throw new Error('Повреждённый ключ локального сейфа');
+          throw new Error(translate(this.locale, 'main.vault.corruptKey'));
         }
         this.masterKey = key;
       } else {
@@ -130,7 +133,7 @@ export class VaultCrypto {
     }
 
     if (fs.existsSync(this.keyPath)) {
-      throw new Error('Системное хранилище ключей временно недоступно для расшифровки сейфа');
+      throw new Error(translate(this.locale, 'main.vault.keychainUnavailable'));
     }
 
     if (fs.existsSync(this.localWrappedPath)) {
@@ -180,10 +183,14 @@ export class VaultCrypto {
     }
   }
 
+  public setLocale(locale: AppLocale): void {
+    this.locale = locale === 'en' ? 'en' : 'ru';
+  }
+
   private unwrapLocalVdk(): Buffer {
     const raw = JSON.parse(fs.readFileSync(this.localWrappedPath, 'utf8')) as LocalWrappedVdkFile;
     if (!raw || raw.v !== 2 || raw.alg !== 'aes-256-gcm') {
-      throw new Error('Повреждённый локальный конверт ключа сейфа');
+      throw new Error(translate(this.locale, 'main.vault.corruptEnvelope'));
     }
     const kek = this.deriveLocalFallbackKey(this.fallbackSaltPath, 'kapsula-local-v2');
     try {
@@ -198,7 +205,7 @@ export class VaultCrypto {
       ]);
       if (vdk.length !== 32) {
         vdk.fill(0);
-        throw new Error('Повреждённый ключ локального сейфа');
+        throw new Error(translate(this.locale, 'main.vault.corruptKey'));
       }
       return vdk;
     } finally {
@@ -229,7 +236,7 @@ export class VaultCrypto {
 
   private requireUnlockedVdk(): Buffer {
     if (!this.masterKey || this.masterKey.length !== 32) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(translate(this.locale, 'main.vault.lockedError'));
     }
     return this.masterKey;
   }
@@ -257,7 +264,7 @@ export class VaultCrypto {
   public setPinProtection(pin: string, opts?: { enableBiometric?: boolean }): void {
     const cleanPin = pin.trim();
     if (cleanPin.length < 4) {
-      throw new Error('Мастер-код должен содержать минимум 4 символа');
+      throw new Error(translate(this.locale, 'main.ipc.pinMinChars'));
     }
     const vdk = this.requireUnlockedVdk();
     const salt = crypto.randomBytes(16);

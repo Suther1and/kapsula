@@ -568,4 +568,94 @@ export function SearchInput() {
     expect(allSent).not.toContain('keyup->search#search');
     expect(allSent).not.toContain('We use cookies');
   });
+
+  it('preserves rich extracted Telegram post title and summary when cover image media and Vision/AI run', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kapsula-tg-preserve-'));
+    tempDirs.push(dir);
+    const repo = new VaultRepository(path.join(dir, 'vault.sqlite'));
+    cleanups.push(() => repo.close());
+    const cryptoVault = new VaultCrypto(dir, null);
+    const mediaDir = path.join(dir, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mediaDir, 'tg-cover.png'),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])
+    );
+
+    let visionPrepCalls = 0;
+    const mockFetch: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      title: 'Bottom Sheet с жестами свайпа',
+                      summary:
+                        'Изображение демонстрирует концепцию дизайна пользовательского интерфейса для мобильных приложений.',
+                      orbit: '',
+                      suggestedNewSection: 'Дизайн',
+                      dna: 'link',
+                      tags: ['ui', 'ux'],
+                      calendarEvent: null,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+          usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 30 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+
+    const pipeline = new CapturePipeline({
+      repo,
+      cryptoVault,
+      dataDir: dir,
+      getConfig: () => ({
+        activeMode: 'autopilot',
+        activeFocusBoardId: null,
+        aiProvider: 'google_ai_studio',
+        apiKey: 'AIzaTestKeyPreserve',
+        googleAiKey: 'AIzaTestKeyPreserve',
+        monthlyCapUsd: 5,
+        enableAutoOcr: false,
+        enableUrlUnfurl: false,
+      }),
+      prepareVisionImage: () => {
+        visionPrepCalls += 1;
+        return { base64: 'iVBORw0KGgo=', mimeType: 'image/png' };
+      },
+      fetchFn: mockFetch,
+    });
+
+    const saved = repo.createItem({
+      dna: 'link',
+      orbit: '',
+      modeCaptured: 'autopilot',
+      title: 'Полезный Skill по созданию UI для моб. приложений',
+      summary: 'Скилл добавляет эффекты перетаскивания и свайпов, следующие прямо за движением пальца.',
+      body: 'Скилл добавляет эффекты перетаскивания и свайпов, следующие прямо за движением пальца ровно пиксель в пиксель.\n\n```bash\nnpx skills@latest add emilkowalski/skills --skill gestures\n```',
+      url: 'https://t.me/ai4svoi/219',
+      domain: 't.me',
+      platform: 'telegram',
+      imagePath: 'tg-cover.png',
+      tags: ['telegram'],
+      source: 'vault_ui',
+      contentHash: 'tg-preserve-copy-hash-1',
+    });
+
+    await pipeline.reprocessItem(saved.id);
+    await pipeline.waitForIdle();
+
+    expect(visionPrepCalls).toBe(0);
+    const updated = repo.getItemById(saved.id);
+    expect(updated?.title).toBe('Полезный Skill по созданию UI для моб. приложений');
+    expect(updated?.summary).toBe(
+      'Скилл добавляет эффекты перетаскивания и свайпов, следующие прямо за движением пальца.'
+    );
+  });
 });

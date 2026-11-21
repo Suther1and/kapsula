@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { MagnifyingGlassMinus, MagnifyingGlassPlus, X } from '@phosphor-icons/react';
 import { pushBackHandler } from '../lib/back-stack';
+import { useMobileI18n } from '../lib/mobile-i18n';
 
 interface MobileImageLightboxProps {
   src: string | null;
@@ -17,6 +18,7 @@ export const MobileImageLightbox: React.FC<MobileImageLightboxProps> = ({
   caption,
   onClose,
 }) => {
+  const { t } = useMobileI18n();
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
@@ -44,13 +46,13 @@ export const MobileImageLightbox: React.FC<MobileImageLightboxProps> = ({
         >
           <div className="flex items-center justify-between gap-3 px-4 py-3 bg-black/50 text-white shrink-0">
             <Dialog.Title className="text-[14px] font-medium truncate flex-1">
-              {caption || 'Просмотр фото'}
+              {caption || t('lightbox.defaultCaption')}
             </Dialog.Title>
             <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setScale((s) => Math.max(1, Number((s - 0.6).toFixed(1))))}
-                aria-label="Уменьшить"
+                aria-label={t('lightbox.zoomOut')}
                 className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/12 text-white"
               >
                 <MagnifyingGlassMinus className="w-4 h-4" />
@@ -58,13 +60,13 @@ export const MobileImageLightbox: React.FC<MobileImageLightboxProps> = ({
               <button
                 type="button"
                 onClick={() => setScale((s) => Math.min(3, Number((s + 0.6).toFixed(1))))}
-                aria-label="Увеличить"
+                aria-label={t('lightbox.zoomIn')}
                 className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/12 text-white"
               >
                 <MagnifyingGlassPlus className="w-4 h-4" />
               </button>
               <Dialog.Close
-                aria-label="Закрыть просмотр"
+                aria-label={t('lightbox.close')}
                 className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/15 text-white"
               >
                 <X className="w-4 h-4" />
@@ -79,7 +81,7 @@ export const MobileImageLightbox: React.FC<MobileImageLightboxProps> = ({
             {src ? (
               <img
                 src={src}
-                alt={caption || 'Фото'}
+                alt={caption || t('common.photo')}
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleZoom();

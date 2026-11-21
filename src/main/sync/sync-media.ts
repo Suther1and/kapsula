@@ -126,7 +126,12 @@ export class SyncMediaManager {
         .eq('blob_id', blobId)
         .maybeSingle();
       if (lookupErr) {
-        throw new Error(`Ошибка проверки файла ${localName}: ${lookupErr.message}`);
+        const isEn = this.repo.getLocale() === 'en';
+        throw new Error(
+          isEn
+            ? `Failed to verify file ${localName}: ${lookupErr.message}`
+            : `Ошибка проверки файла ${localName}: ${lookupErr.message}`
+        );
       }
 
       if (!existingBlob) {
@@ -139,7 +144,12 @@ export class SyncMediaManager {
             upsert: true,
           });
         if (uploadErr) {
-          throw new Error(`Ошибка загрузки файла ${localName}: ${uploadErr.message}`);
+          const isEn = this.repo.getLocale() === 'en';
+          throw new Error(
+            isEn
+              ? `Failed to upload file ${localName}: ${uploadErr.message}`
+              : `Ошибка загрузки файла ${localName}: ${uploadErr.message}`
+          );
         }
 
         const { error: regErr } = await client.from('sync_blobs').upsert(
@@ -152,7 +162,12 @@ export class SyncMediaManager {
           { onConflict: 'user_id,blob_id' }
         );
         if (regErr) {
-          throw new Error(`Ошибка регистрации файла ${localName}: ${regErr.message}`);
+          const isEn = this.repo.getLocale() === 'en';
+          throw new Error(
+            isEn
+              ? `Failed to register file ${localName}: ${regErr.message}`
+              : `Ошибка регистрации файла ${localName}: ${regErr.message}`
+          );
         }
         uploadedCount++;
       }
@@ -235,7 +250,12 @@ export class SyncMediaManager {
         if (errMsg.includes('not found') || errMsg.includes('404')) {
           continue;
         }
-        throw new Error(`Ошибка загрузки вложения ${safeName}: ${error.message}`);
+        const isEn = this.repo.getLocale() === 'en';
+        throw new Error(
+          isEn
+            ? `Failed to download attachment ${safeName}: ${error.message}`
+            : `Ошибка загрузки вложения ${safeName}: ${error.message}`
+        );
       }
       if (!data) continue;
 
@@ -244,7 +264,12 @@ export class SyncMediaManager {
       const sha256 = computePlaintextSha256(plaintext);
       const verifiedBlobId = deriveOpaqueBlobId(dek, sha256);
       if (verifiedBlobId !== ref.blobId) {
-        throw new Error(`Проверка целостности файла ${safeName} не пройдена`);
+        const isEn = this.repo.getLocale() === 'en';
+        throw new Error(
+          isEn
+            ? `Integrity verification failed for ${safeName}`
+            : `Проверка целостности файла ${safeName} не пройдена`
+        );
       }
 
       const tmpPath = `${targetPath}.${crypto.randomUUID()}.tmp`;

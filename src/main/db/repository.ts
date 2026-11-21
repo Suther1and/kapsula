@@ -8,12 +8,13 @@ import { DEFAULT_APPEARANCE_CONFIG } from '@shared/color-engine';
 import {
   DEFAULT_MONTHLY_CAP_USD,
   MAX_TAGS_PER_ITEM,
-  ORGANIC_SECTION_CATALOG,
   SECTION_COLOR_PALETTE,
+  getOrganicSectionCatalog,
 } from '@shared/constants';
+import { detectLocale, normalizeLocale, translate } from '@shared/i18n';
 import {
-  DEFAULT_TASK_BOARD_COLUMNS,
   extractWikiLinkTitles,
+  getDefaultTaskBoardColumns,
   isDoneColumn,
   normalizeTaskTextHash,
   parseMarkdownTasks,
@@ -23,6 +24,7 @@ import {
 import type {
   AiProvider,
   AiStatus,
+  AppLocale,
   AppearanceConfig,
   BudgetSummary,
   CalendarChecklistItem,
@@ -414,6 +416,11 @@ export class VaultRepository {
   private mutationListener: ((entityType: SyncEntityType, entityId: string) => void) | null = null;
   private dirtySeqCounter = 0;
   private localDeviceId: string | null = null;
+  private defaultOsLocale?: string | null;
+
+  public setDefaultOsLocale(osLocale?: string | null): void {
+    this.defaultOsLocale = osLocale ?? undefined;
+  }
 
   public setLocalDeviceId(deviceId: string | null): void {
     this.localDeviceId = deviceId?.trim() || null;
@@ -1811,7 +1818,7 @@ export class VaultRepository {
       const meta = safeParseJson<SecretMeta | null>(r.secret_meta_json, null);
       const kind = meta?.kind ?? 'password';
       const cleanedItemTitle = r.title.replace(/\d{12,19}/g, '••••').trim();
-      const safeTitle = cleanedItemTitle || meta?.service || 'Секрет';
+      const safeTitle = cleanedItemTitle || meta?.service || translate(this.getLocale(), 'vault.secretWord');
       if (kind === 'bank_card') {
         bankCardCount++;
         const hasLast4InTitle = Boolean(meta?.last4 && safeTitle.includes(meta.last4));
@@ -2030,12 +2037,11 @@ export class VaultRepository {
     );
     if (direct) return direct;
 
-    // Match via canonical Russian section catalog stems so Финансы / Карты / Деньги don't split
-    const catalogMatch = ORGANIC_SECTION_CATALOG.find(
-      (tpl) =>
-        tpl.canonicalName.toLowerCase() === clean ||
-        tpl.aliases.some((al) => clean.includes(al) || al.includes(clean))
-    );
+    // Match via canonical section catalog stems so Finance / Cards / Payments don't split
+    const catalog = getOrganicSectionCatalog(this.getLocale());
+    const catalogMatch =
+      catalog.find((tpl) => tpl.canonicalName.toLowerCase() === clean) ??
+      catalog.find((tpl) => tpl.aliases.some((al) => clean.includes(al) || al.includes(clean)));
     if (catalogMatch) {
       const existingCanon = all.find((o) => {
         const oLow = o.name.toLowerCase();
@@ -2068,11 +2074,11 @@ export class VaultRepository {
 
     const currentCount = this.listOrbits().length;
 
-    const catalogTpl = ORGANIC_SECTION_CATALOG.find(
-      (tpl) =>
-        tpl.canonicalName.toLowerCase() === clean.toLowerCase() ||
-        tpl.aliases.some((al) => clean.toLowerCase().includes(al))
-    );
+    const cleanLower = clean.toLowerCase();
+    const catalog = getOrganicSectionCatalog(this.getLocale());
+    const catalogTpl =
+      catalog.find((tpl) => tpl.canonicalName.toLowerCase() === cleanLower) ??
+      catalog.find((tpl) => tpl.aliases.some((al) => cleanLower.includes(al)));
     const displayName = catalogTpl?.canonicalName ?? clean.charAt(0).toUpperCase() + clean.slice(1);
     const color =
       catalogTpl?.color ??
@@ -2097,7 +2103,7 @@ export class VaultRepository {
     icon?: string;
   }): OrbitDef {
     const cleanName = input.name.trim().slice(0, 32);
-    if (!cleanName) throw new Error('Название раздела не может быть пустым');
+    if (!cleanName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
 
     const countRow = this.db
       .prepare('SELECT COUNT(*) AS cnt FROM orbits WHERE deleted_at IS NULL')
@@ -2160,7 +2166,7 @@ export class VaultRepository {
     if (!existing) return null;
 
     const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 32) : existing.name;
-    if (!nextName) throw new Error('Название раздела не может быть пустым');
+    if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
     const nextDesc = patch.description !== undefined ? patch.description.trim().slice(0, 140) : existing.description;
     const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
     const nextIcon = patch.icon !== undefined ? patch.icon.trim() : existing.icon;
@@ -2274,7 +2280,7 @@ export class VaultRepository {
 
   public createFocusBoard(name: string, color = '#3B82F6', icon = 'BookmarkSimple', description = ''): FocusBoard {
     const clean = name.trim().slice(0, 36);
-    if (!clean) throw new Error('Название холста не может быть пустым');
+    if (!clean) throw new Error(translate(this.getLocale(), 'main.repo.emptyBoardName'));
     const id = crypto.randomUUID();
     const createdAt = Date.now();
     const maxSort = this.db
@@ -2327,7 +2333,7 @@ export class VaultRepository {
     if (!existing) return null;
 
     const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 36) : existing.name;
-    if (!nextName) throw new Error('Название холста не может быть пустым');
+    if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptyBoardName'));
     const nextDesc =
       patch.description !== undefined ? patch.description.trim().slice(0, 140) : (existing.description ?? '');
     const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
@@ -2700,9 +2706,9 @@ export class VaultRepository {
 
   // ==================== Workspace Prefs (Kanban Columns & Appearance) ====================
 
-  private sanitizeTaskBoardColumns(raw: unknown): TaskBoardColumn[] {
+  private sanitizeTaskBoardColumns(raw: unknown, locale: AppLocale = this.getLocale()): TaskBoardColumn[] {
     if (!Array.isArray(raw) || raw.length === 0) {
-      return DEFAULT_TASK_BOARD_COLUMNS.map((c) => ({ ...c }));
+      return getDefaultTaskBoardColumns(locale).map((c) => ({ ...c }));
     }
     const seen = new Set<string>();
     const cleaned: TaskBoardColumn[] = [];
@@ -2730,22 +2736,36 @@ export class VaultRepository {
       });
     }
     if (cleaned.length === 0) {
-      return DEFAULT_TASK_BOARD_COLUMNS.map((c) => ({ ...c }));
+      return getDefaultTaskBoardColumns(locale).map((c) => ({ ...c }));
     }
     cleaned.sort((a, b) => a.order - b.order);
     if (!cleaned.some((c) => c.isDone || c.id === 'done')) {
-      cleaned.push({ id: 'done', title: 'Готово', color: '#2EA06B', order: cleaned.length, isDone: true, icon: 'check' });
+      cleaned.push({
+        id: 'done',
+        title: locale === 'en' ? 'Done' : 'Готово',
+        color: '#2EA06B',
+        order: cleaned.length,
+        isDone: true,
+        icon: 'check',
+      });
     }
     if (!cleaned.some((c) => !c.isDone && c.id !== 'done')) {
-      cleaned.unshift({ id: 'inbox', title: 'Входящие', color: '#94A3B8', order: -1, icon: 'tray' });
+      cleaned.unshift({
+        id: 'inbox',
+        title: locale === 'en' ? 'Inbox' : 'Входящие',
+        color: '#94A3B8',
+        order: -1,
+        icon: 'tray',
+      });
     }
     return cleaned.map((col, idx) => ({ ...col, order: idx }));
   }
 
   public listTaskBoardColumns(): TaskBoardColumn[] {
     const raw = this.getSetting('task_board_columns_json');
-    if (!raw) return DEFAULT_TASK_BOARD_COLUMNS.map((c) => ({ ...c }));
-    return this.sanitizeTaskBoardColumns(safeParseJson<unknown>(raw, null));
+    const locale = this.getLocale();
+    if (!raw) return getDefaultTaskBoardColumns(locale).map((c) => ({ ...c }));
+    return this.sanitizeTaskBoardColumns(safeParseJson<unknown>(raw, null), locale);
   }
 
   private bumpWorkspacePrefsSyncMeta(skipDirty = false): void {
@@ -2817,6 +2837,24 @@ export class VaultRepository {
     this.setSetting('appearance_config_json', JSON.stringify(merged));
     this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
     return merged;
+  }
+
+  public getLocale(osLocale?: string | null): AppLocale {
+    const stored = this.getSetting('locale');
+    if (stored === 'ru' || stored === 'en') {
+      return stored;
+    }
+    if (stored && stored.trim()) {
+      return normalizeLocale(stored);
+    }
+    return detectLocale(process.env.KAPSULA_LOCALE, osLocale ?? this.defaultOsLocale);
+  }
+
+  public setLocale(locale: AppLocale, opts?: { skipDirty?: boolean }): AppLocale {
+    const normalized = normalizeLocale(locale);
+    this.setSetting('locale', normalized);
+    this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+    return normalized;
   }
 
   // ==================== Kanban & Vault Tasks ====================
@@ -2900,7 +2938,7 @@ export class VaultRepository {
     const tasks: VaultTaskEntry[] = [];
 
     for (const row of rows) {
-      const itemTitle = row.title?.trim() || 'Заметка без названия';
+      const itemTitle = row.title?.trim() || translate(this.getLocale(), 'main.repo.untitledNote');
       const meta = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
       const parsed = this.collectItemTasksForReconcile(row.body || '', meta);
       if (parsed.length === 0) continue;
@@ -2923,6 +2961,7 @@ export class VaultRepository {
           taskKey: entry.taskKey,
           columnId: tm?.columnId ?? (entry.done ? 'done' : 'inbox'),
           boardOrder: tm?.boardOrder ?? entry.taskIndex * 1000,
+          ...(tm?.customOrder ? { customOrder: true } : {}),
           priority: tm?.priority ?? 'none',
           dueAt,
         });
@@ -3050,6 +3089,7 @@ export class VaultRepository {
         columnId: validTargetCol,
         ...(nextPrevCol ? { prevColumnId: nextPrevCol } : {}),
         boardOrder: Number.isFinite(input.boardOrder) ? input.boardOrder : 0,
+        customOrder: true,
         textHash: targetBefore.textHash,
       },
     };
@@ -3388,7 +3428,7 @@ export class VaultRepository {
     }
   ): CalendarEvent {
     const baseNow = Date.now();
-    const cleanTitle = (input.title || '').trim().slice(0, 140) || 'Событие';
+    const cleanTitle = (input.title || '').trim().slice(0, 140) || translate(this.getLocale(), 'main.repo.eventFallback');
     const startAt = Number.isFinite(input.startAt) ? input.startAt : baseNow;
     const endAt = Math.max(startAt, Number.isFinite(input.endAt) ? input.endAt : startAt + 3_600_000);
 
@@ -3534,6 +3574,7 @@ export class VaultRepository {
       )
       .all(itemId) as unknown as ItemRow[];
 
+    const locale = this.getLocale();
     const scored: Array<{ item: VaultItem; reason: string; score: number }> = [];
     for (const row of candidates) {
       const cand = mapRowToItem(row);
@@ -3542,16 +3583,20 @@ export class VaultRepository {
 
       if (targetLinks.has(cand.id) || cand.linksOut.includes(target.id)) {
         score += 40;
-        reasons.push('Прямая связь');
+        reasons.push(translate(locale, 'main.repo.reasonDirect'));
       }
       if (target.focusBoardId && cand.focusBoardId === target.focusBoardId) {
         score += 14;
-        reasons.push('Общая доска');
+        reasons.push(translate(locale, 'main.repo.reasonBoard'));
       }
       const sharedTags = cand.tags.filter((t) => targetTags.has(t.toLowerCase()));
       if (sharedTags.length > 0) {
         score += sharedTags.length * 10;
-        reasons.push(`Теги: #${sharedTags.slice(0, 2).join(', #')}`);
+        reasons.push(
+          translate(locale, 'main.repo.reasonTags', {
+            tags: `#${sharedTags.slice(0, 2).join(', #')}`,
+          })
+        );
       }
       if (target.orbit && cand.orbit === target.orbit && score > 0) {
         score += 4;
@@ -3569,11 +3614,19 @@ export class VaultRepository {
       }
       if (tokenHits >= 2) {
         score += tokenHits * 6;
-        if (reasons.length === 0) reasons.push(`Общая тема: ${hitTokens.join(', ')}`);
+        if (reasons.length === 0) {
+          reasons.push(
+            translate(locale, 'main.repo.reasonTopic', { tokens: hitTokens.join(', ') })
+          );
+        }
       }
 
       if (score >= 12) {
-        scored.push({ item: cand, reason: reasons[0] ?? 'Похожий контекст', score });
+        scored.push({
+          item: cand,
+          reason: reasons[0] ?? translate(locale, 'main.repo.reasonSimilar'),
+          score,
+        });
       }
     }
 
@@ -3966,12 +4019,15 @@ export class VaultRepository {
     const syncVersion = Number(this.getSetting('workspace_prefs_sync_version') || '1') || 1;
     const hasColumns = Boolean(this.getSetting('task_board_columns_json'));
     const hasAppearance = Boolean(this.getSetting('appearance_config_json'));
-    if (!hasColumns && !hasAppearance) return null;
+    const storedLocale = this.getSetting('locale');
+    const hasLocale = storedLocale === 'ru' || storedLocale === 'en';
+    if (!hasColumns && !hasAppearance && !hasLocale) return null;
     return {
       v: 1,
       id: 'default',
       ...(hasColumns ? { taskBoardColumns: this.listTaskBoardColumns() } : {}),
       ...(hasAppearance ? { appearance: this.getAppearanceConfig() } : {}),
+      ...(hasLocale ? { locale: storedLocale } : {}),
       updatedAt,
       deletedAt: null,
       syncVersion,
@@ -4014,6 +4070,9 @@ export class VaultRepository {
           ...payload.appearance,
         };
         this.setSetting('appearance_config_json', JSON.stringify(merged));
+      }
+      if (payload.locale === 'ru' || payload.locale === 'en') {
+        this.setSetting('locale', payload.locale);
       }
       this.setSetting('workspace_prefs_updated_at', String(payload.updatedAt));
       this.setSetting('workspace_prefs_sync_version', String(payload.syncVersion));
@@ -4483,7 +4542,9 @@ export class VaultRepository {
           title: payload.title,
           content: payload.body,
           source: 'sync_conflict',
-          deviceName: `Удалённое устройство (${remoteDeviceId.slice(0, 8)})`,
+          deviceName: translate(this.getLocale(), 'main.repo.remoteDevice', {
+            id: remoteDeviceId.slice(0, 8),
+          }),
         });
       }
       return {

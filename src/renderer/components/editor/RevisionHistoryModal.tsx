@@ -10,6 +10,8 @@ import {
 import { toast } from 'sonner';
 import type { ItemRevision, ItemRevisionSource } from '@shared/types';
 import { decodeHtmlEntities } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
+import type { I18nTranslator } from '@shared/i18n/types';
 import { formatRelativeDate } from '../../lib/format';
 import { ModalDialog } from '../ui/ModalDialog';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -32,7 +34,10 @@ interface DiffLine {
   revisionNo: number | null;
 }
 
-function getRevisionSourceMeta(source: ItemRevisionSource): {
+function getRevisionSourceMeta(
+  source: ItemRevisionSource,
+  t: I18nTranslator['t']
+): {
   label: string;
   badgeClass: string;
   isConflict?: boolean;
@@ -40,42 +45,42 @@ function getRevisionSourceMeta(source: ItemRevisionSource): {
   switch (source) {
     case 'auto':
       return {
-        label: 'Авто',
+        label: t('rev.source.auto'),
         badgeClass: 'bg-[var(--k-bg-surface-3)] text-[var(--k-ink-secondary)] border-[var(--k-border-hairline)]',
       };
     case 'beautify':
       return {
-        label: 'До ИИ',
+        label: t('rev.source.beforeAi'),
         badgeClass: 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border-[var(--k-accent)]/30',
       };
     case 'dictate':
     case 'voice':
       return {
-        label: 'До диктовки',
+        label: t('rev.source.beforeVoice'),
         badgeClass: 'bg-[var(--k-amber-soft)] text-[var(--k-amber)] border-[var(--k-amber)]/30',
       };
     case 'sync_conflict':
       return {
-        label: 'Конфликт синхронизации',
+        label: t('rev.source.conflict'),
         badgeClass: 'bg-[var(--k-danger-soft)] text-[var(--k-danger)] border-[var(--k-danger)]/35',
         isConflict: true,
       };
     case 'restore':
       return {
-        label: 'До отката',
+        label: t('rev.source.beforeRestore'),
         badgeClass: 'bg-[var(--k-bg-surface-3)] text-[var(--k-ink-secondary)] border-[var(--k-border-hairline)]',
       };
     case 'manual':
     default:
       return {
-        label: 'Вручную',
+        label: t('rev.source.manual'),
         badgeClass: 'bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] border-[var(--k-emerald)]/30',
       };
   }
 }
 
-function formatExactStamp(ms: number): string {
-  return new Date(ms).toLocaleString('ru-RU', {
+function formatExactStamp(ms: number, dateLocale: string): string {
+  return new Date(ms).toLocaleString(dateLocale, {
     day: 'numeric',
     month: 'short',
     year: new Date(ms).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
@@ -90,14 +95,14 @@ function splitLines(text: string): string[] {
   return normalized.split('\n');
 }
 
-function formatDiffDisplayLine(raw: string): string {
+function formatDiffDisplayLine(raw: string, t: I18nTranslator['t']): string {
   return decodeHtmlEntities(raw || '')
     .replace(/\u00A0/g, ' ')
     .replace(
       /!\[([^\]]*)\]\((?:kapsula-media:\/\/local\/[^)\s]+|blob:[^)\s]+|data:image\/[^)\s]+)\)/gi,
       (_m, alt: string) => {
         const cleanAlt = (alt || '').trim();
-        return cleanAlt ? `[Фото: ${cleanAlt}]` : '[Фото]';
+        return cleanAlt ? t('rev.photoAlt', { alt: cleanAlt }) : t('rev.photoBracket');
       }
     )
     .replace(/\\([\\_*[\]()~`>#+=|{}.!-])/g, '$1');
@@ -257,6 +262,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
   onCopyText,
   restoringId = null,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'diff' | 'full'>('diff');
   const [copiedJustNow, setCopiedJustNow] = useState(false);
@@ -302,10 +308,10 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
         await window.kapsula.copyText(payload);
       }
       setCopiedJustNow(true);
-      toast.success('Текст версии скопирован');
+      toast.success(t('rev.copiedToast'));
       window.setTimeout(() => setCopiedJustNow(false), 1600);
     } catch {
-      toast.error('Не удалось скопировать текст');
+      toast.error(t('rev.copyFailed'));
     }
   };
 
@@ -313,11 +319,11 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
     <ModalDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="История версий"
+      title={t('rev.title')}
       subtitle={
         revisions.length > 0
-          ? `Сохранено версий: ${revisions.length} · Сравни изменения перед восстановлением`
-          : 'Снимки создаются автоматически при редактировании, работе с ИИ и синхронизации'
+          ? t('rev.subtitleCount', { count: revisions.length })
+          : t('rev.subtitleEmpty')
       }
       maxWidthClass="max-w-[920px]"
     >
@@ -329,11 +335,10 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
           <div className="flex-1 flex flex-col items-center justify-center gap-2.5 p-8 text-center text-[var(--k-ink-muted)]">
             <ClockCounterClockwise weight="duotone" className="w-10 h-10 opacity-60" />
             <div className="text-[14px] font-medium text-[var(--k-ink-secondary)]">
-              Пока нет сохранённых версий
+              {t('rev.emptyHeading')}
             </div>
             <div className="text-[12.5px] max-w-[360px]">
-              Версии сохраняются автоматически по мере изменений, перед оформлением через ИИ и при
-              разрешении конфликтов синхронизации.
+              {t('rev.emptyDesc')}
             </div>
           </div>
         ) : (
@@ -342,17 +347,17 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
               {/* Left Column: Revision Timeline */}
               <div className="w-[272px] shrink-0 border-r border-[var(--k-border-hairline)] bg-[var(--k-bg-rail)] flex flex-col overflow-hidden">
                 <div className="px-3.5 py-2.5 border-b border-[var(--k-border-hairline)] text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                  Снимки ({revisions.length})
+                  {t('rev.snapshots', { count: revisions.length })}
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-1.5">
                   {revisions.map((rev) => {
                     const active = rev.id === selectedRev?.id;
-                    const meta = getRevisionSourceMeta(rev.source);
+                    const meta = getRevisionSourceMeta(rev.source, t);
                     const previewLine =
                       (rev.content || '')
                         .split(/\r?\n/)
-                        .map((l) => formatDiffDisplayLine(l).trim())
-                        .find(Boolean) || 'Пустой текст';
+                        .map((l) => formatDiffDisplayLine(l, t).trim())
+                        .find(Boolean) || t('rev.emptyTextSnippet');
 
                     return (
                       <button
@@ -376,10 +381,10 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                             {meta.label}
                           </span>
                           <span
-                            title={formatExactStamp(rev.createdAt)}
+                            title={formatExactStamp(rev.createdAt, dateLocale)}
                             className="k-tabular text-[11px] text-[var(--k-ink-muted)] shrink-0"
                           >
-                            {formatRelativeDate(rev.createdAt)}
+                            {formatRelativeDate(rev.createdAt, locale)}
                           </span>
                         </div>
 
@@ -394,7 +399,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                         </div>
 
                         <div className="flex items-center justify-between gap-2 text-[10.5px] text-[var(--k-ink-muted)]">
-                          <span>{formatExactStamp(rev.createdAt)}</span>
+                          <span>{formatExactStamp(rev.createdAt, dateLocale)}</span>
                           {rev.deviceName ? (
                             <span className="inline-flex items-center gap-1 truncate max-w-[115px]">
                               <Desktop className="w-3 h-3 shrink-0" />
@@ -415,7 +420,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                     <div className="px-4 py-2.5 border-b border-[var(--k-border-hairline)] flex flex-wrap items-center justify-between gap-2 shrink-0 bg-[var(--k-bg-surface-1)]">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-[12.5px] font-semibold text-[var(--k-ink-primary)] truncate">
-                          {formatExactStamp(selectedRev.createdAt)}
+                          {formatExactStamp(selectedRev.createdAt, dateLocale)}
                         </span>
                         {selectedRev.deviceName ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-bg-surface-2)] text-[11px] text-[var(--k-ink-secondary)]">
@@ -438,17 +443,17 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                         value={viewMode}
                         onChange={setViewMode}
                         options={[
-                          { value: 'diff', label: 'Сравнение' },
-                          { value: 'full', label: 'Текст версии' },
+                          { value: 'diff', label: t('rev.tabDiff') },
+                          { value: 'full', label: t('rev.tabFull') },
                         ]}
                       />
                     </div>
 
                     {titleChanged ? (
                       <div className="px-4 py-2 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/70 flex flex-wrap items-center gap-2 text-[12px] shrink-0">
-                        <span className="text-[var(--k-ink-muted)] font-medium">Заголовок:</span>
+                        <span className="text-[var(--k-ink-muted)] font-medium">{t('rev.headingPrefix')}</span>
                         <span className="px-1.5 py-0.5 rounded bg-[var(--k-danger-soft)] text-[var(--k-danger)] line-through truncate max-w-[240px]">
-                          {currentTitle || 'Без заголовка'}
+                          {currentTitle || t('common.noTitle')}
                         </span>
                         <span className="text-[var(--k-ink-muted)]">→</span>
                         <span className="px-1.5 py-0.5 rounded bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] font-medium truncate max-w-[240px]">
@@ -462,17 +467,17 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                         <div className="px-4 py-1.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/40 flex items-center gap-4 text-[11px] text-[var(--k-ink-muted)] shrink-0">
                           <span className="inline-flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-[var(--k-emerald)]" />
-                            Вернётся из этой версии
+                            {t('rev.legendAdded')}
                           </span>
                           <span className="inline-flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-[var(--k-danger)]" />
-                            Будет заменено из текущей
+                            {t('rev.legendRemoved')}
                           </span>
                         </div>
 
                         {isIdentical ? (
                           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[13px] text-[var(--k-ink-muted)]">
-                            Эта версия полностью совпадает с текущим текстом заметки.
+                            {t('rev.identical')}
                           </div>
                         ) : (
                           <div
@@ -482,7 +487,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                             {diff.lines.map((line, idx) => {
                               const isAdd = line.type === 'add';
                               const isRemove = line.type === 'remove';
-                              const displayLine = formatDiffDisplayLine(line.text);
+                              const displayLine = formatDiffDisplayLine(line.text, t);
                               const shouldStrike =
                                 isRemove &&
                                 line.text.trim().length > 0 &&
@@ -527,7 +532,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                     ) : (
                       <div className="flex-1 min-h-0 overflow-y-auto p-4 k-selectable">
                         <pre className="m-0 whitespace-pre-wrap break-words font-sans text-[13.5px] leading-relaxed text-[var(--k-ink-primary)]">
-                          {formatDiffDisplayLine(selectedRev.content || '') || 'Пустая версия'}
+                          {formatDiffDisplayLine(selectedRev.content || '', t) || t('rev.emptyVersion')}
                         </pre>
                       </div>
                     )}
@@ -539,7 +544,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
             {/* Modal Footer */}
             <div className="px-4 py-3 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] flex flex-wrap items-center justify-between gap-3 shrink-0">
               <span className="text-[11.5px] text-[var(--k-ink-muted)]">
-                Перед восстановлением текущая версия сохранится автоматически
+                {t('rev.autoBackupHint')}
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -553,7 +558,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                   ) : (
                     <Copy className="w-3.5 h-3.5" />
                   )}
-                  <span>{copiedJustNow ? 'Скопировано' : 'Скопировать текст'}</span>
+                  <span>{copiedJustNow ? t('common.copied') : t('rev.copyTextBtn')}</span>
                 </button>
                 <button
                   type="button"
@@ -567,8 +572,8 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                   <ArrowCounterClockwise weight="bold" className="w-3.5 h-3.5" />
                   <span>
                     {restoringId === selectedRev?.id
-                      ? 'Восстанавливаю…'
-                      : 'Восстановить эту версию'}
+                      ? t('rev.restoring')
+                      : t('rev.restoreBtn')}
                   </span>
                 </button>
               </div>

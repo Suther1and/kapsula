@@ -17,6 +17,8 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
+import { getRedundantCardTags } from '@shared/item-helpers';
+import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, formatReminderStamp } from '../../lib/format';
 import { type ContextMenuEntry, ContextMenuSurface } from '../ui/ContextMenuSurface';
 import { PopoverSurface } from '../ui/PopoverSurface';
@@ -85,6 +87,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
   onToggleMarkdownTask,
   onToggleVoiceAction,
 }) => {
+  const { t, locale } = useI18n();
   const [orbitPopoverOpen, setOrbitPopoverOpen] = useState(false);
 
   const buildContextMenuEntries = (): ContextMenuEntry[] => {
@@ -92,7 +95,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       {
         type: 'item',
         id: 'open',
-        label: item.dna === 'secret' ? 'Открыть и посмотреть' : 'Открыть заметку',
+        label: item.dna === 'secret' ? t('cards.ctx.openAndView') : t('cards.openNote'),
         icon: <PencilSimple className="w-3.5 h-3.5" />,
         onSelect: () => {
           if (item.dna === 'secret') {
@@ -107,8 +110,8 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
             {
               type: 'item' as const,
               id: 'quick-look',
-              label: 'Быстрый просмотр',
-              shortcut: 'Пробел',
+              label: t('cards.quickLookShort'),
+              shortcut: t('settings.shortcuts.space'),
               icon: <Eye className="w-3.5 h-3.5" />,
               onSelect: () => onQuickLook(item),
             },
@@ -117,7 +120,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       {
         type: 'item',
         id: 'pin',
-        label: item.isPinned ? 'Открепить' : 'Закрепить сверху',
+        label: item.isPinned ? t('ui.quickLook.unpin') : t('cards.ctx.pinTop'),
         icon: <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
         onSelect: () => onTogglePin(item),
       },
@@ -127,7 +130,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'item',
         id: 'select',
-        label: selected ? 'Снять выделение' : 'Выбрать несколько…',
+        label: selected ? t('cards.ctx.unselect') : t('cards.ctx.selectMulti'),
         icon: <CheckSquareOffset className="w-3.5 h-3.5" />,
         onSelect: () => onToggleSelect(item, false),
       });
@@ -137,13 +140,13 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'submenu',
         id: 'move-orbit',
-        label: 'Переместить в раздел',
+        label: t('cards.ctx.moveToSection'),
         icon: <FolderSimple className="w-3.5 h-3.5" />,
         items: [
           {
             type: 'item',
             id: 'orbit-none',
-            label: 'Без раздела',
+            label: t('nav.noSection'),
             active: !item.orbit,
             onSelect: () => onMoveToOrbit(item.id, ''),
           },
@@ -164,13 +167,13 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'submenu',
         id: 'move-board',
-        label: 'Добавить на холст',
+        label: t('cards.ctx.addToBoard'),
         icon: <Swatches className="w-3.5 h-3.5" />,
         items: [
           {
             type: 'item',
             id: 'board-none',
-            label: 'Убрать с холста',
+            label: t('cards.ctx.removeFromBoard'),
             active: !item.focusBoardId,
             onSelect: () => onMoveToBoard(item.id, null),
           },
@@ -193,18 +196,18 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'item',
         id: 'copy-text',
-        label: item.url ? 'Копировать ссылку' : 'Копировать текст',
+        label: item.url ? t('cards.copyLink') : t('cards.ctx.copyText'),
         icon: <Copy className="w-3.5 h-3.5" />,
         onSelect: () => {
           void window.kapsula.copyText(item.url || item.body || item.title);
-          toast.success('Скопировано');
+          toast.success(t('common.copied'));
         },
       });
       if (onDuplicate) {
         entries.push({
           type: 'item',
           id: 'duplicate',
-          label: 'Дублировать',
+          label: t('cards.ctx.duplicate'),
           icon: <Files className="w-3.5 h-3.5" />,
           onSelect: () => onDuplicate(item.id),
         });
@@ -213,7 +216,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
         entries.push({
           type: 'item',
           id: 'export-md',
-          label: 'Экспорт в Markdown',
+          label: t('cards.ctx.exportMd'),
           icon: <FileText className="w-3.5 h-3.5" />,
           onSelect: () => onExportMarkdown(item.id),
         });
@@ -225,7 +228,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'item',
         id: 'restore',
-        label: 'Восстановить',
+        label: t('common.restore'),
         icon: <ArrowCounterClockwise className="w-3.5 h-3.5" />,
         onSelect: () => onRestore(item.id),
       });
@@ -233,7 +236,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       entries.push({
         type: 'item',
         id: 'delete',
-        label: 'Удалить',
+        label: t('common.delete'),
         icon: <Trash className="w-3.5 h-3.5" />,
         danger: true,
         onSelect: () => onDelete(item.id),
@@ -324,9 +327,15 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
     }
   };
 
-  const redundantTags = new Set<string>(['избранное']);
-  if (item.dna === 'shot') redundantTags.add('скриншот');
-  if (item.dna === 'voice') redundantTags.add('голос');
+  const redundantTags = new Set<string>([...getRedundantCardTags(), t('ui.quickLook.pin').toLowerCase()]);
+  if (item.dna === 'shot') {
+    redundantTags.add('screenshot');
+    redundantTags.add(t('dna.shot').toLowerCase());
+  }
+  if (item.dna === 'voice') {
+    redundantTags.add('voice');
+    redundantTags.add(t('dna.voice').toLowerCase());
+  }
   if (item.platform) redundantTags.add(item.platform.toLowerCase());
   if (orbit?.name) redundantTags.add(orbit.name.toLowerCase());
   const visibleTags = item.tags
@@ -362,7 +371,11 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
 
         {/* Clean divider-free Footer: interactive section pill + deduped tags on left, flush-right timestamp swapping cleanly with action capsule */}
         <div className="relative flex items-center justify-between gap-2 pt-1 min-h-[24px]">
-          <div className="flex items-center gap-1.5 min-w-0 flex-wrap flex-1">
+          <div
+            className={`flex items-center gap-1.5 min-w-0 flex-nowrap overflow-hidden flex-1 pr-1 transition-[mask-image] duration-140 group-hover:[mask-image:linear-gradient(to_right,black_0%,black_58%,transparent_94%)] group-focus-within:[mask-image:linear-gradient(to_right,black_0%,black_58%,transparent_94%)] ${
+              selected || selectionMode ? 'pr-7' : ''
+            }`}
+          >
             {orbit ? (
               onMoveToOrbit && orbits.length > 0 ? (
                 <div onClick={(e) => e.stopPropagation()} className="inline-flex shrink-0">
@@ -376,7 +389,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                       <button
                         type="button"
                         data-testid={`card-orbit-chip-${item.id}`}
-                        title={`Раздел: ${orbit.name} · нажми, чтобы сменить`}
+                        title={t('cards.sectionChipTitle', { name: orbit.name })}
                         style={{
                           backgroundColor: `color-mix(in srgb, ${orbit.color} 12%, transparent)`,
                           borderColor: `color-mix(in srgb, ${orbit.color} 26%, transparent)`,
@@ -397,7 +410,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                         }}
                         className="k-interactive w-full text-left px-2.5 py-1.5 rounded-[7px] text-[12px] text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                       >
-                        Без раздела
+                        {t('nav.noSection')}
                       </button>
                       {orbits.map((orb) => (
                         <button
@@ -438,7 +451,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
             {item.remindAt ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-amber-soft)] text-[11px] font-medium text-[var(--k-amber)]">
                 <Bell weight="fill" className="w-2.5 h-2.5 shrink-0" />
-                <span className="truncate">{formatReminderStamp(item.remindAt)}</span>
+                <span className="truncate">{formatReminderStamp(item.remindAt, locale)}</span>
               </span>
             ) : null}
 
@@ -467,7 +480,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                       className="k-interactive opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-140 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] text-[11px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                     >
                       <Plus className="w-2.5 h-2.5" />
-                      <span>Раздел</span>
+                      <span>{t('cards.sectionChipEmpty')}</span>
                     </button>
                   }
                 >
@@ -510,7 +523,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                 data-testid={`card-timestamp-${item.id}`}
                 className="text-[11px] text-[var(--k-ink-muted)] k-tabular whitespace-nowrap"
               >
-                {formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
+                {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
               </span>
             </div>
 
@@ -520,14 +533,14 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
               onClick={(e) => e.stopPropagation()}
               className={`absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-0.5 rounded-full transition-opacity duration-140 ease-[var(--k-ease-out)] h-6 ${
                 selected || selectionMode
-                  ? 'opacity-100 pointer-events-auto group-hover:bg-[var(--k-bg-surface-2)]/95 group-hover:border group-hover:border-[var(--k-border-hairline)] group-hover:px-1 group-hover:shadow-xs'
-                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto bg-[var(--k-bg-surface-2)]/95 border border-[var(--k-border-hairline)] px-1 shadow-xs'
+                  ? 'opacity-100 pointer-events-auto group-hover:bg-[var(--k-bg-surface-2)] group-hover:border group-hover:border-[var(--k-border-hairline)] group-hover:px-1 group-hover:shadow-sm'
+                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] px-1 shadow-sm'
               }`}
             >
               {onQuickLook ? (
                 <button
                   type="button"
-                  title="Быстрый просмотр (Пробел)"
+                  title={t('cards.quickLookHint')}
                   onClick={() => onQuickLook(item)}
                   className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer ${
                     selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
@@ -538,7 +551,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
               ) : null}
               <button
                 type="button"
-                title={item.isPinned ? 'Открепить' : 'Закрепить'}
+                title={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
                 onClick={() => onTogglePin(item)}
                 className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer ${
                   selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
@@ -548,7 +561,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
               </button>
               <button
                 type="button"
-                title="Удалить"
+                title={t('common.delete')}
                 onClick={() => onDelete(item.id)}
                 className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer ${
                   selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
@@ -561,7 +574,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                   type="button"
                   role="checkbox"
                   aria-checked={selected}
-                  aria-label={`Выбрать ${item.title}`}
+                  aria-label={t('cards.selectAria', { title: item.title })}
                   onClick={(e) => {
                     e.stopPropagation();
                     onToggleSelect(item, e.shiftKey);

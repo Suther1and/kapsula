@@ -1,6 +1,7 @@
 import React from 'react';
 import { Code } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { extractFirstCodeBlock } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 
@@ -13,6 +14,7 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
   item,
   compactList = false,
 }) => {
+  const { t } = useI18n();
   const block = extractFirstCodeBlock(item.body);
   const codeText = block?.code || item.body.trim();
   const lang = block?.lang || 'code';
@@ -25,15 +27,17 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
             <span className="k-mono text-[10.5px] uppercase px-1.5 py-0.5 rounded bg-[var(--k-accent-soft)] text-[var(--k-accent)]">
               {lang}
             </span>
-            <span className="text-[13.5px] font-semibold truncate">{item.title || 'Фрагмент кода'}</span>
+            <span className="text-[13.5px] font-semibold truncate">
+              {item.title || t('dna.codeSnippet')}
+            </span>
           </div>
           <div className="k-mono text-[11.5px] text-[var(--k-ink-muted)] truncate mt-0.5">
             {codeText.split('\n')[0]}
           </div>
         </div>
         <CopySlotPill
-          label="Код"
-          copiedLabel="Готово"
+          label={t('cards.codeLabel')}
+          copiedLabel={t('common.done')}
           widthPx={84}
           heightPx={28}
           onCopy={() => window.kapsula.copyText(codeText)}
@@ -48,7 +52,7 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
         <div className="flex items-center gap-1.5 min-w-0">
           <Code weight="bold" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
           <span className="text-[13.5px] font-semibold text-[var(--k-ink-primary)] truncate">
-            {item.title || 'Фрагмент кода'}
+            {item.title || t('dna.codeSnippet')}
           </span>
         </div>
         <span className="k-mono text-[10.5px] uppercase px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] shrink-0">
@@ -64,8 +68,8 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
 
       <div className="flex justify-end">
         <CopySlotPill
-          label="Копировать код"
-          copiedLabel="Готово"
+          label={t('cards.copyCode')}
+          copiedLabel={t('common.done')}
           widthPx={152}
           heightPx={28}
           onCopy={() => window.kapsula.copyText(codeText)}

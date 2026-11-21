@@ -1,6 +1,15 @@
-import type { TranscribeItemResult, VaultItem } from '@shared/types';
+import type { AppLocale, TranscribeItemResult, VaultItem } from '@shared/types';
 import { decodeHtmlEntities } from '@shared/html-entities';
+import { getDateLocale, translate } from '@shared/i18n';
 import { decodeBlobToMono16kWav } from './audioWav';
+
+function resolveActiveLocale(locale?: AppLocale): AppLocale {
+  if (locale === 'en' || locale === 'ru') return locale;
+  if (typeof document !== 'undefined' && document.documentElement?.lang === 'en') {
+    return 'en';
+  }
+  return 'ru';
+}
 
 export function pluralRu(count: number, one: string, few: string, many: string): string {
   const abs = Math.abs(Math.trunc(count));
@@ -14,31 +23,34 @@ export function pluralRu(count: number, one: string, few: string, many: string):
   return `${count} ${form}`;
 }
 
-export function formatRelativeDate(timestampMs: number): string {
+export function formatRelativeDate(timestampMs: number, locale?: AppLocale): string {
+  const activeLoc = resolveActiveLocale(locale);
+  const dateLoc = getDateLocale(activeLoc);
   const diffSec = Math.round((Date.now() - timestampMs) / 1000);
-  if (diffSec < 45) return 'только что';
+  if (diffSec < 45) return translate(activeLoc, 'date.justNow');
   const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} мин назад`;
+  if (diffMin < 60) return translate(activeLoc, 'date.minutesAgo', { count: diffMin });
   const diffHours = Math.round(diffMin / 60);
   if (diffHours < 24) {
     const d = new Date(timestampMs);
     const now = new Date();
+    const timeStr = d.toLocaleTimeString(dateLoc, { hour: '2-digit', minute: '2-digit' });
     if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth()) {
-      return `сегодня в ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+      return translate(activeLoc, 'date.todayAt', { time: timeStr });
     }
-    return `вчера в ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+    return translate(activeLoc, 'date.yesterdayAt', { time: timeStr });
   }
   const date = new Date(timestampMs);
-  return date.toLocaleDateString('ru-RU', {
+  return date.toLocaleDateString(dateLoc, {
     day: 'numeric',
     month: 'short',
     ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}),
   });
 }
 
-export function formatReminderStamp(timestampMs: number): string {
+export function formatReminderStamp(timestampMs: number, locale?: AppLocale): string {
   const d = new Date(timestampMs);
-  return d.toLocaleString('ru-RU', {
+  return d.toLocaleString(getDateLocale(resolveActiveLocale(locale)), {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -46,7 +58,8 @@ export function formatReminderStamp(timestampMs: number): string {
   });
 }
 
-export function formatDateCompact(timestampMs: number): string {
+export function formatDateCompact(timestampMs: number, locale?: AppLocale): string {
+  const dateLoc = getDateLocale(resolveActiveLocale(locale));
   const d = new Date(timestampMs);
   const now = new Date();
   if (
@@ -54,12 +67,12 @@ export function formatDateCompact(timestampMs: number): string {
     d.getMonth() === now.getMonth() &&
     d.getFullYear() === now.getFullYear()
   ) {
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString(dateLoc, { hour: '2-digit', minute: '2-digit' });
   }
   if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    return d.toLocaleDateString(dateLoc, { day: 'numeric', month: 'short' });
   }
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return d.toLocaleDateString(dateLoc, { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
 export function formatDurationMmSs(seconds?: number | null): string {
@@ -70,11 +83,12 @@ export function formatDurationMmSs(seconds?: number | null): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function formatFileSize(bytes?: number | null): string {
+export function formatFileSize(bytes?: number | null, locale?: AppLocale): string {
   if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+  const activeLoc = resolveActiveLocale(locale);
+  if (bytes < 1024) return translate(activeLoc, 'common.bytes', { count: bytes });
+  if (bytes < 1024 * 1024) return translate(activeLoc, 'common.kilobytes', { count: Math.round(bytes / 1024) });
+  return translate(activeLoc, 'common.megabytes', { count: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 export function formatCardPanGroups(raw: string): string {
@@ -97,30 +111,31 @@ export function extractFirstCodeBlock(body: string): { lang: string; code: strin
   };
 }
 
-export function getDnaHumanLabel(item: VaultItem): string {
+export function getDnaHumanLabel(item: VaultItem, locale?: AppLocale): string {
+  const activeLoc = resolveActiveLocale(locale);
   if (item.dna === 'secret') {
-    if (item.secretMeta?.kind === 'bank_card') return 'Банковская карта';
-    if (item.secretMeta?.kind === 'password') return 'Логин и пароль';
-    if (item.secretMeta?.kind === 'api_key') return 'Ключ доступа';
-    if (item.secretMeta?.kind === 'seed') return 'Фраза восстановления';
-    if (item.secretMeta?.kind === 'note') return 'Секретная заметка';
-    return 'Сейф';
+    if (item.secretMeta?.kind === 'bank_card') return translate(activeLoc, 'dna.bankCard');
+    if (item.secretMeta?.kind === 'password') return translate(activeLoc, 'dna.password');
+    if (item.secretMeta?.kind === 'api_key') return translate(activeLoc, 'dna.apiKey');
+    if (item.secretMeta?.kind === 'seed') return translate(activeLoc, 'dna.seed');
+    if (item.secretMeta?.kind === 'note') return translate(activeLoc, 'dna.secretNote');
+    return translate(activeLoc, 'dna.vault');
   }
   switch (item.dna) {
     case 'note':
-      return 'Заметка';
+      return translate(activeLoc, 'dna.note');
     case 'shot':
-      return 'Скриншот';
+      return translate(activeLoc, 'dna.shot');
     case 'link':
-      return 'Ссылка';
+      return translate(activeLoc, 'dna.link');
     case 'voice':
-      return 'Голос';
+      return translate(activeLoc, 'dna.voice');
     case 'snippet':
-      return 'Код';
+      return translate(activeLoc, 'dna.snippet');
     case 'doc':
-      return 'Файл';
+      return translate(activeLoc, 'dna.doc');
     default:
-      return 'Запись';
+      return translate(activeLoc, 'dna.item');
   }
 }
 
@@ -136,7 +151,10 @@ export function stripMarkdownPreview(raw: string): string {
     // Unwrap Wiki-links [[Target|Alias]] -> Alias and [[Title]] -> Title
     .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, '$2')
     .replace(/\[\[([^\]\n]+)\]\]/g, '$1')
-    .replace(/^\s*#{1,6}\s*(?:Задачи|Следующие шаги|Ключевые тезисы|Дела)\s*$/gim, '')
+    .replace(
+      /^\s*#{1,6}\s*(?:Задачи|Следующие шаги|Ключевые тезисы|Дела|Tasks|Next steps|Key points|Action items)\s*$/gim,
+      ''
+    )
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/(?:^|\n)\s*---+\s*(?:\n|$)/g, '\n')
     .replace(/\\([[\]*_`])/g, '$1')
@@ -228,16 +246,18 @@ export function stripLeadingTitle(preview: string, title?: string | null): strin
   return cleanPreview;
 }
 
-export function friendlyErrorMessage(err: unknown, fallback = 'Не удалось выполнить действие. Попробуй ещё раз.'): string {
-  if (!(err instanceof Error)) return fallback;
+export function friendlyErrorMessage(err: unknown, fallback?: string, locale?: AppLocale): string {
+  const activeLocale = resolveActiveLocale(locale);
+  const resolvedFallback = fallback ?? translate(activeLocale, 'error.generic');
+  if (!(err instanceof Error)) return resolvedFallback;
   const cleaned = err.message
     .replace(/^Error invoking remote method '[^']+':\s*/i, '')
     .replace(/^Error:\s*/i, '')
     .trim();
-  if (!cleaned) return fallback;
-  // Pass through natural Russian messages; mask raw low-level stack/technical jargon
+  if (!cleaned) return resolvedFallback;
+  // Pass through natural localized messages; mask raw low-level stack/technical jargon
   if (/SQLITE|ECONN|ENOTFOUND|TypeError|SyntaxError|ReferenceError|RangeError|at\s+\S+\s+\(/i.test(cleaned)) {
-    return fallback;
+    return resolvedFallback;
   }
   return cleaned;
 }

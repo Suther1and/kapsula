@@ -15,7 +15,8 @@ import type {
   TriagePreviewResult,
   TriageSuggestion,
 } from '@shared/types';
-import { friendlyErrorMessage, pluralRu } from '../../lib/format';
+import { useI18n } from '@shared/i18n/react';
+import { friendlyErrorMessage } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
 import { ModalDialog } from '../ui/ModalDialog';
 import { SelectMenu } from '../ui/SelectMenu';
@@ -37,6 +38,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
   onOpenAiSettings,
   onRequestMergeGroup,
 }) => {
+  const { t, locale, pluralNoun } = useI18n();
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [preview, setPreview] = useState<TriagePreviewResult | null>(null);
@@ -59,7 +61,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
       setOrbitOverrides(overrides);
       setSelectedNewOrbits(new Set(res.newOrbits.map((o) => o.name)));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось подготовить разбор записей.'));
+      toast.error(friendlyErrorMessage(err, t('triage.previewErr'), locale));
     } finally {
       setLoading(false);
     }
@@ -91,16 +93,16 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
       const res = await window.kapsula.applySmartTriage({ moves, createOrbits });
       await onApplied();
       onOpenChange(false);
-      toast.success(`Разобрано записей: ${res.applied}`);
+      toast.success(t('triage.appliedToast', { count: res.applied }));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось применить разбор.'));
+      toast.error(friendlyErrorMessage(err, t('triage.applyErr'), locale));
     } finally {
       setApplying(false);
     }
   };
 
   const orbitOptions = [
-    { value: '', label: 'Оставить без раздела' },
+    { value: '', label: t('nav.leaveWithoutSection') },
     ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
   ];
   const orbitNameMap = new Map(orbits.map((o) => [o.id, o.name]));
@@ -114,8 +116,8 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
       open={open}
       onOpenChange={onOpenChange}
       topAligned
-      title="Умный разбор записей"
-      subtitle="Подбирает разделы на основе реальных заметок внутри каждой папки — с твоим подтверждением"
+      title={t('triage.title')}
+      subtitle={t('triage.subtitle')}
       maxWidthClass="max-w-[700px]"
     >
       <div className="p-5 flex flex-col gap-4 max-h-[76vh] overflow-y-auto k-scroll-stable">
@@ -123,7 +125,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
           <div className="py-2 flex flex-col gap-2.5">
             <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--k-ink-secondary)] px-1">
               <Sparkle weight="fill" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
-              <span>Изучаю примеры в твоих разделах и неразобранные заметки…</span>
+              <span>{t('triage.analyzing')}</span>
             </div>
             {[0, 1, 2].map((idx) => (
               <div
@@ -142,12 +144,12 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
           <div className="rounded-2xl border border-[var(--k-amber)]/35 bg-[var(--k-amber-soft)] p-5 flex flex-col items-start gap-3">
             <div className="flex items-center gap-2 text-[14px] font-semibold text-[var(--k-ink-primary)]">
               <WarningCircle weight="fill" className="w-5 h-5 text-[var(--k-amber)] shrink-0" />
-              <span>Нужен ключ ИИ для точного разбора</span>
+              <span>{t('triage.needAiTitle')}</span>
             </div>
             <p className="m-0 text-[13px] text-[var(--k-ink-secondary)] leading-relaxed">
               {preview.message && !/регулярк/i.test(preview.message)
                 ? preview.message
-                : 'Для умного разбора нужен подключённый ИИ в Настройках → ИИ — так записи раскладываются по смыслу, а не наугад.'}
+                : t('triage.needAiFallback')}
             </p>
             <button
               type="button"
@@ -158,7 +160,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
               className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer"
             >
               <Gear className="w-4 h-4" />
-              <span>Открыть Настройки → ИИ</span>
+              <span>{t('triage.openAiSettings')}</span>
             </button>
           </div>
         ) : preview ? (
@@ -171,7 +173,10 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                 <div className="text-[13px] text-[var(--k-ink-secondary)]">{preview.message}</div>
                 {preview.remainingCount && preview.remainingCount > 0 ? (
                   <div className="text-[12px] text-[var(--k-ink-muted)]">
-                    В очереди ещё {pluralRu(preview.remainingCount, 'запись', 'записи', 'записей')} — их можно проверить следующим шагом.
+                    {t('triage.remainingNotice', {
+                      count: preview.remainingCount,
+                      word: pluralNoun(preview.remainingCount, 'item').replace(/^\d+\s+/, ''),
+                    })}
                   </div>
                 ) : null}
                 <button
@@ -179,7 +184,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                   onClick={() => void runPreview()}
                   className="k-interactive h-8 px-3.5 rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[12.5px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-accent)] cursor-pointer"
                 >
-                  Повторить разбор
+                  {t('triage.retryBtn')}
                 </button>
               </div>
             ) : null}
@@ -197,7 +202,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                 preview.newOrbits.length > 0 ||
                 preview.mergeGroups.length > 0) ? (
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3.5 py-2 text-[12px] text-[var(--k-ink-secondary)]">
-                В эту партию взяты 18 приоритетных записей — оставшиеся ({preview.remainingCount}) можно разобрать следующим шагом.
+                {t('triage.batchNotice', { count: preview.remainingCount })}
               </div>
             ) : null}
 
@@ -205,7 +210,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
             {preview.suggestions.length > 0 ? (
               <div className="flex flex-col gap-2">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                  Перенос в разделы и холсты ({preview.suggestions.length})
+                  {t('triage.suggestionsHeader', { count: preview.suggestions.length })}
                 </div>
                 {preview.suggestions.map((s) => {
                   const checked = selectedMoveIds.has(s.itemId);
@@ -238,15 +243,15 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                             </span>
                             {s.targetBoardName ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--k-accent-soft)] text-[10.5px] font-medium text-[var(--k-accent)] shrink-0">
-                                + Холст «{s.targetBoardName}»
+                                {t('triage.addBoardLabel', { name: s.targetBoardName })}
                               </span>
                             ) : null}
                           </div>
                           <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate mt-0.5">
                             {s.archive
-                              ? 'Предложено в архив · '
+                              ? t('triage.suggestedArchive')
                               : changedOrbit
-                                ? `Из «${prevOrbitName}» → `
+                                ? t('triage.fromSection', { name: prevOrbitName || '' })
                                 : ''}
                             {s.reason}
                           </div>
@@ -268,7 +273,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                         </div>
                       ) : (
                         <span className="px-2 py-0.5 rounded-md bg-[var(--k-amber-soft)] text-[11px] font-medium text-[var(--k-amber)]">
-                          В архив
+                          {t('triage.archiveOption')}
                         </span>
                       )}
                     </div>
@@ -281,7 +286,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
             {preview.newOrbits.length > 0 ? (
               <div className="flex flex-col gap-2">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                  Создать новые разделы по темам
+                  {t('triage.newSectionsHeader')}
                 </div>
                 {preview.newOrbits.map((no) => {
                   const checked = selectedNewOrbits.has(no.name);
@@ -307,7 +312,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                         <div className="min-w-0">
                           <div className="text-[13px] font-medium truncate">{no.name}</div>
                           <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                            {no.description} ({no.itemIds.length} зап.)
+                            {t('triage.newSectionCount', { desc: no.description, count: no.itemIds.length })}
                           </div>
                         </div>
                       </div>
@@ -321,7 +326,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
             {preview.mergeGroups.length > 0 ? (
               <div className="flex flex-col gap-2">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                  Можно свести в одну заметку
+                  {t('triage.mergeHeader')}
                 </div>
                 {preview.mergeGroups.map((mg) => (
                   <div
@@ -331,7 +336,11 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                     <div className="min-w-0">
                       <div className="text-[13px] font-medium truncate">{mg.title}</div>
                       <div className="text-[11.5px] text-[var(--k-ink-secondary)] truncate">
-                        {pluralRu(mg.itemIds.length, 'запись', 'записи', 'записей')} · {mg.reason}
+                        {t('triage.mergeReason', {
+                          count: mg.itemIds.length,
+                          word: pluralNoun(mg.itemIds.length, 'item').replace(/^\d+\s+/, ''),
+                          reason: mg.reason,
+                        })}
                       </div>
                     </div>
                     {onRequestMergeGroup ? (
@@ -344,7 +353,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                         className="k-interactive inline-flex items-center gap-1 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium shrink-0 cursor-pointer"
                       >
                         <GitMerge className="w-3.5 h-3.5" />
-                        <span>Свести</span>
+                        <span>{t('triage.mergeBtn')}</span>
                       </button>
                     ) : null}
                   </div>
@@ -358,7 +367,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                 onClick={() => onOpenChange(false)}
                 className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[13px] cursor-pointer"
               >
-                Закрыть
+                {t('common.close')}
               </button>
               <button
                 type="button"
@@ -367,7 +376,7 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
                 className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
               >
                 <Sparkle weight="fill" className="w-3.5 h-3.5" />
-                <span>{applying ? 'Применяю…' : `Применить (${totalActions})`}</span>
+                <span>{applying ? t('common.applying') : t('triage.applyBtn', { count: totalActions })}</span>
               </button>
             </div>
           </>

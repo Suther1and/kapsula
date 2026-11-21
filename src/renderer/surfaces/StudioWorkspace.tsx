@@ -24,6 +24,7 @@ import {
   CloudCheck,
   CloudSlash,
   CloudWarning,
+  EyeSlash,
   FunnelSimple,
   GridFour,
   Image as ImageIcon,
@@ -62,6 +63,7 @@ import type {
   ViewLayoutMode,
 } from '@shared/types';
 import { SECTION_COLOR_PALETTE, SECTION_ICON_CHOICES } from '@shared/constants';
+import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { truncateAtWordBoundary } from '@shared/html-entities';
 import { isDedicatedNote, isMediaItem } from '@shared/item-helpers';
@@ -74,7 +76,7 @@ import { PopoverSurface } from '../components/ui/PopoverSurface';
 import { SelectMenu } from '../components/ui/SelectMenu';
 import { TooltipHint } from '../components/ui/TooltipHint';
 import { SegmentedControl } from '../components/ui/SegmentedControl';
-import { SECTION_ICON_LABELS_RU, SectionIcon } from '../components/ui/SectionIcon';
+import { getSectionIconLabels, SectionIcon } from '../components/ui/SectionIcon';
 import {
   ContextMenuSurface,
   type ContextMenuEntry,
@@ -98,6 +100,14 @@ import { UnlockPinDialog } from '../components/modals/UnlockPinDialog';
 import { SynthesizeNotesModal } from '../components/modals/SynthesizeNotesModal';
 import { SmartTriageModal } from '../components/modals/SmartTriageModal';
 import { hydrateAppearanceFromSettings } from '../lib/appearance';
+import {
+  HIDEABLE_NAV_SECTIONS,
+  HIDEABLE_SECTION_LABEL_KEYS,
+  readHiddenNavSections,
+  SIDEBAR_PREFS_EVENT,
+  writeHiddenNavSections,
+  type HideableNavSection,
+} from '../lib/sidebar-prefs';
 import { formatRelativeDate, friendlyErrorMessage, stripMarkdownPreview } from '../lib/format';
 
 interface StudioWorkspaceProps {
@@ -272,6 +282,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   settings,
   onSettingsUpdated,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [feedGridAnimRef] = useAutoAnimate<HTMLDivElement>({
     duration: prefersReduced ? 0 : 180,
@@ -304,14 +315,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const applyPendingTaskTogglesToTasks = useCallback((taskList: VaultTaskEntry[]): VaultTaskEntry[] => {
     if (pendingTaskTogglesRef.current.size === 0) return taskList;
-    return taskList.map((t) => {
-      const key = `${t.itemId}:${t.sourceType}:${t.taskIndex}`;
+    return taskList.map((taskEntry) => {
+      const key = `${taskEntry.itemId}:${taskEntry.sourceType}:${taskEntry.taskIndex}`;
       const pending = pendingTaskTogglesRef.current.get(key);
-      if (!pending) return t;
+      if (!pending) return taskEntry;
       return {
-        ...t,
+        ...taskEntry,
         done: pending.done,
-        columnId: pending.done ? 'done' : t.columnId === 'done' ? 'inbox' : t.columnId,
+        columnId: pending.done ? 'done' : taskEntry.columnId === 'done' ? 'inbox' : taskEntry.columnId,
       };
     });
   }, []);
@@ -382,6 +393,53 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sectionEditor, setSectionEditor] = useState<SectionEditorState | null>(null);
   const [sectionSaving, setSectionSaving] = useState(false);
   const [recoveryKeyVisible, setRecoveryKeyVisible] = useState(false);
+  const [hiddenNavSections, setHiddenNavSections] = useState<HideableNavSection[]>(readHiddenNavSections);
+  const [customizeSidebarOpen, setCustomizeSidebarOpen] = useState(false);
+
+  const hiddenNavSet = useMemo(() => new Set<HideableNavSection>(hiddenNavSections), [hiddenNavSections]);
+
+  useEffect(() => {
+    const syncPrefs = () => {
+      setHiddenNavSections(readHiddenNavSections());
+    };
+    window.addEventListener(SIDEBAR_PREFS_EVENT, syncPrefs);
+    window.addEventListener('storage', syncPrefs);
+    return () => {
+      window.removeEventListener(SIDEBAR_PREFS_EVENT, syncPrefs);
+      window.removeEventListener('storage', syncPrefs);
+    };
+  }, []);
+
+  useEffect(() => {
+    const activeHiddenKey: HideableNavSection | null =
+      nav.type === 'notes' ||
+      nav.type === 'media' ||
+      nav.type === 'tasks' ||
+      nav.type === 'calendar' ||
+      nav.type === 'secrets'
+        ? nav.type
+        : nav.type === 'board'
+          ? 'boards'
+          : null;
+    if (activeHiddenKey && hiddenNavSet.has(activeHiddenKey)) {
+      setNav({ type: 'flow' });
+    }
+  }, [nav, hiddenNavSet]);
+
+  const handleToggleHiddenNavSection = useCallback((section: HideableNavSection) => {
+    setHiddenNavSections((prev) => {
+      const exists = prev.includes(section);
+      const next = exists ? prev.filter((item) => item !== section) : [...prev, section];
+      return writeHiddenNavSections(next);
+    });
+  }, []);
+
+  const handleHideNavSection = useCallback((section: HideableNavSection) => {
+    setHiddenNavSections((prev) => {
+      if (prev.includes(section)) return prev;
+      return writeHiddenNavSections([...prev, section]);
+    });
+  }, []);
 
   const [dragOrbitId, setDragOrbitId] = useState<string | null>(null);
   const [dragOverOrbitId, setDragOverOrbitId] = useState<string | null>(null);
@@ -518,11 +576,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       setTasks(taskRows);
       setCalendarEvents(calRows);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     void refreshAll();
@@ -851,7 +909,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
     }
 
-    const openTasksCount = tasks.filter((t) => !t.done).length;
+    const openTasksCount = tasks.filter((taskEntry) => !taskEntry.done).length;
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const startMs = todayStart.getTime();
@@ -972,7 +1030,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         return (b.contentUpdatedAt || b.updatedAt) - (a.contentUpdatedAt || a.updatedAt);
       }
       if (sortOrder === 'title_asc') {
-        return (a.title || '').localeCompare(b.title || '', 'ru');
+        return (a.title || '').localeCompare(b.title || '', dateLocale);
       }
       if (sortOrder === 'media_first') {
         const am = a.dna === 'shot' || a.mediaPath ? 1 : 0;
@@ -997,32 +1055,33 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     filterDnaQuick,
     secretKindFilter,
     sortOrder,
+    dateLocale,
   ]);
 
   const activeNavTitle = useMemo(() => {
     switch (nav.type) {
       case 'flow':
-        return 'Все записи';
+        return t('nav.allItems');
       case 'notes':
-        return 'Заметки';
+        return t('nav.notes');
       case 'media':
-        return 'Медиа';
+        return t('nav.media');
       case 'tasks':
-        return 'Задачи';
+        return t('nav.tasks');
       case 'calendar':
-        return 'Календарь';
+        return t('nav.calendar');
       case 'secrets':
-        return 'Сейф';
+        return t('nav.vault');
       case 'archive':
-        return 'Архив';
+        return t('nav.archive');
       case 'trash':
-        return 'Корзина';
+        return t('nav.trash');
       case 'orbit':
-        return orbitMap.get(nav.orbitId)?.name ?? 'Раздел';
+        return orbitMap.get(nav.orbitId)?.name ?? t('nav.sectionFallback');
       case 'board':
-        return boards.find((b) => b.id === nav.boardId)?.name ?? 'Холст';
+        return boards.find((b) => b.id === nav.boardId)?.name ?? t('nav.boardFallback');
     }
-  }, [nav, orbitMap, boards]);
+  }, [nav, orbitMap, boards, t]);
 
   const vaultLocked = Boolean(settings.hasMasterPin && !settings.vaultUnlocked);
   const rawWipeSeconds = settings.clipboardAutoWipeSeconds ?? 30;
@@ -1074,7 +1133,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       const updated = await window.kapsula.updateSettings({ theme: nextTheme });
       onSettingsUpdated(updated);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1140,20 +1199,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const ok = await window.kapsula.deleteItem(id);
       if (!ok) {
-        toast.error('Не удалось переместить запись в корзину');
+        toast.error(t('workspace.toast.trashFailed'));
         void refreshAll();
         return;
       }
-      toast('Перемещено в корзину', {
+      toast(t('workspace.toast.movedToTrash'), {
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void handleRestoreItem(id);
           },
         },
       });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1161,14 +1220,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const restored = await window.kapsula.restoreItem(id);
       if (!restored) {
-        toast.error('Не удалось восстановить запись');
+        toast.error(t('workspace.toast.restoreFailed'));
         void refreshAll();
         return;
       }
       setTrashedItems((prev) => prev.filter((x) => x.id !== id));
-      toast.success('Запись восстановлена');
+      toast.success(t('workspace.toast.restored'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1177,10 +1236,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       const updated = await window.kapsula.updateItem(id, { isArchived: false });
       if (updated) {
         setArchivedItems((prev) => prev.filter((x) => x.id !== id));
-        toast.success('Возвращено из архива');
+        toast.success(t('workspace.toast.unarchived'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1189,15 +1248,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const ok = await window.kapsula.purgeItem(id);
       if (!ok) {
-        toast.error('Не удалось удалить запись навсегда');
+        toast.error(t('workspace.toast.purgeFailed'));
         void refreshAll();
         return;
       }
       setTrashedItems((prev) => prev.filter((x) => x.id !== id));
       setConfirmPurgeItem(null);
-      toast.success('Запись удалена навсегда');
+      toast.success(t('workspace.toast.purged'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
       setTrashActionBusy(false);
     }
@@ -1211,11 +1270,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       setConfirmEmptyTrashOpen(false);
       toast.success(
         res.purgedCount > 0
-          ? `Корзина очищена (удалено навсегда: ${res.purgedCount})`
-          : 'Корзина уже пуста'
+          ? t('workspace.toast.trashEmptied', { count: res.purgedCount })
+          : t('workspace.toast.trashAlreadyEmpty')
       );
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
       setTrashActionBusy(false);
     }
@@ -1225,7 +1284,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       await window.kapsula.updateItem(item.id, { isPinned: !item.isPinned });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1233,7 +1292,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       await window.kapsula.updateItem(itemId, { orbit: orbitId });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1241,16 +1300,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       await window.kapsula.updateItem(itemId, { focusBoardId: boardId });
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
   const handleDuplicateItem = async (itemId: string) => {
     try {
       const dup = await window.kapsula.duplicateItem(itemId);
-      if (dup) toast.success('Дубликат создан');
+      if (dup) toast.success(t('workspace.toast.duplicated'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1258,10 +1317,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const res = await window.kapsula.exportMarkdown(itemId);
       if (res.saved) {
-        toast.success('Экспортировано в Markdown');
+        toast.success(t('workspace.toast.exportedMd'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1303,14 +1362,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           : prev
       );
       setTasks((prev) =>
-        prev.map((t) =>
-          t.itemId === itemId && t.sourceType === sourceType && t.taskIndex === taskIndex
+        prev.map((taskEntry) =>
+          taskEntry.itemId === itemId && taskEntry.sourceType === sourceType && taskEntry.taskIndex === taskIndex
             ? {
-                ...t,
+                ...taskEntry,
                 done,
-                columnId: done ? 'done' : t.columnId === 'done' ? 'inbox' : t.columnId,
+                columnId: done ? 'done' : taskEntry.columnId === 'done' ? 'inbox' : taskEntry.columnId,
               }
-            : t
+            : taskEntry
         )
       );
 
@@ -1352,10 +1411,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               : prev
           );
           setTasks((prev) =>
-            prev.map((t) =>
-              t.itemId === itemId && t.sourceType === sourceType && t.taskIndex === taskIndex
-                ? { ...t, done: prevDone }
-                : t
+            prev.map((taskEntry) =>
+              taskEntry.itemId === itemId && taskEntry.sourceType === sourceType && taskEntry.taskIndex === taskIndex
+                ? { ...taskEntry, done: prevDone }
+                : taskEntry
             )
           );
           void window.kapsula
@@ -1363,11 +1422,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
             .catch(() => {});
         }
-        toast.error(friendlyErrorMessage(err));
+        toast.error(friendlyErrorMessage(err, undefined, locale));
         throw err;
       }
     },
-    [applyPendingTaskTogglesToTasks]
+    [applyPendingTaskTogglesToTasks, locale]
   );
 
   const handleToggleMarkdownTask = async (
@@ -1414,12 +1473,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         focusBoardId: nav.type === 'board' ? nav.boardId : undefined,
       });
       if (captured) {
-        toast.success('Сохранено из буфера обмена');
+        toast.success(t('workspace.toast.pastedClipboard'));
       } else {
-        toast('Буфер обмена пуст');
+        toast(t('workspace.toast.clipboardEmpty'));
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1434,10 +1493,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     try {
       await Promise.all(ids.map((id) => window.kapsula.updateItem(id, { orbit: orbitId })));
-      toast.success(`Перемещено записей: ${ids.length}`);
+      toast.success(t('workspace.toast.movedCount', { count: ids.length }));
       setSelectedIds([]);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1445,10 +1504,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     try {
       await Promise.all(ids.map((id) => window.kapsula.updateItem(id, { isPinned: pin })));
-      toast.success(pin ? `Закреплено: ${ids.length}` : `Откреплено: ${ids.length}`);
+      toast.success(
+        pin
+          ? t('workspace.toast.pinnedCount', { count: ids.length })
+          : t('workspace.toast.unpinnedCount', { count: ids.length })
+      );
       setSelectedIds([]);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1458,13 +1521,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       const results = await Promise.all(ids.map((id) => window.kapsula.deleteItem(id)));
       const deletedIds = ids.filter((_, i) => results[i] === true);
       if (deletedIds.length === 0) {
-        toast.error('Не удалось переместить выбранные записи в корзину');
+        toast.error(t('workspace.toast.trashBulkFailed'));
         void refreshAll();
         return;
       }
-      toast(`Перемещено в корзину: ${deletedIds.length}`, {
+      toast(t('workspace.toast.movedToTrashCount', { count: deletedIds.length }), {
         action: {
-          label: 'Отменить',
+          label: t('common.undo'),
           onClick: () => {
             void Promise.all(deletedIds.map((id) => window.kapsula.restoreItem(id))).then(() => {
               void refreshAll();
@@ -1474,7 +1537,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       });
       setSelectedIds([]);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1484,7 +1547,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     if (!sectionEditor) return;
     const trimmed = sectionEditor.name.trim();
     if (!trimmed) {
-      toast.error('Введи название');
+      toast.error(t('nav.enterName'));
       return;
     }
     setSectionSaving(true);
@@ -1498,7 +1561,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             icon: sectionEditor.icon,
           });
           setNav({ type: 'orbit', orbitId: created.id });
-          toast.success(`Раздел «${created.name}» создан`);
+          toast.success(t('nav.sectionCreated', { name: created.name }));
         } else if (sectionEditor.id) {
           await window.kapsula.updateOrbit(sectionEditor.id, {
             name: trimmed,
@@ -1506,7 +1569,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             color: sectionEditor.color,
             icon: sectionEditor.icon,
           });
-          toast.success('Раздел обновлён');
+          toast.success(t('nav.sectionUpdated'));
         }
       } else {
         if (sectionEditor.mode === 'create') {
@@ -1517,7 +1580,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             sectionEditor.description.trim(),
           );
           setNav({ type: 'board', boardId: created.id });
-          toast.success(`Холст «${created.name}» создан`);
+          toast.success(t('nav.boardCreated', { name: created.name }));
         } else if (sectionEditor.id) {
           await window.kapsula.updateFocusBoard(sectionEditor.id, {
             name: trimmed,
@@ -1525,12 +1588,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             color: sectionEditor.color,
             icon: sectionEditor.icon,
           });
-          toast.success('Холст обновлён');
+          toast.success(t('nav.boardUpdated'));
         }
       }
       setSectionEditor(null);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
       setSectionSaving(false);
     }
@@ -1555,9 +1618,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (nav.type === 'orbit' && nav.orbitId === orbit.id) {
         setNav({ type: 'flow' });
       }
-      toast.success(`Раздел «${orbit.name}» удалён`);
+      toast.success(t('nav.sectionDeleted', { name: orbit.name }));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1580,9 +1643,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (nav.type === 'board' && nav.boardId === board.id) {
         setNav({ type: 'flow' });
       }
-      toast.success(`Холст «${board.name}» удалён`);
+      toast.success(t('nav.boardDeleted', { name: board.name }));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -1614,7 +1677,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       {
         type: 'item',
         id: 'bg-new-note',
-        label: 'Новая заметка',
+        label: t('workspace.newNote'),
         shortcut: isMac ? '⌘N' : 'Ctrl+N',
         icon: <NotePencil className="w-3.5 h-3.5" />,
         onSelect: () => handleOpenBlankDraft(),
@@ -1622,7 +1685,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       {
         type: 'item',
         id: 'bg-paste',
-        label: 'Вставить из буфера обмена',
+        label: t('workspace.pasteClipboard'),
         icon: <ClipboardText className="w-3.5 h-3.5" />,
         onSelect: () => void handleCaptureClipboardQuick(),
       },
@@ -1630,7 +1693,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       {
         type: 'item',
         id: 'bg-new-orbit',
-        label: 'Создать раздел',
+        label: t('nav.createSection'),
         icon: <Plus className="w-3.5 h-3.5" />,
         onSelect: () =>
           setSectionEditor({
@@ -1645,22 +1708,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       {
         type: 'item',
         id: 'bg-triage',
-        label: 'Разобрать записи',
+        label: t('triage.title'),
         icon: <FunnelSimple className="w-3.5 h-3.5" />,
         onSelect: () => setTriageOpen(true),
       },
       {
         type: 'item',
         id: 'bg-hud',
-        label: `Быстрая строка (${
-          formatShortcutCompact(settings.hudShortcut, platform) ||
-          (isMac ? '⌥+Пробел' : 'Alt+Пробел')
-        })`,
+        label: t('workspace.quickLaunchHint', {
+          shortcut:
+            formatShortcutCompact(settings.hudShortcut, platform, locale) ||
+            formatShortcutCompact('Alt+Space', platform, locale),
+        }),
         icon: <Sparkle className="w-3.5 h-3.5" />,
         onSelect: () => void window.kapsula.windowAction('open-hud'),
       },
     ],
-    [handleOpenBlankDraft, isMac, platform, settings.hudShortcut],
+    [handleOpenBlankDraft, isMac, platform, settings.hudShortcut, t, locale],
   );
 
   return (
@@ -1708,13 +1772,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               </span>
             </button>
 
-            <TooltipHint label="Свернуть боковую панель">
+            <TooltipHint label={t('nav.collapseSidebar')}>
               <button
                 type="button"
                 data-testid="toggle-sidebar-btn"
                 onClick={() => setSidebarOpen(false)}
                 className="k-no-drag k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                aria-label="Свернуть боковую панель"
+                aria-label={t('nav.collapseSidebar')}
               >
                 <SidebarSimple size={16} />
               </button>
@@ -1727,80 +1791,142 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               <SidebarNavButton
                 active={isSameNav(nav, { type: 'flow' })}
                 icon={<Tray size={16} />}
-                label="Все записи"
+                label={t('nav.allItems')}
                 count={counts.total}
                 testId="nav-flow"
                 onClick={() => navigateTo({ type: 'flow' })}
               />
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'notes' })}
-                icon={<NotePencil size={16} />}
-                label="Заметки"
-                count={counts.notes}
-                testId="nav-notes"
-                onClick={() => navigateTo({ type: 'notes' })}
-              />
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'media' })}
-                icon={<ImageIcon size={16} />}
-                label="Медиа"
-                count={counts.media}
-                testId="nav-media"
-                onClick={() => navigateTo({ type: 'media' })}
-              />
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'tasks' })}
-                icon={<CheckSquare size={16} />}
-                label="Задачи"
-                count={counts.openTasks}
-                testId="nav-tasks"
-                onClick={() => navigateTo({ type: 'tasks' })}
-              />
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'calendar' })}
-                icon={<CalendarBlank size={16} />}
-                label="Календарь"
-                count={counts.todayCalendar}
-                testId="nav-calendar"
-                onClick={() => navigateTo({ type: 'calendar' })}
-              />
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'secrets' })}
-                icon={vaultLocked ? <LockKey size={16} /> : <LockSimpleOpen size={16} />}
-                label="Сейф"
-                count={counts.secrets}
-                testId="nav-secrets"
-                onClick={() => navigateTo({ type: 'secrets' })}
-              />
-              {counts.archived > 0 || isSameNav(nav, { type: 'archive' }) ? (
-                <SidebarNavButton
-                  active={isSameNav(nav, { type: 'archive' })}
-                  icon={<Archive size={16} />}
-                  label="Архив"
-                  count={counts.archived}
-                  testId="nav-archive"
-                  onClick={() => navigateTo({ type: 'archive' })}
-                />
+              {!hiddenNavSet.has('notes') ? (
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-notes',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('notes'),
+                    },
+                  ]}
+                >
+                  <div>
+                    <SidebarNavButton
+                      active={isSameNav(nav, { type: 'notes' })}
+                      icon={<NotePencil size={16} />}
+                      label={t('nav.notes')}
+                      count={counts.notes}
+                      testId="nav-notes"
+                      onClick={() => navigateTo({ type: 'notes' })}
+                    />
+                  </div>
+                </ContextMenuSurface>
               ) : null}
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'trash' })}
-                icon={<Trash size={16} />}
-                label="Корзина"
-                count={counts.trashed}
-                testId="nav-trash"
-                onClick={() => navigateTo({ type: 'trash' })}
-              />
+              {!hiddenNavSet.has('media') ? (
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-media',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('media'),
+                    },
+                  ]}
+                >
+                  <div>
+                    <SidebarNavButton
+                      active={isSameNav(nav, { type: 'media' })}
+                      icon={<ImageIcon size={16} />}
+                      label={t('nav.media')}
+                      count={counts.media}
+                      testId="nav-media"
+                      onClick={() => navigateTo({ type: 'media' })}
+                    />
+                  </div>
+                </ContextMenuSurface>
+              ) : null}
+              {!hiddenNavSet.has('tasks') ? (
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-tasks',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('tasks'),
+                    },
+                  ]}
+                >
+                  <div>
+                    <SidebarNavButton
+                      active={isSameNav(nav, { type: 'tasks' })}
+                      icon={<CheckSquare size={16} />}
+                      label={t('nav.tasks')}
+                      count={counts.openTasks}
+                      testId="nav-tasks"
+                      onClick={() => navigateTo({ type: 'tasks' })}
+                    />
+                  </div>
+                </ContextMenuSurface>
+              ) : null}
+              {!hiddenNavSet.has('calendar') ? (
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-calendar',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('calendar'),
+                    },
+                  ]}
+                >
+                  <div>
+                    <SidebarNavButton
+                      active={isSameNav(nav, { type: 'calendar' })}
+                      icon={<CalendarBlank size={16} />}
+                      label={t('nav.calendar')}
+                      count={counts.todayCalendar}
+                      testId="nav-calendar"
+                      onClick={() => navigateTo({ type: 'calendar' })}
+                    />
+                  </div>
+                </ContextMenuSurface>
+              ) : null}
+              {!hiddenNavSet.has('secrets') ? (
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-secrets',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('secrets'),
+                    },
+                  ]}
+                >
+                  <div>
+                    <SidebarNavButton
+                      active={isSameNav(nav, { type: 'secrets' })}
+                      icon={vaultLocked ? <LockKey size={16} /> : <LockSimpleOpen size={16} />}
+                      label={t('nav.vault')}
+                      count={counts.secrets}
+                      testId="nav-secrets"
+                      onClick={() => navigateTo({ type: 'secrets' })}
+                    />
+                  </div>
+                </ContextMenuSurface>
+              ) : null}
             </div>
 
             {/* Independently scrollable user Sections + Visual Boards */}
             <div className="flex-1 min-h-0 overflow-y-auto k-scroll-hidden space-y-4">
-              {/* Разделы (Orbits) */}
+              {/* Sections (Orbits) */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between px-2 py-1">
                   <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Разделы
+                    {t('nav.sections')}
                   </span>
-                  <TooltipHint label="Новый раздел">
+                  <TooltipHint label={t('nav.newSection')}>
                     <button
                       type="button"
                       data-testid="add-orbit-btn"
@@ -1815,7 +1941,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         })
                       }
                       className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                      aria-label="Создать раздел"
+                      aria-label={t('nav.createSection')}
                     >
                       <Plus size={13} weight="bold" />
                     </button>
@@ -1830,7 +1956,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'edit',
-                        label: 'Настроить и переименовать',
+                        label: t('nav.configureAndRename'),
                         icon: <PencilSimple className="w-3.5 h-3.5" />,
                         onSelect: () =>
                           setSectionEditor({
@@ -1846,7 +1972,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'up',
-                        label: 'Переместить выше',
+                        label: t('nav.moveUp'),
                         icon: <ArrowUp className="w-3.5 h-3.5" />,
                         disabled: idx === 0,
                         onSelect: () => void handleMoveOrbitByStep(orbit.id, -1),
@@ -1854,7 +1980,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'down',
-                        label: 'Переместить ниже',
+                        label: t('nav.moveDown'),
                         icon: <ArrowDown className="w-3.5 h-3.5" />,
                         disabled: idx === orbits.length - 1,
                         onSelect: () => void handleMoveOrbitByStep(orbit.id, 1),
@@ -1863,7 +1989,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'delete',
-                        label: 'Удалить раздел',
+                        label: t('nav.deleteSection'),
                         icon: <Trash className="w-3.5 h-3.5" />,
                         danger: true,
                         onSelect: () => void handleDeleteOrbit(orbit),
@@ -1917,18 +2043,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             />
                           ) : null}
                           <span className="relative z-10 shrink-0 w-4 h-4 mr-2 flex items-center justify-center">
-                            {!orbit.icon || orbit.icon === 'Folder' ? (
-                              <span
-                                className="w-2 h-2 rounded-full border border-[var(--k-border-strong)]"
-                                style={{ backgroundColor: orbit.color }}
-                              />
-                            ) : (
-                              <SectionIcon
-                                name={orbit.icon}
-                                color={orbit.color}
-                                className="w-[15px] h-[15px] opacity-85"
-                              />
-                            )}
+                            <SectionIcon
+                              name={orbit.icon || 'Folder'}
+                              color={orbit.color}
+                              className="w-[15px] h-[15px]"
+                            />
                           </span>
                           <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
                             {orbit.name}
@@ -1949,7 +2068,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               });
                             }}
                             className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                            aria-label="Настроить раздел"
+                            aria-label={t('nav.configureSection')}
                           >
                             <PencilSimple size={12} />
                           </button>
@@ -1966,39 +2085,52 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   })}
                   {orbits.length === 0 ? (
                     <div className="px-2 py-2 text-[11.5px] text-[var(--k-ink-muted)]">
-                      Разделов пока нет — нажми «+»
+                      {t('nav.noSectionsHint')}
                     </div>
                   ) : null}
                 </div>
               </div>
 
-              {/* Визуальные Холсты (Focus Boards) */}
+              {/* Visual Boards (Focus Boards) */}
+              {!hiddenNavSet.has('boards') ? (
               <div className="space-y-1">
-                <div className="flex items-center justify-between px-2 py-1">
-                  <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Холсты
-                  </span>
-                  <TooltipHint label="Новый холст">
-                    <button
-                      type="button"
-                      data-testid="add-board-btn"
-                      onClick={() =>
-                        setSectionEditor({
-                          kind: 'board',
-                          mode: 'create',
-                          name: '',
-                          description: '',
-                          color: SECTION_COLOR_PALETTE[2]!,
-                          icon: 'BookmarkSimple',
-                        })
-                      }
-                      className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                      aria-label="Создать холст"
-                    >
-                      <Plus size={13} weight="bold" />
-                    </button>
-                  </TooltipHint>
-                </div>
+                <ContextMenuSurface
+                  entries={[
+                    {
+                      type: 'item',
+                      id: 'hide-boards',
+                      label: t('nav.hideFromSidebar'),
+                      icon: <EyeSlash className="w-3.5 h-3.5" />,
+                      onSelect: () => handleHideNavSection('boards'),
+                    },
+                  ]}
+                >
+                  <div className="flex items-center justify-between px-2 py-1">
+                    <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+                      {t('nav.boards')}
+                    </span>
+                    <TooltipHint label={t('nav.newBoard')}>
+                      <button
+                        type="button"
+                        data-testid="add-board-btn"
+                        onClick={() =>
+                          setSectionEditor({
+                            kind: 'board',
+                            mode: 'create',
+                            name: '',
+                            description: '',
+                            color: SECTION_COLOR_PALETTE[2]!,
+                            icon: 'BookmarkSimple',
+                          })
+                        }
+                        className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        aria-label={t('nav.createBoard')}
+                      >
+                        <Plus size={13} weight="bold" />
+                      </button>
+                    </TooltipHint>
+                  </div>
+                </ContextMenuSurface>
 
                 <div className="space-y-0.5" data-testid="sidebar-boards-list">
                   {boards.map((board, idx) => {
@@ -2008,7 +2140,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'edit',
-                        label: 'Настроить и переименовать',
+                        label: t('nav.configureAndRename'),
                         icon: <PencilSimple className="w-3.5 h-3.5" />,
                         onSelect: () =>
                           setSectionEditor({
@@ -2024,7 +2156,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'up',
-                        label: 'Переместить выше',
+                        label: t('nav.moveUp'),
                         icon: <ArrowUp className="w-3.5 h-3.5" />,
                         disabled: idx === 0,
                         onSelect: () => void handleMoveBoardByStep(board.id, -1),
@@ -2032,7 +2164,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'down',
-                        label: 'Переместить ниже',
+                        label: t('nav.moveDown'),
                         icon: <ArrowDown className="w-3.5 h-3.5" />,
                         disabled: idx === boards.length - 1,
                         onSelect: () => void handleMoveBoardByStep(board.id, 1),
@@ -2041,7 +2173,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       {
                         type: 'item',
                         id: 'delete',
-                        label: 'Удалить холст',
+                        label: t('nav.deleteBoard'),
                         icon: <Trash className="w-3.5 h-3.5" />,
                         danger: true,
                         onSelect: () => void handleDeleteBoard(board),
@@ -2122,7 +2254,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               });
                             }}
                             className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                            aria-label="Настроить холст"
+                            aria-label={t('nav.configureBoard')}
                           >
                             <PencilSimple size={12} />
                           </button>
@@ -2138,11 +2270,34 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   })}
                   {boards.length === 0 ? (
                     <div className="px-2 py-1.5 text-[11.5px] text-[var(--k-ink-muted)]">
-                      Нет холстов
+                      {t('nav.noBoards')}
                     </div>
                   ) : null}
                 </div>
               </div>
+              ) : null}
+            </div>
+
+            {/* Secondary Utilities: Archive + Trash pinned neatly near footer */}
+            <div className="shrink-0 pt-1.5 border-t border-[var(--k-border-hairline)]/80 space-y-0.5">
+              {counts.archived > 0 || isSameNav(nav, { type: 'archive' }) ? (
+                <SidebarNavButton
+                  active={isSameNav(nav, { type: 'archive' })}
+                  icon={<Archive size={16} />}
+                  label={t('nav.archive')}
+                  count={counts.archived}
+                  testId="nav-archive"
+                  onClick={() => navigateTo({ type: 'archive' })}
+                />
+              ) : null}
+              <SidebarNavButton
+                active={isSameNav(nav, { type: 'trash' })}
+                icon={<Trash size={16} />}
+                label={t('nav.trash')}
+                count={counts.trashed}
+                testId="nav-trash"
+                onClick={() => navigateTo({ type: 'trash' })}
+              />
             </div>
 
             {/* Non-intrusive cloud update pill above sidebar footer */}
@@ -2165,14 +2320,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   <Sparkle weight="fill" size={12} className="shrink-0" />
                   <span className="truncate k-tabular">
                     {updaterState.status === 'downloaded'
-                      ? `Готова v${updaterState.latestVersion}`
-                      : `Доступна v${updaterState.latestVersion}`}
+                      ? t('workspace.sidebar.updateReady', { version: updaterState.latestVersion })
+                      : t('workspace.sidebar.updateAvailable', { version: updaterState.latestVersion })}
                   </span>
                 </button>
                 <button
                   type="button"
-                  title="Скрыть уведомление для этой версии"
-                  aria-label="Скрыть уведомление об обновлении"
+                  title={t('workspace.sidebar.dismissUpdateTitle')}
+                  aria-label={t('workspace.sidebar.dismissUpdateAria')}
                   onClick={() => {
                     void window.kapsula
                       .dismissUpdate(updaterState.latestVersion ?? undefined)
@@ -2188,7 +2343,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               </div>
             ) : null}
 
-            {/* Compact Sidebar Footer: Settings + Theme Toggle + Lock */}
+            {/* Compact Sidebar Footer: Settings + Customize + Sync + Lock + Theme */}
             <div className="shrink-0 pt-2 border-t border-[var(--k-border-hairline)] flex items-center gap-1">
               <button
                 type="button"
@@ -2200,25 +2355,91 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 className="k-interactive flex-1 flex items-center gap-2 px-2.5 h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer min-w-0"
               >
                 <CirclesFour size={15} className="shrink-0" />
-                <span className="truncate">Настройки</span>
+                <span className="truncate">{t('workspace.sidebar.settings')}</span>
               </button>
+
+              <PopoverSurface
+                open={customizeSidebarOpen}
+                onOpenChange={setCustomizeSidebarOpen}
+                side="top"
+                align="start"
+                widthClass="w-[228px] !p-2"
+                trigger={
+                  <button
+                    type="button"
+                    data-testid="customize-sidebar-btn"
+                    title={t('nav.customizeSidebar')}
+                    aria-label={t('nav.customizeSidebar')}
+                    className={`k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center cursor-pointer shrink-0 ${
+                      hiddenNavSections.length > 0
+                        ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]/70'
+                        : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
+                    }`}
+                  >
+                    <SlidersHorizontal size={15} />
+                  </button>
+                }
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1 pb-1 border-b border-[var(--k-border-hairline)]">
+                    <span className="text-[11.5px] font-semibold text-[var(--k-ink-primary)]">
+                      {t('nav.customizeSidebar')}
+                    </span>
+                    {hiddenNavSections.length > 0 ? (
+                      <button
+                        type="button"
+                        data-testid="customize-sidebar-show-all"
+                        onClick={() => setHiddenNavSections(writeHiddenNavSections([]))}
+                        className="text-[11px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer"
+                      >
+                        {t('nav.showAllSidebar')}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="space-y-0.5">
+                    {HIDEABLE_NAV_SECTIONS.map((sec) => {
+                      const visible = !hiddenNavSet.has(sec);
+                      return (
+                        <button
+                          key={sec}
+                          type="button"
+                          data-testid={`customize-sidebar-toggle-${sec}`}
+                          onClick={() => handleToggleHiddenNavSection(sec)}
+                          className="k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-[7px] text-[12px] text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        >
+                          <span>{t(HIDEABLE_SECTION_LABEL_KEYS[sec])}</span>
+                          <span
+                            className={`inline-flex items-center justify-center w-4 h-4 rounded-[5px] border ${
+                              visible
+                                ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
+                                : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-transparent'
+                            }`}
+                          >
+                            <Check size={11} weight="bold" />
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </PopoverSurface>
 
               <TooltipHint
                 label={
                   !syncStatus || syncStatus.state === 'signed_out'
-                    ? 'Облачная синхронизация не подключена'
+                    ? t('workspace.sidebar.syncDisconnected')
                     : syncStatus.state === 'syncing'
-                      ? 'Синхронизация с облаком…'
+                      ? t('workspace.sidebar.syncSyncing')
                       : syncStatus.state === 'synced'
-                        ? 'Облако: всё синхронизировано'
+                        ? t('workspace.sidebar.syncSynced')
                         : syncStatus.state === 'offline'
-                          ? 'Офлайн · изменения ждут сети'
+                          ? t('workspace.sidebar.syncOffline')
                           : syncStatus.state === 'needs_passphrase_setup' ||
                               syncStatus.state === 'needs_passphrase_unlock'
-                            ? 'Введи секретную фразу шифрования'
+                            ? t('workspace.sidebar.syncNeedsPassphrase')
                             : syncStatus.state === 'awaiting_email_confirm'
-                              ? 'Подтверди почту для синхронизации'
-                              : 'Ошибка синхронизации · нажми, чтобы проверить'
+                              ? t('workspace.sidebar.syncNeedsVerify')
+                              : t('workspace.sidebar.syncError')
                 }
               >
                 <button
@@ -2229,7 +2450,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     setSettingsOpen(true);
                   }}
                   className="k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                  aria-label="Синхронизация с облаком"
+                  aria-label={t('workspace.sidebar.syncAria')}
                 >
                   {syncStatus?.state === 'syncing' ? (
                     <ArrowsClockwise size={15} className="animate-spin text-[var(--k-accent)]" />
@@ -2253,7 +2474,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               </TooltipHint>
 
               {settings.hasMasterPin ? (
-                <TooltipHint label={vaultLocked ? 'Разблокировать сейф' : 'Заблокировать сейф'}>
+                <TooltipHint label={vaultLocked ? t('workspace.sidebar.unlockVault') : t('workspace.sidebar.lockVault')}>
                   <button
                     type="button"
                     onClick={() => {
@@ -2261,11 +2482,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         setUnlockOpen(true);
                       } else {
                         void window.kapsula.lockVaultPin();
-                        toast('Сейф заблокирован');
+                        toast(t('workspace.sidebar.vaultLockedToast'));
                       }
                     }}
                     className="k-interactive w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                    aria-label={vaultLocked ? 'Разблокировать сейф' : 'Заблокировать сейф'}
+                    aria-label={vaultLocked ? t('workspace.sidebar.unlockVault') : t('workspace.sidebar.lockVault')}
                   >
                     {vaultLocked ? (
                       <LockKey size={15} className="text-[var(--k-accent)]" />
@@ -2276,13 +2497,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </TooltipHint>
               ) : null}
 
-              <TooltipHint label={settings.theme === 'light' ? 'Тёмная тема' : 'Светлая тема'}>
+              <TooltipHint label={settings.theme === 'light' ? t('workspace.sidebar.darkTheme') : t('workspace.sidebar.lightTheme')}>
                 <button
                   type="button"
                   data-testid="theme-toggle-btn"
                   onClick={handleToggleTheme}
                   className="k-interactive w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                  aria-label="Переключить тему"
+                  aria-label={t('workspace.sidebar.toggleThemeAria')}
                 >
                   <AnimatePresence mode="wait" initial={false}>
                     {settings.theme === 'light' ? (
@@ -2359,13 +2580,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
                   className="overflow-hidden shrink-0 k-no-drag"
                 >
-                  <TooltipHint label="Показать панель">
+                  <TooltipHint label={t('nav.showPanel')}>
                     <button
                       type="button"
                       data-testid="toggle-sidebar-btn"
                       onClick={() => setSidebarOpen(true)}
                       className="k-interactive w-7.5 h-7.5 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                      aria-label="Показать боковую панель"
+                      aria-label={t('nav.showSidebar')}
                     >
                       <SidebarSimple size={16} />
                     </button>
@@ -2376,9 +2597,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
             <div className="flex items-center gap-1.5 min-w-0">
               {nav.type === 'orbit' ? (
-                <span className="text-[12.5px] text-[var(--k-ink-muted)] shrink-0">Разделы /</span>
+                <span className="text-[12.5px] text-[var(--k-ink-muted)] shrink-0">{t('nav.sectionsBreadcrumb')}</span>
               ) : nav.type === 'board' ? (
-                <span className="text-[12.5px] text-[var(--k-ink-muted)] shrink-0">Холсты /</span>
+                <span className="text-[12.5px] text-[var(--k-ink-muted)] shrink-0">{t('nav.boardsBreadcrumb')}</span>
               ) : null}
               <span className="k-display font-semibold text-[14px] tracking-[-0.015em] text-[var(--k-ink-primary)] truncate">
                 {activeNavTitle}
@@ -2404,7 +2625,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setSearchFocused(false)}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск по всей Kapsula…"
+                placeholder={t('workspace.searchPlaceholder')}
                 className="flex-1 min-w-0 bg-transparent text-[12.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none select-text"
               />
               {searchQuery ? (
@@ -2413,7 +2634,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setSearchQuery('')}
                   className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer shrink-0"
-                  aria-label="Очистить поиск"
+                  aria-label={t('common.clearSearch')}
                 >
                   <X size={12} weight="bold" />
                 </button>
@@ -2441,8 +2662,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 navigateTo({ type: 'calendar' });
                 setFocusCalendarEventId(ev.id);
               }}
-              onToggleTask={(t) => {
-                void handleToggleVaultTask(t).catch(() => {});
+              onToggleTask={(taskEntry) => {
+                void handleToggleVaultTask(taskEntry).catch(() => {});
               }}
               onOpenNewNote={handleOpenBlankDraft}
               onOpenTriage={() => setTriageOpen(true)}
@@ -2462,8 +2683,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <TooltipHint
               label={
                 counts.unsorted > 0
-                  ? `Разобрать неразобранные записи (${counts.unsorted})`
-                  : 'Умный разбор записей'
+                  ? t('workspace.triageTooltipCount', { count: counts.unsorted })
+                  : t('workspace.triageTooltip')
               }
             >
               <button
@@ -2473,7 +2694,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 className="k-interactive relative h-7.5 px-2.5 rounded-[8px] flex items-center gap-1.5 text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
               >
                 <FunnelSimple size={14} className="text-[var(--k-ink-secondary)]" />
-                <span className="hidden xl:inline">Разобрать</span>
+                <span className="hidden xl:inline">{t('workspace.triageButton')}</span>
                 {counts.unsorted > 0 ? (
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--k-accent)] shrink-0" />
                 ) : null}
@@ -2491,7 +2712,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               }`}
             >
               <Sparkle size={13.5} weight="fill" className={assistantOpen ? '' : 'text-[var(--k-accent)]'} />
-              <span>Ассистент</span>
+              <span>{t('workspace.assistantButton')}</span>
             </button>
 
             {!isMac ? (
@@ -2503,7 +2724,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     type="button"
                     onClick={() => void window.kapsula.windowAction('minimize')}
                     className="k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                    aria-label="Свернуть"
+                    aria-label={t('main.menu.minimize')}
                   >
                     <Minus size={13.5} />
                   </button>
@@ -2511,7 +2732,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     type="button"
                     onClick={() => void window.kapsula.windowAction('maximize')}
                     className="k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                    aria-label="Развернуть"
+                    aria-label={t('common.expand')}
                   >
                     <Square size={11.5} />
                   </button>
@@ -2519,7 +2740,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     type="button"
                     onClick={() => void window.kapsula.windowAction('close')}
                     className="k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-white hover:bg-[var(--k-danger)] cursor-pointer"
-                    aria-label="Закрыть"
+                    aria-label={t('common.close')}
                   >
                     <X size={13.5} />
                   </button>
@@ -2687,9 +2908,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           <LockKey size={18} />
                         </div>
                         <div>
-                          <div className="text-[14px] font-semibold">Сейф заблокирован мастер-кодом</div>
+                          <div className="text-[14px] font-semibold">{t('vault.lockedTitle')}</div>
                           <div className="text-[12px] text-[var(--k-ink-muted)]">
-                            Введи код, чтобы просматривать и копировать карты и пароли
+                            {t('vault.lockedDesc')}
                           </div>
                         </div>
                       </div>
@@ -2699,7 +2920,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         onClick={() => setUnlockOpen(true)}
                         className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium hover:bg-[var(--k-accent-hover)] cursor-pointer"
                       >
-                        Открыть сейф
+                        {t('vault.openButton')}
                       </button>
                     </div>
                   ) : (
@@ -2710,17 +2931,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           value={secretKindFilter}
                           onChange={setSecretKindFilter}
                           options={[
-                            { value: 'all', label: 'Все' },
-                            { value: 'bank_card', label: 'Карты' },
-                            { value: 'password', label: 'Пароли' },
-                            { value: 'api_key', label: 'Ключи' },
-                            { value: 'note', label: 'Заметки' },
+                            { value: 'all', label: t('vault.filter.all') },
+                            { value: 'bank_card', label: t('vault.filter.cards') },
+                            { value: 'password', label: t('vault.filter.passwords') },
+                            { value: 'api_key', label: t('vault.filter.keys') },
+                            { value: 'note', label: t('vault.filter.notes') },
                           ]}
                         />
                         <span className="text-[11.5px] text-[var(--k-ink-muted)] k-tabular hidden sm:inline">
                           {wipeSeconds > 0
-                            ? `Автоочистка буфера ${wipeSeconds} с`
-                            : 'Локальное шифрование'}
+                            ? t('vault.wipePill', { seconds: wipeSeconds })
+                            : t('vault.wipeLocalPill')}
                         </span>
                       </div>
 
@@ -2737,17 +2958,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               className="k-interactive h-8 px-3.5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                             >
                               <Plus size={13} weight="bold" />
-                              <span>Добавить в Сейф</span>
+                              <span>{t('vault.addButton')}</span>
                             </button>
                           }
                         >
                           <div className="space-y-0.5 text-[12.5px]">
                             {(
                               [
-                                ['bank_card', 'Банковская карта'],
-                                ['password', 'Логин и пароль'],
-                                ['api_key', 'Ключ доступа / токен'],
-                                ['note', 'Секретная заметка'],
+                                ['bank_card', t('vault.type.bank_card')],
+                                ['password', t('vault.type.password')],
+                                ['api_key', t('vault.type.api_key')],
+                                ['note', t('vault.type.note')],
                               ] as const
                             ).map(([kindKey, label]) => (
                               <button
@@ -2773,7 +2994,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             onClick={() => void window.kapsula.lockVaultPin()}
                             className="k-interactive h-8 px-2.5 rounded-xl border border-[var(--k-border-hairline)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                           >
-                            Заблокировать
+                            {t('vault.lockButton')}
                           </button>
                         ) : null}
                       </div>
@@ -2790,7 +3011,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <div className="flex items-center gap-2.5 text-[12.5px] text-[var(--k-ink-secondary)]">
                       <Archive weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)] shrink-0" />
                       <span>
-                        Архив хранит скрытые записи отдельно от основной ленты. Их можно в любой момент вернуть обратно или перенести в корзину.
+                        {t('workspace.archiveBanner')}
                       </span>
                     </div>
                   </div>
@@ -2804,7 +3025,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <div className="flex items-center gap-2.5 min-w-0 flex-1 text-[12.5px] text-[var(--k-ink-secondary)]">
                       <Info weight="duotone" className="w-4.5 h-4.5 text-[var(--k-accent)] shrink-0" />
                       <span className="leading-snug">
-                        Удалённые записи синхронизируются как удалённые на всех устройствах. Нажми «Удалить навсегда» или «Очистить корзину», чтобы стереть их полностью везде.
+                        {t('workspace.trashBanner')}
                       </span>
                     </div>
                     <button
@@ -2815,7 +3036,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-xl border border-[var(--k-danger)]/35 bg-[var(--k-danger-soft)] text-[var(--k-danger)] hover:bg-[var(--k-danger)] hover:text-white text-[12px] font-medium whitespace-nowrap cursor-pointer shrink-0 disabled:opacity-45 disabled:pointer-events-none"
                     >
                       <Trash className="w-3.5 h-3.5 shrink-0" />
-                      <span>Очистить корзину</span>
+                      <span>{t('workspace.emptyTrashButton')}</span>
                     </button>
                   </div>
                 ) : null}
@@ -2844,7 +3065,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         [
                           {
                             id: 'all',
-                            label: 'Все',
+                            label: t('workspace.filter.all'),
                             active:
                               filterDnaQuick === 'all' &&
                               !filterUnsortedOnly &&
@@ -2862,7 +3083,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 {
                                   id: 'unsorted',
                                   testId: 'quick-filter-unsorted',
-                                  label: 'Без раздела',
+                                  label: t('nav.noSection'),
                                   badge: counts.unsorted,
                                   active: filterUnsortedOnly,
                                   onClick: () => setFilterUnsortedOnly((v) => !v),
@@ -2872,28 +3093,28 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           {
                             id: 'link',
                             testId: 'quick-filter-link',
-                            label: 'Ссылки',
+                            label: t('workspace.filter.links'),
                             active: filterDnaQuick === 'link',
                             onClick: () => setFilterDnaQuick((v) => (v === 'link' ? 'all' : 'link')),
                           },
                           {
                             id: 'note',
                             testId: 'quick-filter-note',
-                            label: 'Заметки',
+                            label: t('workspace.filter.notes'),
                             active: filterDnaQuick === 'note',
                             onClick: () => setFilterDnaQuick((v) => (v === 'note' ? 'all' : 'note')),
                           },
                           {
                             id: 'voice',
                             testId: 'quick-filter-voice',
-                            label: 'Голос',
+                            label: t('workspace.filter.voice'),
                             active: filterDnaQuick === 'voice',
                             onClick: () => setFilterDnaQuick((v) => (v === 'voice' ? 'all' : 'voice')),
                           },
                           {
                             id: 'pinned',
                             testId: 'quick-filter-pinned',
-                            label: 'Закреплённые',
+                            label: t('workspace.filter.pinned'),
                             active: filterPinnedOnly,
                             onClick: () => setFilterPinnedOnly((v) => !v),
                           },
@@ -2937,10 +3158,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           className="k-interactive text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer ml-1.5 px-1.5"
                         >
                           {selectedIds.length === selectableVisibleIds.length
-                            ? 'Снять выбор'
+                            ? t('workspace.selectToggleOff')
                             : selectedIds.length > 0
-                              ? `Сбросить (${selectedIds.length})`
-                              : 'Выбрать'}
+                              ? t('workspace.selectResetCount', { count: selectedIds.length })
+                              : t('common.select')}
                         </button>
                       ) : null}
                     </div>
@@ -2958,11 +3179,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         value={sortOrder}
                         onChange={(v) => setSortOrder(v as SortMode)}
                         options={[
-                          { value: 'flow', label: 'Умный поток' },
-                          { value: 'created_desc', label: 'Сначала новые' },
-                          { value: 'updated_desc', label: 'Недавно изменённые' },
-                          { value: 'title_asc', label: 'По алфавиту' },
-                          { value: 'media_first', label: 'Сначала медиа' },
+                          { value: 'flow', label: t('workspace.sort.flow') },
+                          { value: 'created_desc', label: t('workspace.sort.createdDesc') },
+                          { value: 'updated_desc', label: t('workspace.sort.updatedDesc') },
+                          { value: 'title_asc', label: t('workspace.sort.titleAsc') },
+                          { value: 'media_first', label: t('workspace.sort.mediaFirst') },
                         ]}
                         size="sm"
                         align="end"
@@ -2974,9 +3195,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         value={effectiveLayoutMode}
                         onChange={handleLayoutChange}
                         options={[
-                          { value: 'grid', label: 'Плитка', icon: <GridFour size={14} /> },
-                          { value: 'list', label: 'Список', icon: <ListBullets size={14} /> },
-                          { value: 'board', label: 'Холст', icon: <Swatches size={14} /> },
+                          { value: 'grid', label: t('workspace.view.grid'), icon: <GridFour size={14} /> },
+                          { value: 'list', label: t('workspace.view.list'), icon: <ListBullets size={14} /> },
+                          { value: 'board', label: t('workspace.view.board'), icon: <Swatches size={14} /> },
                         ]}
                       />
                     </div>
@@ -3043,25 +3264,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     </div>
                     <div className="text-[14.5px] font-medium">
                       {searchQuery.trim()
-                        ? 'Ничего не нашлось'
+                        ? t('workspace.empty.searchTitle')
                         : nav.type === 'secrets'
-                          ? 'В Сейфе пока пусто'
+                          ? t('workspace.empty.vaultTitle')
                           : nav.type === 'archive'
-                            ? 'Архив пуст'
+                            ? t('workspace.empty.archiveTitle')
                             : nav.type === 'trash'
-                              ? 'Корзина пуста'
-                              : 'Здесь пока пусто'}
+                              ? t('workspace.empty.trashTitle')
+                              : t('workspace.empty.defaultTitle')}
                     </div>
                     <div className="text-[12.5px] text-[var(--k-ink-muted)] max-w-[440px] mx-auto">
                       {searchQuery.trim()
-                        ? 'Попробуй другой запрос — поиск понимает русскую и английскую раскладку.'
+                        ? t('workspace.empty.searchDesc')
                         : nav.type === 'secrets'
-                          ? 'Сохрани банковскую карту, пароль, ключ или 2FA-код — всё шифруется локально на устройстве.'
+                          ? t('workspace.empty.vaultDesc')
                           : nav.type === 'archive'
-                            ? 'Сюда попадают скрытые записи, которые ты убрал из основной ленты.'
+                            ? t('workspace.empty.archiveDesc')
                             : nav.type === 'trash'
-                              ? 'Удалённые записи хранятся здесь, пока ты их не восстановишь или не сотрёшь навсегда.'
-                              : 'Создай заметку, вставь ссылку, скриншот, письмо или файл в строку выше.'}
+                              ? t('workspace.empty.trashDesc')
+                              : t('workspace.empty.defaultDesc')}
                     </div>
                     <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                       {searchQuery.trim() ? (
@@ -3070,7 +3291,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           onClick={() => setSearchQuery('')}
                           className="k-interactive h-8.5 px-3.5 rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[12.5px] font-medium cursor-pointer"
                         >
-                          Сбросить поиск
+                          {t('workspace.resetSearch')}
                         </button>
                       ) : nav.type === 'secrets' && !vaultLocked ? (
                         <button
@@ -3082,7 +3303,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           className="k-interactive inline-flex items-center gap-1.5 h-8.5 px-3.5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer"
                         >
                           <Plus size={14} weight="bold" />
-                          <span>Добавить в Сейф</span>
+                          <span>{t('vault.addButton')}</span>
                         </button>
                       ) : nav.type !== 'archive' && nav.type !== 'trash' && nav.type !== 'secrets' ? (
                         <>
@@ -3092,7 +3313,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             className="k-interactive inline-flex items-center gap-1.5 h-8.5 px-3.5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer"
                           >
                             <NotePencil size={14} />
-                            <span>Создать заметку</span>
+                            <span>{t('workspace.createNote')}</span>
                           </button>
                           <button
                             type="button"
@@ -3100,7 +3321,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             className="k-interactive inline-flex items-center gap-1.5 h-8.5 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] text-[12.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                           >
                             <ClipboardText size={14} />
-                            <span>Вставить из буфера</span>
+                            <span>{t('workspace.pasteFromClipboardShort')}</span>
                           </button>
                         </>
                       ) : null}
@@ -3115,13 +3336,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
                       const preview =
                         item.dna === 'secret'
-                          ? 'Зашифрованная запись Сейфа'
+                          ? t('dna.encryptedVaultRecord')
                           : stripMarkdownPreview(item.summary || item.body);
                       const trashMenu: ContextMenuEntry[] = [
                         {
                           type: 'item',
                           id: 'trash-restore',
-                          label: 'Восстановить',
+                          label: t('common.restore'),
                           icon: <ArrowCounterClockwise className="w-3.5 h-3.5" />,
                           onSelect: () => void handleRestoreItem(item.id),
                         },
@@ -3129,7 +3350,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         {
                           type: 'item',
                           id: 'trash-purge',
-                          label: 'Удалить навсегда',
+                          label: t('common.deleteForever'),
                           icon: <Trash className="w-3.5 h-3.5" />,
                           danger: true,
                           onSelect: () => setConfirmPurgeItem(item),
@@ -3149,7 +3370,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   <NotePencil className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
                                 )}
                                 <span className="text-[13.5px] font-medium text-[var(--k-ink-primary)] truncate">
-                                  {item.title || 'Без названия'}
+                                  {item.title || t('common.noTitle')}
                                 </span>
                                 {orbit ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-bg-surface-2)] text-[10.5px] text-[var(--k-ink-secondary)] shrink-0">
@@ -3167,7 +3388,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 </div>
                               ) : null}
                               <div className="text-[11px] text-[var(--k-ink-muted)] k-tabular">
-                                Удалено {formatRelativeDate(item.deletedAt ?? item.updatedAt)}
+                                {t('date.deletedWhen', {
+                                  when: formatRelativeDate(item.deletedAt ?? item.updatedAt, locale),
+                                })}
                               </div>
                             </div>
 
@@ -3180,7 +3403,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-50"
                               >
                                 <ArrowCounterClockwise className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                                <span>Восстановить</span>
+                                <span>{t('common.restore')}</span>
                               </button>
                               <button
                                 type="button"
@@ -3190,7 +3413,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-danger)]/30 bg-[var(--k-danger-soft)] hover:bg-[var(--k-danger)] hover:text-white text-[12px] font-medium text-[var(--k-danger)] cursor-pointer disabled:opacity-50"
                               >
                                 <Trash className="w-3.5 h-3.5" />
-                                <span>Удалить навсегда</span>
+                                <span>{t('common.deleteForever')}</span>
                               </button>
                             </div>
                           </div>
@@ -3207,20 +3430,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
                       const preview =
                         item.dna === 'secret'
-                          ? 'Зашифрованная запись Сейфа'
+                          ? t('dna.encryptedVaultRecord')
                           : stripMarkdownPreview(item.summary || item.body);
                       const archiveMenu: ContextMenuEntry[] = [
                         {
                           type: 'item',
                           id: 'arch-open',
-                          label: 'Открыть',
+                          label: t('common.open'),
                           icon: <PencilSimple className="w-3.5 h-3.5" />,
                           onSelect: () => handleOpenItem(item),
                         },
                         {
                           type: 'item',
                           id: 'arch-unarchive',
-                          label: 'Вернуть из архива',
+                          label: t('workspace.returnFromArchive'),
                           icon: <ArrowCounterClockwise className="w-3.5 h-3.5" />,
                           onSelect: () => void handleUnarchiveItem(item.id),
                         },
@@ -3228,7 +3451,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         {
                           type: 'item',
                           id: 'arch-trash',
-                          label: 'Переместить в корзину',
+                          label: t('workspace.moveToTrash'),
                           icon: <Trash className="w-3.5 h-3.5" />,
                           danger: true,
                           onSelect: () => void handleDeleteItem(item.id),
@@ -3245,7 +3468,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               <div className="flex items-center gap-2 min-w-0">
                                 <Archive className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
                                 <span className="text-[13.5px] font-medium text-[var(--k-ink-primary)] truncate">
-                                  {item.title || 'Без названия'}
+                                  {item.title || t('common.noTitle')}
                                 </span>
                                 {orbit ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-bg-surface-2)] text-[10.5px] text-[var(--k-ink-secondary)] shrink-0">
@@ -3275,7 +3498,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] cursor-pointer"
                               >
                                 <ArrowCounterClockwise className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                                <span>Вернуть из архива</span>
+                                <span>{t('workspace.returnFromArchive')}</span>
                               </button>
                               <button
                                 type="button"
@@ -3284,7 +3507,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 className="k-interactive inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] hover:border-[var(--k-danger)]/35 hover:bg-[var(--k-danger-soft)] hover:text-[var(--k-danger)] text-[12px] text-[var(--k-ink-secondary)] cursor-pointer"
                               >
                                 <Trash className="w-3.5 h-3.5" />
-                                <span>В корзину</span>
+                                <span>{t('workspace.toTrashShort')}</span>
                               </button>
                             </div>
                           </div>
@@ -3329,6 +3552,43 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           onToggleVoiceAction={handleToggleVoiceAction}
                         />
                       </div>
+                    ))}
+                  </div>
+                ) : nav.type === 'secrets' ? (
+                  <div
+                    data-testid="vault-grid-container"
+                    style={{ gap: 'var(--k-grid-gap)' }}
+                    className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
+                  >
+                    {visibleItems.map((item) => (
+                      <MemoryCardRouter
+                        key={item.id}
+                        item={item}
+                        orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
+                        orbits={orbits}
+                        focusBoards={boards}
+                        vaultLocked={vaultLocked}
+                        wipeSeconds={wipeSeconds}
+                        selected={selectedIds.includes(item.id)}
+                        selectionMode={selectedIds.length > 0}
+                        onToggleSelect={handleToggleSelect}
+                        onOpenStudio={handleOpenItem}
+                        onQuickLook={setQuickLookItem}
+                        onHoverItem={(it) => {
+                          hoveredItemRef.current = it;
+                        }}
+                        onOpenSecretSheet={handleOpenItem}
+                        onOpenShotLightbox={setLightboxItem}
+                        onDelete={handleDeleteItem}
+                        onTogglePin={handleTogglePin}
+                        onMoveToOrbit={handleMoveToOrbit}
+                        onMoveToBoard={handleMoveToBoard}
+                        onDuplicate={handleDuplicateItem}
+                        onExportMarkdown={handleExportMarkdown}
+                        onUnlockVaultRequest={() => setUnlockOpen(true)}
+                        onToggleMarkdownTask={handleToggleMarkdownTask}
+                        onToggleVoiceAction={handleToggleVoiceAction}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -3400,7 +3660,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   className="fixed bottom-5 left-1/2 z-40 flex items-center gap-2 px-3.5 py-2 rounded-[14px] bg-[var(--k-bg-elevated)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] backdrop-blur-xl"
                 >
                   <span className="inline-flex items-center gap-1.5 px-1.5 text-[12.5px] font-semibold whitespace-nowrap shrink-0 k-tabular">
-                    <span>Выбрано:</span>
+                    <span>{t('workspace.bulk.selected')}</span>
                     <span data-testid="bulk-selected-count">{selectedIds.length}</span>
                   </span>
 
@@ -3417,7 +3677,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       className="k-interactive h-8 px-2.5 rounded-[8px] bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium flex items-center gap-1.5 hover:bg-[var(--k-accent-hover)] cursor-pointer"
                     >
                       <Sparkle size={14} weight="fill" />
-                      <span>Свести в одну заметку</span>
+                      <span>{t('workspace.bulk.synthesize')}</span>
                     </button>
                   ) : null}
 
@@ -3433,7 +3693,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium flex items-center gap-1.5 cursor-pointer"
                       >
                         <SquaresFour size={14} />
-                        <span>В раздел</span>
+                        <span>{t('workspace.bulk.toSection')}</span>
                       </button>
                     }
                   >
@@ -3443,7 +3703,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         onClick={() => void handleBulkMoveOrbit('')}
                         className="k-interactive w-full text-left px-2.5 py-1.5 rounded-[7px] text-[12.5px] text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                       >
-                        Без раздела
+                        {t('nav.noSection')}
                       </button>
                       {orbits.map((o) => (
                         <button
@@ -3469,7 +3729,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] flex items-center gap-1 cursor-pointer"
                   >
                     <PushPin size={14} />
-                    <span>Закрепить</span>
+                    <span>{t('workspace.bulk.pin')}</span>
                   </button>
 
                   <button
@@ -3478,14 +3738,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12.5px] flex items-center gap-1 cursor-pointer"
                   >
                     <Trash size={14} />
-                    <span>Удалить</span>
+                    <span>{t('common.delete')}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setSelectedIds([])}
                     className="k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                    aria-label="Снять выделение"
+                    aria-label={t('workspace.bulk.clear')}
                   >
                     <X size={14} />
                   </button>
@@ -3520,7 +3780,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   data-testid="studio-document-canvas"
                   role="dialog"
                   aria-modal="true"
-                  aria-label={activeItem.title || 'Заметка'}
+                  aria-label={activeItem.title || t('dna.note')}
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
@@ -3654,11 +3914,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           sectionEditor
             ? sectionEditor.kind === 'orbit'
               ? sectionEditor.mode === 'create'
-                ? 'Новый раздел'
-                : 'Настройка раздела'
+                ? t('nav.newSection')
+                : t('nav.configureSection')
               : sectionEditor.mode === 'create'
-                ? 'Новый холст'
-                : 'Настройка холста'
+                ? t('nav.newBoard')
+                : t('nav.configureBoard')
             : ''
         }
         maxWidthClass="max-w-[500px]"
@@ -3668,7 +3928,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           <form onSubmit={handleSaveSection} className="p-5 space-y-4">
             <div className="space-y-1.5">
               <label className="text-[12px] font-medium text-[var(--k-ink-secondary)]">
-                Название
+                {t('nav.sectionNameLabel')}
               </label>
               <input
                 type="text"
@@ -3680,8 +3940,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 }
                 placeholder={
                   sectionEditor.kind === 'orbit'
-                    ? 'Например: Работа, Идеи, Личное'
-                    : 'Например: Референсы, Отпуск, Проект'
+                    ? t('nav.sectionNamePlaceholder')
+                    : t('nav.boardNamePlaceholder')
                 }
                 className="w-full h-9 px-3 rounded-[9px] bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] text-[13.5px] outline-none select-text"
               />
@@ -3689,7 +3949,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
             <div className="space-y-1.5">
               <label className="text-[12px] font-medium text-[var(--k-ink-secondary)]">
-                Подсказка для «Разобрать» (что сюда складывать)
+                {t('nav.sectionTriageHintLabel')}
               </label>
               <input
                 type="text"
@@ -3699,16 +3959,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     prev ? { ...prev, description: e.target.value } : prev,
                   )
                 }
-                placeholder="Например: рабочие задачи, идеи, полезные ссылки и чеки"
+                placeholder={t('nav.sectionTriageHintPlaceholder')}
                 className="w-full h-9 px-3 rounded-[9px] bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] text-[13px] outline-none select-text"
               />
             </div>
 
             <div className="space-y-2">
               <label className="text-[12px] font-medium text-[var(--k-ink-secondary)]">
-                Цвет
+                {t('nav.color')}
               </label>
-              <div className="grid grid-cols-14 gap-1.5">
+              <div className="grid grid-cols-14 gap-2 py-0.5">
                 {SECTION_COLOR_PALETTE.map((hex) => (
                   <button
                     key={hex}
@@ -3716,13 +3976,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     onClick={() =>
                       setSectionEditor((prev) => (prev ? { ...prev, color: hex } : prev))
                     }
-                    className={`w-6 h-6 rounded-full transition-[scale,transform] duration-140 cursor-pointer flex items-center justify-center ${
+                    className={`w-[22px] h-[22px] rounded-full transition-[scale,transform] duration-140 cursor-pointer flex items-center justify-center ${
                       sectionEditor.color === hex
-                        ? 'scale-110 ring-2 ring-[var(--k-ink-primary)] ring-offset-2 ring-offset-[var(--k-bg-surface-1)]'
+                        ? 'ring-[1.5px] ring-[var(--k-ink-primary)] ring-offset-[1.5px] ring-offset-[var(--k-bg-surface-1)]'
                         : 'hover:scale-105'
                     }`}
                     style={{ backgroundColor: hex }}
-                    aria-label={`Выбрать цвет ${hex}`}
+                    aria-label={t('nav.pickColor', { hex })}
                   />
                 ))}
               </div>
@@ -3730,12 +3990,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
             <div className="space-y-2">
               <label className="text-[12px] font-medium text-[var(--k-ink-secondary)]">
-                Иконка
+                {t('nav.icon')}
               </label>
               <div className="grid grid-cols-8 gap-1.5 max-h-[144px] overflow-y-auto p-1.5 rounded-[10px] bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
                 {SECTION_ICON_CHOICES.map((iconKey) => {
                   const selected = sectionEditor.icon === iconKey;
-                  const title = SECTION_ICON_LABELS_RU[iconKey] ?? iconKey;
+                  const iconLabels = getSectionIconLabels(locale);
+                  const title = iconLabels[iconKey] ?? iconKey;
                   return (
                     <button
                       key={iconKey}
@@ -3767,7 +4028,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 onClick={() => setSectionEditor(null)}
                 className="k-interactive h-9 px-3.5 rounded-[9px] border border-[var(--k-border-hairline)] text-[13px] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
               >
-                Отмена
+                {t('common.cancel')}
               </button>
               <button
                 type="submit"
@@ -3775,7 +4036,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 data-testid="section-save-btn"
                 className="k-interactive h-9 px-4 rounded-[9px] bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-medium hover:bg-[var(--k-accent-hover)] cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
               >
-                {sectionEditor.mode === 'create' ? 'Создать' : 'Сохранить'}
+                {sectionEditor.mode === 'create' ? t('common.create') : t('common.save')}
               </button>
             </div>
           </form>
@@ -3840,14 +4101,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         onOpenChange={(open) => {
           if (!open && !trashActionBusy) setConfirmPurgeItem(null);
         }}
-        title="Удалить запись навсегда?"
-        subtitle="Это действие нельзя отменить — запись сотрётся и на других синхронизированных устройствах"
+        title={t('workspace.confirmPurge.title')}
+        subtitle={t('workspace.confirmPurge.subtitle')}
         maxWidthClass="max-w-[440px]"
       >
         <div className="p-5 flex flex-col gap-4">
           {confirmPurgeItem ? (
             <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3.5 py-2.5 text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-              {confirmPurgeItem.title || 'Без названия'}
+              {confirmPurgeItem.title || t('common.noTitle')}
             </div>
           ) : null}
           <div className="flex justify-end gap-2">
@@ -3857,7 +4118,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               onClick={() => setConfirmPurgeItem(null)}
               className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[13px] cursor-pointer"
             >
-              Отмена
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -3868,7 +4129,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               }}
               className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-danger)] text-white text-[13px] font-medium cursor-pointer disabled:opacity-60"
             >
-              {trashActionBusy ? 'Удаляю…' : 'Удалить навсегда'}
+              {trashActionBusy ? t('common.deleting') : t('common.deleteForever')}
             </button>
           </div>
         </div>
@@ -3880,13 +4141,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         onOpenChange={(open) => {
           if (!open && !trashActionBusy) setConfirmEmptyTrashOpen(false);
         }}
-        title="Очистить всю корзину?"
-        subtitle={`Будет навсегда удалено записей: ${trashedItems.length}. Отменить это действие невозможно`}
+        title={t('workspace.confirmEmptyTrash.title')}
+        subtitle={t('workspace.confirmEmptyTrash.subtitle', { count: trashedItems.length })}
         maxWidthClass="max-w-[440px]"
       >
         <div className="p-5 flex flex-col gap-4">
           <div className="text-[12.5px] text-[var(--k-ink-secondary)] leading-relaxed">
-            Все записи из корзины и их неиспользуемые вложения будут полностью удалены на этом устройстве и в облачной синхронизации.
+            {t('workspace.confirmEmptyTrash.body')}
           </div>
           <div className="flex justify-end gap-2">
             <button
@@ -3895,7 +4156,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               onClick={() => setConfirmEmptyTrashOpen(false)}
               className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[13px] cursor-pointer"
             >
-              Отмена
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -3904,7 +4165,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               onClick={() => void handleEmptyTrash()}
               className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-danger)] text-white text-[13px] font-medium cursor-pointer disabled:opacity-60"
             >
-              {trashActionBusy ? 'Очищаю…' : 'Очистить корзину'}
+              {trashActionBusy ? t('workspace.confirmEmptyTrash.busy') : t('workspace.emptyTrashButton')}
             </button>
           </div>
         </div>

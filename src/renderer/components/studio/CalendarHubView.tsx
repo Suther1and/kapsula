@@ -23,6 +23,7 @@ import type {
   VaultItem,
   VaultTaskEntry,
 } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { friendlyErrorMessage } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
@@ -62,7 +63,6 @@ interface CalendarDisplayEntry {
   sourceEvent?: CalendarEvent;
 }
 
-const WEEKDAYS_RU = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEK_HOURS = Array.from({ length: 17 }, (_, i) => i + 7); // 07:00 .. 23:00
 const HOUR_ROW_PX = 48;
 
@@ -92,17 +92,19 @@ function toLocalTimeInput(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function formatTimeShort(ms: number): string {
-  return new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+function formatTimeShort(ms: number, dateLocale: string): string {
+  return new Date(ms).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatEntryTimeLabel(
-  entry: Pick<CalendarDisplayEntry, 'allDay' | 'hasEndTime' | 'startAt' | 'endAt'>
+  entry: Pick<CalendarDisplayEntry, 'allDay' | 'hasEndTime' | 'startAt' | 'endAt'>,
+  dateLocale: string,
+  allDayText: string
 ): string {
-  if (entry.allDay) return 'Весь день';
-  const start = formatTimeShort(entry.startAt);
+  if (entry.allDay) return allDayText;
+  const start = formatTimeShort(entry.startAt, dateLocale);
   if (!entry.hasEndTime) return start;
-  return `${start}–${formatTimeShort(entry.endAt)}`;
+  return `${start}–${formatTimeShort(entry.endAt, dateLocale)}`;
 }
 
 function expandRecurringEvents(
@@ -193,6 +195,8 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   onOpenItem,
   onOpenIntegrations,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
+  const weekdaysShort = useMemo(() => t('cal.weekdaysShort').split(','), [t]);
   const prefersReduced = useReducedMotion();
   const [cursorDate, setCursorDate] = useState(() => startOfDay(new Date()));
   const [navDir, setNavDir] = useState<1 | -1>(1);
@@ -275,9 +279,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const parsedQuick = useMemo(() => {
     const clean = quickLine.trim();
     if (clean.length < 3) return null;
-    const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime());
+    const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime(), locale);
     return parsed?.isEventIntent ? parsed : null;
-  }, [quickLine, selectedDay]);
+  }, [quickLine, selectedDay, locale]);
 
   const windowRange = useMemo(() => {
     const start = new Date(cursorDate.getFullYear(), cursorDate.getMonth() - 1, 1).getTime();
@@ -361,7 +365,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       }
       out.push({
         id: `task-${task.id}`,
-        title: task.text || parentItem?.title || 'Задача',
+        title: task.text || parentItem?.title || t('cal.kind.task'),
         startAt: effectiveDueAt,
         endAt: effectiveDueAt + 1_800_000,
         allDay: false,
@@ -385,7 +389,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       ) {
         out.push({
           id: `rem-${item.id}`,
-          title: item.title || 'Напоминание',
+          title: item.title || t('cal.kind.reminder'),
           startAt: item.remindAt,
           endAt: item.remindAt + 1_800_000,
           allDay: false,
@@ -402,7 +406,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       }
     }
     return out.sort((a, b) => a.startAt - b.startAt);
-  }, [events, items, tasks, itemMap, windowRange]);
+  }, [events, items, tasks, itemMap, windowRange, t]);
 
   const monthCells = useMemo(() => {
     const year = cursorDate.getFullYear();
@@ -495,7 +499,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     if (activeEvent && saved.id === activeEvent.id) {
       setActiveEvent(saved);
     }
-    toast.success(input.id ? 'Событие обновлено' : 'Событие добавлено');
+    toast.success(input.id ? t('cal.toast.updated') : t('cal.toast.added'));
     await loadCalendar();
   };
 
@@ -511,7 +515,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     await window.kapsula.deleteCalendarEvent(id);
     setSheetOpen(false);
     setActiveEvent(null);
-    toast.success('Событие удалено');
+    toast.success(t('cal.toast.deleted'));
     await loadCalendar();
   };
 
@@ -546,9 +550,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       });
       if (ev.kind === 'task' && ev.linkedItemId) {
         const matchingTask = tasks.find(
-          (t) =>
-            t.itemId === ev.linkedItemId &&
-            t.text.trim().toLowerCase() === ev.title.trim().toLowerCase()
+          (taskItem) =>
+            taskItem.itemId === ev.linkedItemId &&
+            taskItem.text.trim().toLowerCase() === ev.title.trim().toLowerCase()
         );
         if (matchingTask && matchingTask.done !== nextDone) {
           await window.kapsula.toggleTask({
@@ -568,7 +572,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
         prev.map((row) => (row.id === ev.id ? { ...row, isDone: prevDone } : row))
       );
       setActiveEvent((prev) => (prev && prev.id === ev.id ? { ...prev, isDone: prevDone } : prev));
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
     }
   };
 
@@ -601,7 +605,11 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
         isDone: ev.isDone,
       });
       setSelectedDay(startOfDay(targetDay));
-      toast.success(`Перенесено на ${targetDay.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`);
+      toast.success(
+        t('cal.toast.movedTo', {
+          date: targetDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
+        })
+      );
       await loadCalendar();
       return;
     }
@@ -609,20 +617,24 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     const taskRaw = dataTransfer.getData('text/kapsula-task-json');
     if (taskRaw) {
       try {
-        const t = JSON.parse(taskRaw) as { itemId: string; text: string };
+        const parsedTask = JSON.parse(taskRaw) as { itemId: string; text: string };
         const slot = new Date(targetDay);
         slot.setHours(12, 0, 0, 0);
         await window.kapsula.upsertCalendarEvent({
-          title: t.text,
+          title: parsedTask.text,
           startAt: slot.getTime(),
           endAt: slot.getTime() + 1_800_000,
           hasEndTime: false,
-          linkedItemId: t.itemId,
+          linkedItemId: parsedTask.itemId,
           kind: 'task',
           color: '#3B82F6',
         });
         setSelectedDay(startOfDay(targetDay));
-        toast.success(`Задача запланирована на ${targetDay.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`);
+        toast.success(
+          t('cal.toast.taskScheduled', {
+            date: targetDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
+          })
+        );
         await loadCalendar();
       } catch {
         // ignore
@@ -634,7 +646,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     e.preventDefault();
     const clean = quickLine.trim();
     if (!clean) return;
-    const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime());
+    const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime(), locale);
     if (parsed) {
       await window.kapsula.upsertCalendarEvent({
         title: parsed.title || clean,
@@ -651,7 +663,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       const targetDay = startOfDay(new Date(parsed.startAt));
       setSelectedDay(targetDay);
       setCursorDate(new Date(targetDay.getFullYear(), targetDay.getMonth(), 1));
-      toast.success(`Добавлено: ${parsed.label}`);
+      toast.success(t('cal.toast.parsedAdded', { label: parsed.label }));
       await loadCalendar();
       return;
     }
@@ -667,13 +679,13 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       color: '#E86A33',
     });
     setQuickLine('');
-    toast.success('Событие добавлено на выбранный день');
+    toast.success(t('cal.toast.addedSelectedDay'));
     await loadCalendar();
   };
 
   const handleOpenQuickDetails = () => {
     const clean = quickLine.trim();
-    const parsed = clean ? parseRussianEvent(clean, Date.now(), selectedDay.getTime()) : null;
+    const parsed = clean ? parseRussianEvent(clean, Date.now(), selectedDay.getTime(), locale) : null;
     if (parsed) {
       const d = new Date(parsed.startAt);
       openCreateSheetForDay(d, {
@@ -704,9 +716,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   };
 
   const monthLabel = useMemo(() => {
-    const fmt = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(cursorDate);
+    const fmt = new Intl.DateTimeFormat(dateLocale, { month: 'long', year: 'numeric' }).format(cursorDate);
     return fmt.charAt(0).toUpperCase() + fmt.slice(1);
-  }, [cursorDate]);
+  }, [cursorDate, dateLocale]);
 
   const today = useMemo(() => startOfDay(new Date()), []);
   const nowDate = new Date();
@@ -715,13 +727,13 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const nowLineTopPx = (nowMinutesFrom7 / 60) * HOUR_ROW_PX;
 
   const selectedDayTitle = useMemo(() => {
-    const raw = selectedDay.toLocaleDateString('ru-RU', {
+    const raw = selectedDay.toLocaleDateString(dateLocale, {
       weekday: 'short',
       day: 'numeric',
       month: 'long',
     });
     return raw.charAt(0).toUpperCase() + raw.slice(1);
-  }, [selectedDay]);
+  }, [selectedDay, dateLocale]);
 
   const viewKey =
     mode === 'month'
@@ -744,7 +756,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             data-testid="calendar-quick-input"
             value={quickLine}
             onChange={(e) => setQuickLine(e.target.value)}
-            placeholder={`Быстро добавить на ${selectedDay.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}: «Пятница 15:00 созвон в Zoom на 30 мин»…`}
+            placeholder={t('cal.quickAddPlaceholder', {
+              date: selectedDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
+            })}
             className="flex-1 min-w-0 bg-transparent border-none outline-none text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
           />
           {quickLine.trim() ? (
@@ -754,13 +768,13 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                 onClick={handleOpenQuickDetails}
                 className="k-interactive h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
               >
-                Подробно…
+                {t('cal.moreDetailsBtn')}
               </button>
               <button
                 type="submit"
                 className="k-interactive h-7.5 px-3 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0"
               >
-                Добавить
+                {t('common.add')}
               </button>
             </>
           ) : null}
@@ -809,7 +823,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     : new Date(d.getFullYear(), d.getMonth() - 1, 1)
                 );
               }}
-              aria-label="Предыдущий период"
+              aria-label={t('cal.prevPeriodAria')}
               className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
             >
               <CaretLeft className="w-4 h-4" />
@@ -823,7 +837,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
               }}
               className="k-interactive h-7 px-3 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-[12px] font-medium cursor-pointer"
             >
-              Сегодня
+              {t('common.today')}
             </button>
             <button
               type="button"
@@ -835,7 +849,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     : new Date(d.getFullYear(), d.getMonth() + 1, 1)
                 );
               }}
-              aria-label="Следующий период"
+              aria-label={t('cal.nextPeriodAria')}
               className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
             >
               <CaretRight className="w-4 h-4" />
@@ -849,9 +863,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             value={mode}
             onChange={setMode}
             options={[
-              { value: 'month', label: 'Месяц', icon: <CalendarBlank className="w-3.5 h-3.5" /> },
-              { value: 'week', label: 'Неделя' },
-              { value: 'agenda', label: 'Список', icon: <ListBullets className="w-3.5 h-3.5" /> },
+              { value: 'month', label: t('cal.view.month'), icon: <CalendarBlank className="w-3.5 h-3.5" /> },
+              { value: 'week', label: t('cal.view.week') },
+              { value: 'agenda', label: t('cal.view.agenda'), icon: <ListBullets className="w-3.5 h-3.5" /> },
             ]}
           />
 
@@ -870,17 +884,19 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     syncStatus?.connected ? 'bg-[var(--k-emerald)]' : 'bg-[var(--k-ink-muted)]/50'
                   }`}
                 />
-                <span>Синхронизация</span>
+                <span>{t('settings.tab.sync')}</span>
               </button>
             }
           >
             <div className="space-y-2.5 text-[12.5px]">
               <div className="space-y-1">
-                <div className="font-semibold text-[var(--k-ink-primary)]">Google Календарь</div>
+                <div className="font-semibold text-[var(--k-ink-primary)]">{t('cal.gcal.title')}</div>
                 <div className="text-[11.5px] text-[var(--k-ink-muted)]">
                   {syncStatus?.connected
-                    ? `Подключён${syncStatus.email ? `: ${syncStatus.email}` : ''}`
-                    : 'Подключи аккаунт для двусторонней синхронизации'}
+                    ? syncStatus.email
+                      ? t('cal.gcal.connectedEmail', { email: syncStatus.email })
+                      : t('cal.gcal.connected')
+                    : t('cal.gcal.connectHint')}
                 </div>
               </div>
 
@@ -892,10 +908,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     setSyncing(true);
                     try {
                       const res = await window.kapsula.syncCalendarNow();
-                      toast.success(`Синхронизировано: ↓ ${res.imported}, ↑ ${res.pushed}`);
+                      toast.success(t('cal.toast.synced', { imported: res.imported, pushed: res.pushed }));
                       await loadCalendar();
                     } catch (err) {
-                      toast.error(friendlyErrorMessage(err, 'Ошибка синхронизации календаря.'));
+                      toast.error(friendlyErrorMessage(err, t('cal.toast.syncError'), locale));
                     } finally {
                       setSyncing(false);
                       setSyncPopoverOpen(false);
@@ -904,7 +920,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   className="k-interactive w-full h-8 px-3 rounded-lg bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] font-medium inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <ArrowsClockwise className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-                  <span>Синхронизировать сейчас</span>
+                  <span>{t('cal.gcal.syncNow')}</span>
                 </button>
               ) : (
                 <button
@@ -915,7 +931,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   }}
                   className="k-interactive w-full h-8 px-3 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] font-medium cursor-pointer"
                 >
-                  Настроить подключение
+                  {t('cal.gcal.setup')}
                 </button>
               )}
 
@@ -928,14 +944,14 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     setSyncPopoverOpen(false);
                     const r = await window.kapsula.importCalendarIcs();
                     if (r.imported > 0) {
-                      toast.success(`Импортировано событий: ${r.imported}`);
+                      toast.success(t('cal.toast.importedCount', { count: r.imported }));
                       await loadCalendar();
                     }
                   }}
                   className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] inline-flex items-center justify-center gap-1.5 cursor-pointer hover:border-[var(--k-border-strong)]"
                 >
                   <UploadSimple className="w-3.5 h-3.5" />
-                  <span>Импорт .ics</span>
+                  <span>{t('cal.icsImport')}</span>
                 </button>
 
                 <button
@@ -943,12 +959,12 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   onClick={async () => {
                     setSyncPopoverOpen(false);
                     const r = await window.kapsula.exportCalendarIcs();
-                    if (r.path) toast.success(`Экспортировано событий: ${r.exported}`);
+                    if (r.path) toast.success(t('cal.toast.exportedCount', { count: r.exported }));
                   }}
                   className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] inline-flex items-center justify-center gap-1.5 cursor-pointer hover:border-[var(--k-border-strong)]"
                 >
                   <DownloadSimple className="w-3.5 h-3.5" />
-                  <span>Экспорт .ics</span>
+                  <span>{t('cal.icsExport')}</span>
                 </button>
               </div>
             </div>
@@ -961,7 +977,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             className="k-interactive inline-flex items-center gap-1.5 h-8 px-3.5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shadow-2xs"
           >
             <Plus weight="bold" className="w-3.5 h-3.5" />
-            <span>Событие</span>
+            <span>{t('cal.kind.event')}</span>
           </button>
         </div>
       </div>
@@ -992,7 +1008,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
               {mode === 'month' ? (
                 <>
                   <div className="grid grid-cols-7 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50">
-                    {WEEKDAYS_RU.map((wd) => (
+                    {weekdaysShort.map((wd) => (
                       <div
                         key={wd}
                         className="py-2 text-center text-[11px] font-semibold text-[var(--k-ink-muted)] tracking-wider uppercase"
@@ -1057,7 +1073,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                 setSelectedDay(startOfDay(day));
                                 openCreateSheetForDay(day);
                               }}
-                              aria-label={`Добавить на ${day.getDate()}`}
+                              aria-label={t('cal.addDayAria', { day: day.getDate() })}
                               className="opacity-0 group-hover/cell:opacity-100 w-5 h-5 rounded-md text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center transition-opacity cursor-pointer"
                             >
                               <Plus weight="bold" className="w-3 h-3" />
@@ -1081,7 +1097,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                   setSelectedDay(startOfDay(day));
                                   handleEntryClick(ev);
                                 }}
-                                title={`${formatEntryTimeLabel(ev)} ${ev.title}`}
+                                title={`${formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))} ${ev.title}`}
                                 className={`w-full text-left flex items-center gap-1.5 h-[22px] px-1.5 rounded-md text-[11px] bg-[var(--k-bg-surface-2)]/90 hover:bg-[var(--k-bg-surface-3)] transition-colors border-l-[2.5px] cursor-pointer overflow-hidden ${
                                   ev.isDone ? 'opacity-50 line-through' : ''
                                 }`}
@@ -1091,7 +1107,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                   <Bell weight="fill" className="w-2.5 h-2.5 text-[var(--k-amber)] shrink-0" />
                                 ) : !ev.allDay ? (
                                   <span className="k-mono text-[10px] text-[var(--k-ink-muted)] shrink-0">
-                                    {formatTimeShort(ev.startAt)}
+                                    {formatTimeShort(ev.startAt, dateLocale)}
                                   </span>
                                 ) : null}
                                 <span className="truncate font-medium text-[var(--k-ink-primary)]">
@@ -1101,7 +1117,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                             ))}
                             {overflowCount > 0 ? (
                               <div className="px-1.5 text-[10.5px] font-medium text-[var(--k-ink-muted)]">
-                                +{overflowCount} ещё
+                                {t('cal.overflowMore', { count: overflowCount })}
                               </div>
                             ) : null}
                           </div>
@@ -1138,7 +1154,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                           }`}
                         >
                           <span className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)]">
-                            {WEEKDAYS_RU[(day.getDay() + 6) % 7]}
+                            {weekdaysShort[(day.getDay() + 6) % 7]}
                           </span>
                           <span
                             className={`w-6 h-6 rounded-full inline-flex items-center justify-center text-[12px] font-semibold ${
@@ -1263,7 +1279,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                   </div>
                                   {heightPx >= 36 ? (
                                     <div className="text-[10px] k-mono text-[var(--k-ink-secondary)] truncate">
-                                      {formatEntryTimeLabel(ev)}
+                                      {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
                                     </div>
                                   ) : null}
                                 </button>
@@ -1280,7 +1296,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   {combinedEntries.length === 0 ? (
                     <div className="py-16 text-center space-y-2">
                       <div className="text-[14px] font-medium text-[var(--k-ink-secondary)]">
-                        В этом периоде событий пока нет
+                        {t('cal.emptyPeriod')}
                       </div>
                       <button
                         type="button"
@@ -1288,7 +1304,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                         className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[12px] font-medium cursor-pointer"
                       >
                         <Plus weight="bold" className="w-3.5 h-3.5" />
-                        Добавить первое событие
+                        {t('cal.addFirstEvent')}
                       </button>
                     </div>
                   ) : (
@@ -1321,12 +1337,12 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                             </div>
                             <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--k-ink-muted)]">
                               <span>
-                                {new Date(ev.startAt).toLocaleDateString('ru-RU', {
+                                {new Date(ev.startAt).toLocaleDateString(dateLocale, {
                                   day: 'numeric',
                                   month: 'short',
                                   weekday: 'short',
                                 })}{' '}
-                                · {formatEntryTimeLabel(ev)}
+                                · {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
                               </span>
                               {ev.location ? (
                                 <span className="inline-flex items-center gap-1 truncate max-w-[200px]">
@@ -1353,7 +1369,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                             }}
                             className="k-interactive text-[11.5px] text-[var(--k-accent)] hover:underline shrink-0 cursor-pointer"
                           >
-                            Открыть запись
+                            {t('cal.openItem')}
                           </button>
                         ) : null}
                       </div>
@@ -1372,7 +1388,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)] font-semibold">
-                  Выбранный день
+                  {t('cal.selectedDay')}
                 </div>
                 <div className="text-[15.5px] font-semibold text-[var(--k-ink-primary)]">
                   {selectedDayTitle}
@@ -1381,7 +1397,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
               <button
                 type="button"
                 onClick={() => openCreateSheetForDay(selectedDay)}
-                aria-label="Новое событие на выбранный день"
+                aria-label={t('cal.newEventDayAria')}
                 className="k-interactive w-8 h-8 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] inline-flex items-center justify-center cursor-pointer transition-colors"
               >
                 <Plus weight="bold" className="w-4 h-4" />
@@ -1390,14 +1406,14 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
 
             {selectedDayEntries.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[var(--k-border-hairline)] p-4 text-center space-y-1.5">
-                <div className="text-[12.5px] text-[var(--k-ink-muted)]">На этот день планов нет</div>
+                <div className="text-[12.5px] text-[var(--k-ink-muted)]">{t('cal.noPlansDay')}</div>
                 <button
                   type="button"
                   onClick={() => openCreateSheetForDay(selectedDay)}
                   className="k-interactive inline-flex items-center gap-1 text-[12px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer"
                 >
                   <Plus weight="bold" className="w-3 h-3" />
-                  Запланировать событие
+                  {t('cal.scheduleEvent')}
                 </button>
               </div>
             ) : (
@@ -1437,7 +1453,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--k-ink-muted)]">
-                            <span className="k-mono">{formatEntryTimeLabel(entry)}</span>
+                            <span className="k-mono">{formatEntryTimeLabel(entry, dateLocale, t('common.allDay'))}</span>
                             {entry.location ? (
                               <span className="inline-flex items-center gap-1 truncate max-w-[170px]">
                                 <MapPin className="w-3 h-3 shrink-0" />
@@ -1471,7 +1487,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                           ) : null}
                           {entry.attachmentsCount > 1 ? (
                             <span className="text-[10.5px] text-[var(--k-ink-muted)]">
-                              +{entry.attachmentsCount - 1} ещё
+                              {t('cal.overflowMore', { count: entry.attachmentsCount - 1 })}
                             </span>
                           ) : null}
                         </div>
@@ -1487,7 +1503,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
           <div className="p-4 space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)] font-semibold">
-                Ближайшие 14 дней
+                {t('cal.next14Days')}
               </div>
               {upcomingEntries.length > 0 ? (
                 <span className="k-mono text-[11px] text-[var(--k-ink-muted)]">
@@ -1498,7 +1514,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
 
             {upcomingEntries.length === 0 ? (
               <div className="text-[12px] text-[var(--k-ink-muted)]">
-                На ближайшие две недели других событий нет.
+                {t('cal.noUpcoming14Days')}
               </div>
             ) : (
               <div className="space-y-1.5">
@@ -1524,11 +1540,11 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                       </span>
                     </div>
                     <span className="k-mono text-[11px] text-[var(--k-ink-muted)] shrink-0">
-                      {new Date(ev.startAt).toLocaleDateString('ru-RU', {
+                      {new Date(ev.startAt).toLocaleDateString(dateLocale, {
                         day: 'numeric',
                         month: 'short',
                       })}
-                      {!ev.allDay ? ` · ${formatTimeShort(ev.startAt)}` : ''}
+                      {!ev.allDay ? ` · ${formatTimeShort(ev.startAt, dateLocale)}` : ''}
                     </span>
                   </button>
                 ))}
@@ -1541,19 +1557,19 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             <div className="p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)] font-semibold">
-                  Задачи без даты
+                  {t('cal.unscheduledTasks')}
                 </div>
-                <span className="text-[10.5px] text-[var(--k-ink-muted)]">перетяни на день</span>
+                <span className="text-[10.5px] text-[var(--k-ink-muted)]">{t('cal.dragToDayHint')}</span>
               </div>
               <div className="space-y-1.5 max-h-[210px] overflow-y-auto">
-                {unscheduledTasks.map((t) => (
+                {unscheduledTasks.map((taskItem) => (
                   <div
-                    key={t.id}
+                    key={taskItem.id}
                     draggable
                     onDragStart={(e) => {
                       e.dataTransfer.setData(
                         'text/kapsula-task-json',
-                        JSON.stringify({ itemId: t.itemId, text: t.text })
+                        JSON.stringify({ itemId: taskItem.itemId, text: taskItem.text })
                       );
                       e.dataTransfer.effectAllowed = 'copy';
                     }}
@@ -1561,10 +1577,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   >
                     <button
                       type="button"
-                      onClick={() => onOpenItem(t.itemId)}
+                      onClick={() => onOpenItem(taskItem.itemId)}
                       className="text-left text-[12px] truncate flex-1 hover:text-[var(--k-accent)] cursor-pointer"
                     >
-                      {t.text}
+                      {taskItem.text}
                     </button>
                     <button
                       type="button"
@@ -1572,20 +1588,20 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                         const slot = new Date(selectedDay);
                         slot.setHours(12, 0, 0, 0);
                         await window.kapsula.upsertCalendarEvent({
-                          title: t.text,
+                          title: taskItem.text,
                           startAt: slot.getTime(),
                           endAt: slot.getTime() + 1_800_000,
                           hasEndTime: false,
-                          linkedItemId: t.itemId,
+                          linkedItemId: taskItem.itemId,
                           kind: 'task',
                           color: '#3B82F6',
                         });
-                        toast.success('Задача добавлена на выбранный день');
+                        toast.success(t('cal.toast.taskAddedDay'));
                         await loadCalendar();
                       }}
                       className="k-interactive text-[11px] text-[var(--k-accent)] font-medium shrink-0 cursor-pointer"
                     >
-                      + В день
+                      {t('cal.addToDayBtn')}
                     </button>
                   </div>
                 ))}

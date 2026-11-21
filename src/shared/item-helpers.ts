@@ -162,3 +162,31 @@ export function countChecklistStats(body: string | null | undefined): {
   }
   return { total: matches.length, done };
 }
+
+export function isUntitledPlaceholderTitle(title: string | null | undefined): boolean {
+  const norm = (title || '').trim().toLowerCase();
+  return !norm || norm === 'новая заметка' || norm === 'new note' || norm === 'без названия' || norm === 'untitled';
+}
+
+export function isGenericDraftTitle(val: string | null | undefined): boolean {
+  const norm = (val || '').trim().toLowerCase();
+  return (
+    !norm ||
+    norm === 'заметка' ||
+    norm === 'note' ||
+    norm === 'новая заметка' ||
+    norm === 'new note' ||
+    norm === 'быстрая заметка' ||
+    norm === 'quick note' ||
+    norm === 'без названия' ||
+    norm === 'untitled' ||
+    norm.startsWith('голосовая заметка') ||
+    norm.startsWith('voice memo') ||
+    norm.startsWith('аудиозапись') ||
+    norm.startsWith('audio recording')
+  );
+}
+
+export function getRedundantCardTags(): readonly string[] {
+  return ['favorite', 'favorites', 'pin', 'избранное'];
+}

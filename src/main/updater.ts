@@ -1,4 +1,5 @@
-import type { AppUpdaterState } from '@shared/types';
+import type { AppLocale, AppUpdaterState } from '@shared/types';
+import { translate } from '@shared/i18n';
 import type { FetchLike } from './ai/decision-router';
 
 export const GITHUB_OWNER = 'Suther1and';
@@ -181,6 +182,7 @@ export interface AppUpdaterControllerOptions {
   arch?: string;
   isPackaged: boolean;
   disableTimers?: boolean;
+  locale?: AppLocale;
   onStateChanged?: (state: AppUpdaterState) => void;
   openExternal?: (url: string) => Promise<void> | void;
   getDismissedVersion?: () => string | null;
@@ -201,6 +203,7 @@ export class AppUpdaterController {
   private readonly setDismissedVersion?: (version: string) => void;
   private readonly loadAutoUpdaterFn?: () => Promise<AutoUpdaterLike | null>;
 
+  private locale: AppLocale;
   private state: AppUpdaterState;
   private autoUpdater: AutoUpdaterLike | null = null;
   private autoUpdaterWired = false;
@@ -214,6 +217,7 @@ export class AppUpdaterController {
     this.arch = opts.arch ?? process.arch;
     this.isPackaged = Boolean(opts.isPackaged);
     this.disableTimers = Boolean(opts.disableTimers);
+    this.locale = opts.locale === 'en' ? 'en' : 'ru';
     this.fetchFn = opts.fetchFn ?? fetch;
     this.openExternal = opts.openExternal;
     this.onStateChanged = opts.onStateChanged;
@@ -236,6 +240,10 @@ export class AppUpdaterController {
       checkedAt: null,
       dismissedVersion: opts.getDismissedVersion?.() ?? null,
     };
+  }
+
+  public setLocale(locale: AppLocale): void {
+    this.locale = locale === 'en' ? 'en' : 'ru';
   }
 
   public getState(): AppUpdaterState {
@@ -458,7 +466,7 @@ export class AppUpdaterController {
       }
       this.setState({
         status: 'error',
-        error: 'Не удалось проверить обновления — проверь подключение к интернету',
+        error: translate(this.locale, 'main.updater.checkError'),
         checkedAt: Date.now(),
       });
       return this.getState();
@@ -545,7 +553,7 @@ export class AppUpdaterController {
           this.setState({
             status: 'error',
             percent: null,
-            error: 'Не удалось скачать обновление — попробуй ещё раз чуть позже',
+            error: translate(this.locale, 'main.updater.downloadError'),
           });
           return this.getState();
         }

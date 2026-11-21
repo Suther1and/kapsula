@@ -1,6 +1,8 @@
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import type { AppLocale } from '@shared/i18n/core';
 import type { CalendarEvent, VaultItem } from '@shared/types';
 import { stripMarkdownPreview } from '@renderer/lib/format';
+import { getMobileIntlLocale, getRuntimeMobileLocale, tm } from './mobile-i18n';
 
 export type MobileTabId = 'feed' | 'notes' | 'tasks' | 'calendar' | 'vault';
 
@@ -52,12 +54,13 @@ export function isMediaItem(item: VaultItem): boolean {
   );
 }
 
-export function getCardBrandLabel(brand?: string | null): string {
-  if (!brand) return 'КАРТА';
+export function getCardBrandLabel(brand?: string | null, locale?: AppLocale): string {
+  const activeLocale = locale ?? getRuntimeMobileLocale();
+  if (!brand) return tm('brand.fallback', undefined, activeLocale);
   const map: Record<string, string> = {
     visa: 'VISA',
     mastercard: 'Mastercard',
-    mir: 'МИР',
+    mir: tm('brand.mir', undefined, activeLocale),
     amex: 'AMEX',
     unionpay: 'UnionPay',
   };
@@ -161,14 +164,18 @@ export function eventOccursOnDay(ev: CalendarEvent, day: Date): boolean {
   return false;
 }
 
-export function formatSyncTimeLabel(ts: number | null): string {
-  if (!ts) return 'Ещё не синхронизировано';
+export function formatSyncTimeLabel(ts: number | null, locale?: AppLocale): string {
+  const activeLocale = locale ?? getRuntimeMobileLocale();
+  if (!ts) return tm('syncTime.never', undefined, activeLocale);
   const diffSec = Math.round((Date.now() - ts) / 1000);
-  if (diffSec < 30) return 'Только что';
-  if (diffSec < 60) return `${diffSec} с назад`;
+  if (diffSec < 30) return tm('syncTime.justNow', undefined, activeLocale);
+  if (diffSec < 60) return tm('syncTime.secAgo', { sec: diffSec }, activeLocale);
   const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} мин назад`;
-  return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (diffMin < 60) return tm('syncTime.minAgo', { min: diffMin }, activeLocale);
+  return new Date(ts).toLocaleTimeString(getMobileIntlLocale(activeLocale), {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export interface VaultSecurityGuardState {
@@ -188,12 +195,13 @@ export type BiometricToggleGuardResult =
  */
 export function evaluateBiometricToggleGuard(
   nextEnabled: boolean,
-  state: VaultSecurityGuardState
+  state: VaultSecurityGuardState,
+  locale?: AppLocale
 ): BiometricToggleGuardResult {
   if (nextEnabled && state.hasMasterPin && state.vaultLocked) {
     return {
       action: 'reject',
-      message: 'Сначала разблокируй Сейф мастер-ПИНом',
+      message: tm('guard.unlockPinForBiometric', undefined, locale),
     };
   }
   if (!nextEnabled && state.biometricEnabled) {
@@ -207,12 +215,13 @@ export function evaluateBiometricToggleGuard(
  */
 export function evaluateAutoLockChangeGuard(
   nextMinutes: number,
-  state: VaultSecurityGuardState
+  state: VaultSecurityGuardState,
+  locale?: AppLocale
 ): { allowed: true } | { allowed: false; message: string } {
   if (nextMinutes === 0 && (state.hasMasterPin || state.biometricEnabled) && state.vaultLocked) {
     return {
       allowed: false,
-      message: 'Сначала разблокируй Сейф',
+      message: tm('guard.unlockVaultFirst', undefined, locale),
     };
   }
   return { allowed: true };

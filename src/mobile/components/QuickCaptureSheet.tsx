@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef } from '@shared/types';
 import { formatDurationMmSs } from '@renderer/lib/format';
 import { extractFirstUrlFromText, makeSafeUploadName } from '../lib/mobile-helpers';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge, type PickedFilePayload } from '../native/bridge';
 import { base64ToBytes } from '../sync/mobile-crypto';
 import { BottomSheet } from './BottomSheet';
@@ -69,6 +70,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
   onSaveMedia,
   onOpenVaultAdd,
 }) => {
+  const { t } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const [tab, setTab] = useState<QuickCaptureTab>(initialTab);
   const [text, setText] = useState('');
@@ -165,7 +167,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
         focusBoardId: boardId || null,
       });
       mobileBridge.haptic('success');
-      toast.success('Сохранено в Kapsula');
+      toast.success(t('capture.savedToast'));
       onClose();
     } finally {
       setSaving(false);
@@ -175,7 +177,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
   const handleStartVoice = async () => {
     const res = await mobileBridge.startVoiceRecording();
     if (!res.ok) {
-      toast.error(res.error || 'Не удалось включить микрофон');
+      toast.error(res.error || t('capture.micError'));
       return;
     }
     mobileBridge.haptic('medium');
@@ -190,7 +192,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
     try {
       const res = await mobileBridge.stopVoiceRecording();
       if (!res.ok || !res.base64) {
-        toast.error(res.error || 'Не удалось сохранить голосовую заметку');
+        toast.error(res.error || t('capture.voiceSaveError'));
         return;
       }
       const bytes = base64ToBytes(res.base64);
@@ -200,7 +202,9 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
         kind: 'voice',
         title:
           title.trim() ||
-          `Голосовая заметка (${formatDurationMmSs(res.durationSec || recordSec)})`,
+          t('capture.voiceTitleWithDuration', {
+            duration: formatDurationMmSs(res.durationSec || recordSec),
+          }),
         body: text.trim(),
         fileName,
         mime,
@@ -211,7 +215,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
         focusBoardId: boardId || null,
       });
       mobileBridge.haptic('success');
-      toast.success('Голосовая заметка сохранена');
+      toast.success(t('capture.voiceSavedToast'));
       onClose();
     } finally {
       setSaving(false);
@@ -224,7 +228,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
     truncated = false
   ) => {
     if (truncated) {
-      toast.warning('Часть файлов пропущена: лимит 24 МБ за один выбор');
+      toast.warning(t('capture.filesSkippedLimit'));
     }
     if (files.length === 0) return;
     setSaving(true);
@@ -246,7 +250,11 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
         });
       }
       mobileBridge.haptic('success');
-      toast.success(files.length > 1 ? `Сохранено файлов: ${files.length}` : 'Файл сохранён');
+      toast.success(
+        files.length > 1
+          ? t('capture.filesSavedCount', { count: files.length })
+          : t('capture.fileSavedToast')
+      );
       onClose();
     } finally {
       setSaving(false);
@@ -254,18 +262,18 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
   };
 
   const captureTabs = [
-    { id: 'text' as const, label: 'Мысль', icon: NotePencil },
-    { id: 'voice' as const, label: 'Голос', icon: Microphone },
-    { id: 'photo' as const, label: 'Фото', icon: Camera },
-    { id: 'file' as const, label: 'Файл', icon: Paperclip },
+    { id: 'text' as const, label: t('capture.tabText'), icon: NotePencil },
+    { id: 'voice' as const, label: t('capture.tabVoice'), icon: Microphone },
+    { id: 'photo' as const, label: t('capture.tabPhoto'), icon: Camera },
+    { id: 'file' as const, label: t('capture.tabFile'), icon: Paperclip },
   ];
 
   return (
     <>
       <BottomSheet
         open={open}
-        title="Быстрый захват"
-        subtitle="Мысль, голос, фото, файл или Сейф"
+        title={t('capture.title')}
+        subtitle={t('capture.subtitle')}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         onClose={onClose}
@@ -279,7 +287,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 disabled={!text.trim() || saving}
                 className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14.5px] font-semibold disabled:bg-[var(--k-bg-surface-2)] disabled:text-[var(--k-ink-muted)] disabled:border disabled:border-[var(--k-border-hairline)]"
               >
-                Сохранить в Kapsula
+                {t('capture.saveToKapsula')}
               </button>
             </div>
           ) : undefined
@@ -337,7 +345,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 weight="duotone"
                 className="w-[18px] h-[18px] text-[var(--k-emerald)] shrink-0"
               />
-              <span className="whitespace-nowrap leading-none">Сейф</span>
+              <span className="whitespace-nowrap leading-none">{t('nav.vault')}</span>
             </button>
           </div>
 
@@ -352,7 +360,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                   style={{ color: selectedOrbit?.color || 'var(--k-accent)' }}
                 />
               }
-              label={selectedOrbit?.name || 'Без раздела'}
+              label={selectedOrbit?.name || t('common.noOrbit')}
               placeholder={!selectedOrbit}
               onClick={() => setOrbitPickerOpen(true)}
             />
@@ -365,7 +373,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                   style={{ color: selectedBoard?.color || 'var(--k-emerald)' }}
                 />
               }
-              label={selectedBoard?.name || 'Без холста'}
+              label={selectedBoard?.name || t('common.noBoard')}
               placeholder={!selectedBoard}
               onClick={() => setBoardPickerOpen(true)}
             />
@@ -381,7 +389,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Заголовок (необязательно)"
+                placeholder={t('capture.titleOptional')}
                 className="w-full h-10 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
               />
               <textarea
@@ -390,7 +398,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 data-testid="capture-text-input"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="Запиши мысль, идею, задачу «- [ ] …» или вставь ссылку…"
+                placeholder={t('capture.bodyPlaceholder')}
                 className="w-full p-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14.5px] leading-relaxed text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] resize-none"
               />
             </form>
@@ -424,7 +432,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                       setRecordSec(0);
                     }}
                     className="k-tap inline-flex items-center justify-center w-12 h-12 rounded-full bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] text-[var(--k-danger)]"
-                    aria-label="Отменить запись"
+                    aria-label={t('capture.cancelRecordAria')}
                   >
                     <Trash className="w-5 h-5" />
                   </button>
@@ -434,7 +442,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                     className="k-tap inline-flex items-center gap-2 px-6 h-12 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold"
                   >
                     <Stop weight="fill" className="w-4 h-4" />
-                    Сохранить запись
+                    {t('capture.saveRecord')}
                   </button>
                 </div>
               ) : (
@@ -445,7 +453,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                   className="k-tap inline-flex items-center gap-2 px-6 h-12 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14.5px] font-semibold"
                 >
                   <Microphone weight="fill" className="w-5 h-5" />
-                  Начать запись голоса
+                  {t('capture.startVoice')}
                 </button>
               )}
             </div>
@@ -457,7 +465,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Подпись к фото (необязательно)"
+                placeholder={t('capture.photoCaptionPlaceholder')}
                 className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
               />
               <div className="grid grid-cols-2 gap-2.5">
@@ -471,7 +479,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                   className="k-tap flex flex-col items-center justify-center gap-2 py-6 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] font-semibold text-[14px]"
                 >
                   <Camera weight="duotone" className="w-7 h-7" />
-                  <span>Камера</span>
+                  <span>{t('common.camera')}</span>
                 </button>
                 <button
                   type="button"
@@ -483,7 +491,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                   className="k-tap flex flex-col items-center justify-center gap-2 py-6 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-strong)] text-[var(--k-ink-primary)] font-semibold text-[14px]"
                 >
                   <ImageIcon weight="duotone" className="w-7 h-7 text-[var(--k-accent)]" />
-                  <span>Галерея</span>
+                  <span>{t('common.gallery')}</span>
                 </button>
               </div>
             </div>
@@ -495,7 +503,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Название или комментарий к файлу"
+                placeholder={t('capture.fileCommentPlaceholder')}
                 className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
               />
               <button
@@ -508,9 +516,9 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
                 className="k-tap w-full flex flex-col items-center justify-center gap-2 py-7 rounded-2xl bg-[var(--k-bg-surface-2)] border border-dashed border-[var(--k-border-strong)] text-[var(--k-ink-primary)] font-semibold text-[14px]"
               >
                 <Paperclip weight="duotone" className="w-7 h-7 text-[var(--k-accent)]" />
-                <span>Выбрать документ или файл на телефоне</span>
+                <span>{t('capture.pickFile')}</span>
                 <span className="text-[12px] font-normal text-[var(--k-ink-muted)]">
-                  PDF, фото, аудио, видео — зашифруется и уйдёт в облако
+                  {t('capture.pickFileHint')}
                 </span>
               </button>
             </div>
@@ -520,15 +528,15 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
 
       <MobilePickerSheet
         open={orbitPickerOpen}
-        title="Выбрать раздел"
+        title={t('common.pickOrbit')}
         value={orbit}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,
@@ -542,15 +550,15 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
 
       <MobilePickerSheet
         open={boardPickerOpen}
-        title="Выбрать холст"
+        title={t('common.pickBoard')}
         value={boardId}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateBoard)}
-        createPlaceholder="Название холста…"
+        createPlaceholder={t('common.boardNamePlaceholder')}
         onCreateNew={onCreateBoard}
         options={[
-          { value: '', label: 'Без холста' },
+          { value: '', label: t('common.noBoard') },
           ...boards.map((b) => ({
             value: b.id,
             label: b.name,

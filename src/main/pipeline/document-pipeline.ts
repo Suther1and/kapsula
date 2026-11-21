@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { decodeHtmlEntities } from '@shared/html-entities';
-import type { AiProvider, ExtractedAction, ParsedEmailSummary } from '@shared/types';
+import type { AiProvider, AppLocale, ExtractedAction, ParsedEmailSummary } from '@shared/types';
 import {
   postGeminiGenerateContent,
   postOpenRouterChatCompletions,
@@ -322,8 +322,10 @@ function buildLocalDocumentSummary(
   text: string,
   cleanFileTitle: string,
   ext: string,
-  pageCount: number | null
+  pageCount: number | null,
+  locale: AppLocale = 'ru'
 ): { title: string; summary: string; keyPoints: string[]; actionItems: string[] } {
+  const isEn = locale === 'en';
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -351,7 +353,9 @@ function buildLocalDocumentSummary(
   const summary =
     sentences.slice(0, 2).join(' ').slice(0, 240) ||
     summaryLines.slice(0, 2).join(' · ').slice(0, 240) ||
-    `Документ ${ext.toUpperCase()}${pageCount ? ` · ${pageCount} стр.` : ''} готов к просмотру и поиску.`;
+    (isEn
+      ? `${ext.toUpperCase()} document${pageCount ? ` · ${pageCount} pp.` : ''} ready for preview and search.`
+      : `Документ ${ext.toUpperCase()}${pageCount ? ` · ${pageCount} стр.` : ''} готов к просмотру и поиску.`);
 
   const summaryNorm = normSnippet(summary);
   const keyPoints = sentences
@@ -380,6 +384,7 @@ async function summarizeDocumentWithCloud(params: {
   openRouterKey?: string | null;
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
+  locale?: AppLocale;
   onSpendUsd?: (usd: number) => void;
   fetchFn?: FetchLike;
 }): Promise<{
@@ -407,15 +412,27 @@ async function summarizeDocumentWithCloud(params: {
   const snippet = redactSecrets(params.text.trim()).slice(0, 6000);
   if (snippet.length < 40) return null;
   const safeFileName = redactSecrets(params.fileName);
+  const isEn = params.locale === 'en';
 
-  const prompt = [
-    'Ты помогаешь пользователю в личном хранилище Kapsula на русском языке.',
-    'По тексту документа сделай короткий понятный заголовок, суть на 1-2 предложения, до 4 ключевых пунктов и до 4 конкретных шагов (если есть).',
-    'Верни СТРОГО JSON без markdown:',
-    '{"title":"...","summary":"...","keyPoints":["..."],"actionItems":["..."],"suggestedSection":"Документы | Финансы | Работа | Учёба | null","tags":["тег1","тег2"]}',
-    `Имя файла: ${safeFileName}`,
-    `Текст:\n${snippet}`,
-  ].join('\n');
+  const prompt = (
+    isEn
+      ? [
+          'You help the user organize their personal Kapsula vault in English.',
+          'From the document text, create a short clear title, a 1-2 sentence summary, up to 4 key points, and up to 4 concrete action steps (if present).',
+          'Return STRICT JSON without markdown:',
+          '{"title":"...","summary":"...","keyPoints":["..."],"actionItems":["..."],"suggestedSection":"Documents | Finance | Work | Learning | null","tags":["tag1","tag2"]}',
+          `File name: ${safeFileName}`,
+          `Text:\n${snippet}`,
+        ]
+      : [
+          'Ты помогаешь пользователю в личном хранилище Kapsula на русском языке.',
+          'По тексту документа сделай короткий понятный заголовок, суть на 1-2 предложения, до 4 ключевых пунктов и до 4 конкретных шагов (если есть).',
+          'Верни СТРОГО JSON без markdown:',
+          '{"title":"...","summary":"...","keyPoints":["..."],"actionItems":["..."],"suggestedSection":"Документы | Финансы | Работа | Учёба | null","tags":["тег1","тег2"]}',
+          `Имя файла: ${safeFileName}`,
+          `Текст:\n${snippet}`,
+        ]
+  ).join('\n');
 
   try {
     if (route.provider === 'google_ai_studio') {
@@ -536,13 +553,17 @@ export async function processDocumentIntelligence(params: {
   openRouterKey?: string | null;
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
+  locale?: AppLocale;
   onSpendUsd?: (usd: number) => void;
   fetchFn?: FetchLike;
 }): Promise<DocumentExtractionResult> {
+  const locale: AppLocale = params.locale ?? 'ru';
+  const isEn = locale === 'en';
   const ext = inferDocumentExt(params.fileName, params.mime);
   const mime = params.mime || MIME_BY_EXT[ext] || 'application/octet-stream';
   const cleanFileTitle =
-    params.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || 'Документ';
+    params.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
+    (isEn ? 'Document' : 'Документ');
   const prettyFileTitle = cleanFileTitle.charAt(0).toUpperCase() + cleanFileTitle.slice(1);
 
   let extractedText = '';
@@ -567,11 +588,11 @@ export async function processDocumentIntelligence(params: {
     extractedText = res.text;
     pageCount = res.pageCount;
   } else if (ext === 'eml') {
-    emailSummary = parseEmlBuffer(params.buffer);
-    bodyMarkdown = formatEmailAsNoteMarkdown(emailSummary);
+    emailSummary = parseEmlBuffer(params.buffer, locale);
+    bodyMarkdown = formatEmailAsNoteMarkdown(emailSummary, [], locale);
     extractedText = [
       emailSummary.subject,
-      emailSummary.from ? `От: ${emailSummary.from}` : '',
+      emailSummary.from ? `${isEn ? 'From' : 'От'}: ${emailSummary.from}` : '',
       emailSummary.bodyText,
     ]
       .filter(Boolean)
@@ -605,11 +626,13 @@ export async function processDocumentIntelligence(params: {
   }
 
   const trimmedText = extractedText.slice(0, 20_000);
-  const local = buildLocalDocumentSummary(trimmedText, prettyFileTitle, ext, pageCount);
+  const local = buildLocalDocumentSummary(trimmedText, prettyFileTitle, ext, pageCount, locale);
 
   const hasExtractedHeading = local.title !== prettyFileTitle && local.title.trim().length >= 4;
   let title =
-    emailSummary?.subject && emailSummary.subject !== 'Письмо без темы'
+    emailSummary?.subject &&
+    emailSummary.subject !== 'Письмо без темы' &&
+    emailSummary.subject !== 'Untitled email'
       ? emailSummary.subject
       : hasExtractedHeading
         ? local.title
@@ -619,8 +642,9 @@ export async function processDocumentIntelligence(params: {
   let summary = local.summary;
   let keyPoints = local.keyPoints;
   let actionItems = local.actionItems;
-  let tags = [ext === 'md' ? 'markdown' : ext === 'eml' ? 'письмо' : ext];
-  let suggestedSection: string | null = ext === 'eml' ? 'Работа' : 'Документы';
+  let tags = [ext === 'md' ? 'markdown' : ext === 'eml' ? (isEn ? 'email' : 'письмо') : ext];
+  let suggestedSection: string | null =
+    ext === 'eml' ? (isEn ? 'Work' : 'Работа') : isEn ? 'Documents' : 'Документы';
   let costUsd = 0;
 
   const containsSecret =
@@ -639,6 +663,7 @@ export async function processDocumentIntelligence(params: {
       openRouterKey: params.openRouterKey,
       cloudProxy: params.cloudProxy,
       budgetReached: params.budgetReached,
+      locale,
       onSpendUsd: params.onSpendUsd,
       fetchFn: params.fetchFn,
     });
@@ -666,7 +691,7 @@ export async function processDocumentIntelligence(params: {
     summary,
     keyPoints,
     actionItems,
-    extractedActions: extractActionsFromText(trimmedText),
+    extractedActions: extractActionsFromText(trimmedText, locale),
     tags,
     suggestedSection,
     costUsd,

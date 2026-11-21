@@ -24,17 +24,12 @@ import {
 import { toast } from 'sonner';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import type { ContentDna, FocusBoard, OrbitDef, VaultItem } from '@shared/types';
-import {
-  formatDateCompact,
-  formatFileSize,
-  formatRelativeDate,
-  getDnaHumanLabel,
-  stripLeadingTitle,
-} from '@renderer/lib/format';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
+import { stripLeadingTitle } from '@renderer/lib/format';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import {
   filterItemsByQuery,
   isMediaItem,
-  pluralRu,
   stripMobileInlineMarkdown,
 } from '../lib/mobile-helpers';
 import { mobileBridge } from '../native/bridge';
@@ -80,19 +75,19 @@ type FeedMode = 'feed' | 'media';
 type DnaFilter = 'all' | 'link' | 'note' | 'shot' | 'voice' | 'doc';
 type FeedSort = 'pinned_recent' | 'recent' | 'orbit';
 
-const DNA_CHIPS: Array<{ id: DnaFilter; label: string }> = [
-  { id: 'all', label: 'Всё' },
-  { id: 'link', label: 'Ссылки' },
-  { id: 'note', label: 'Заметки' },
-  { id: 'shot', label: 'Фото' },
-  { id: 'voice', label: 'Голос' },
-  { id: 'doc', label: 'Файлы' },
+const DNA_CHIPS: Array<{ id: DnaFilter; labelKey: MobileDictKey }> = [
+  { id: 'all', labelKey: 'feed.filterAll' },
+  { id: 'link', labelKey: 'feed.filterLinks' },
+  { id: 'note', labelKey: 'feed.filterNotes' },
+  { id: 'shot', labelKey: 'feed.filterShots' },
+  { id: 'voice', labelKey: 'feed.filterVoice' },
+  { id: 'doc', labelKey: 'feed.filterDocs' },
 ];
 
-const SORT_LABELS: Record<FeedSort, string> = {
-  pinned_recent: 'Сначала закреплённые',
-  recent: 'Сначала новые',
-  orbit: 'По разделам',
+const SORT_LABEL_KEYS: Record<FeedSort, MobileDictKey> = {
+  pinned_recent: 'feed.sortPinnedRecent',
+  recent: 'feed.sortRecent',
+  orbit: 'feed.sortOrbit',
 };
 
 const FEED_TASK_RE = /^\s*[-*•]\s+(?:\\\[|\[)([ xX])(?:\\\]|\])\s+(.+)$/;
@@ -186,6 +181,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
   onQuickCapture,
   ensureMediaUrl,
 }) => {
+  const {
+    t,
+    plural,
+    intlLocale,
+    formatDateCompact,
+    formatFileSize,
+    formatRelativeDate,
+    getDnaLabel,
+  } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const [feedMode, setFeedMode] = useState<FeedMode>('feed');
   const [dnaFilter, setDnaFilter] = useState<DnaFilter>('all');
@@ -256,9 +260,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
     }
     if (sortMode === 'orbit') {
       return [...queried].sort((a, b) => {
-        const oa = (a.orbit ? orbitMap.get(a.orbit)?.name : '') || 'яяя';
-        const ob = (b.orbit ? orbitMap.get(b.orbit)?.name : '') || 'яяя';
-        const cmp = oa.localeCompare(ob, 'ru');
+        const oa = (a.orbit ? orbitMap.get(a.orbit)?.name : '') || '\uffff';
+        const ob = (b.orbit ? orbitMap.get(b.orbit)?.name : '') || '\uffff';
+        const cmp = oa.localeCompare(ob, intlLocale);
         if (cmp !== 0) return cmp;
         return (b.contentUpdatedAt || b.updatedAt) - (a.contentUpdatedAt || a.updatedAt);
       });
@@ -273,6 +277,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     searchQuery,
     sortMode,
     orbitMap,
+    intlLocale,
   ]);
 
   const selectedItem = useMemo(() => {
@@ -297,49 +302,49 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const buildItemActions = (item: VaultItem): ActionSheetEntry[] => [
     {
       id: 'pin',
-      label: item.isPinned ? 'Открепить' : 'Закрепить сверху',
+      label: item.isPinned ? t('common.unpin') : t('common.pinTop'),
       icon: <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-5 h-5" />,
       accent: item.isPinned,
       onSelect: () => {
         void onUpdateItem(item.id, { isPinned: !item.isPinned });
-        toast(item.isPinned ? 'Откреплено' : 'Закреплено сверху');
+        toast(item.isPinned ? t('common.unpinnedToast') : t('common.pinnedToast'));
       },
     },
     {
       id: 'edit',
-      label: 'Открыть в редакторе',
+      label: t('feed.openInEditor'),
       icon: <NotePencil className="w-5 h-5" />,
       onSelect: () => onOpenInNotes(item.id),
     },
     {
       id: 'orbit',
-      label: 'Перенести в раздел',
-      subtitle: item.orbit ? orbitMap.get(item.orbit)?.name : 'Без раздела',
+      label: t('feed.moveToOrbit'),
+      subtitle: item.orbit ? orbitMap.get(item.orbit)?.name : t('common.noOrbit'),
       icon: <FolderSimple className="w-5 h-5" />,
       onSelect: () =>
         setOrbitPickerTarget({ mode: 'single', itemId: item.id, currentValue: item.orbit || '' }),
     },
     {
       id: 'board',
-      label: 'Перенести на холст',
-      subtitle: item.focusBoardId ? boardMap.get(item.focusBoardId)?.name : 'Без холста',
+      label: t('feed.moveToBoard'),
+      subtitle: item.focusBoardId ? boardMap.get(item.focusBoardId)?.name : t('common.noBoard'),
       icon: <Swatches className="w-5 h-5" />,
       onSelect: () =>
         setBoardPickerTarget({ itemId: item.id, currentValue: item.focusBoardId || '' }),
     },
     {
       id: 'copy',
-      label: item.url ? 'Скопировать ссылку' : 'Скопировать текст',
+      label: item.url ? t('feed.copyLink') : t('feed.copyText'),
       icon: <Copy className="w-5 h-5" />,
       onSelect: () => {
         const txt = item.url || [item.title, item.body].filter(Boolean).join('\n\n');
         void mobileBridge.copyPlain(txt);
-        toast.success('Скопировано');
+        toast.success(t('common.copied'));
       },
     },
     {
       id: 'multiselect',
-      label: 'Выбрать несколько',
+      label: t('feed.selectMultiple'),
       icon: <CheckSquareOffset className="w-5 h-5" />,
       onSelect: () => {
         setMultiSelectMode(true);
@@ -348,7 +353,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     },
     {
       id: 'delete',
-      label: 'Удалить запись',
+      label: t('feed.deleteItem'),
       icon: <Trash className="w-5 h-5" />,
       danger: true,
       onSelect: () => {
@@ -376,7 +381,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               {isExpanded ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-[var(--k-bg-surface-2)] text-[11px] font-medium text-[var(--k-ink-secondary)]">
-                  {getDnaHumanLabel(item)}
+                  {getDnaLabel(item.dna, item.subKind)}
                 </span>
               ) : null}
               {orbit ? (
@@ -392,11 +397,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 </span>
               ) : null}
               <span className="text-[11.5px] text-[var(--k-ink-muted)]">
-                {formatRelativeDate(item.contentUpdatedAt || item.updatedAt)}
+                {formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
               </span>
             </div>
             <h3 className="text-[18px] font-bold leading-snug text-[var(--k-ink-primary)] k-selectable">
-              {item.title || 'Без названия'}
+              {item.title || t('common.noTitle')}
             </h3>
           </div>
 
@@ -404,7 +409,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             <button
               type="button"
               onClick={() => onSelectItem(null)}
-              aria-label="Закрыть панель"
+              aria-label={t('common.closePanel')}
               className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] shrink-0"
             >
               <X className="w-4 h-4" />
@@ -416,7 +421,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
           localName={item.imagePath || item.thumbPath}
           fallbackUrl={item.ogImageUrl}
           ensureMediaUrl={ensureMediaUrl}
-          alt={item.title || 'Изображение'}
+          alt={item.title || t('common.image')}
           onImageClick={(src) => onOpenImage(src, item.title || undefined)}
           wrapperClassName="rounded-2xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]"
           className="w-full max-h-72 object-cover block"
@@ -447,7 +452,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 key={file}
                 localName={file}
                 ensureMediaUrl={ensureMediaUrl}
-                alt={item.title || 'Фото в заметке'}
+                alt={item.title || t('feed.notePhotoAlt')}
                 onImageClick={(src) => onOpenImage(src, item.title || undefined)}
                 wrapperClassName="rounded-xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] aspect-[4/3]"
                 className="w-full h-full object-cover block"
@@ -466,7 +471,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               <Globe className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
               <div className="min-w-0">
                 <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-                  {item.domain || 'Открыть ссылку'}
+                  {item.domain || t('feed.openLinkFallback')}
                 </div>
                 <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{item.url}</div>
               </div>
@@ -545,7 +550,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 style={{ color: orbit?.color || 'var(--k-accent)' }}
               />
             }
-            label={orbit?.name || 'Без раздела'}
+            label={orbit?.name || t('common.noOrbit')}
             placeholder={!orbit}
             className="flex-auto min-w-0"
             onClick={() =>
@@ -560,7 +565,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 style={{ color: board?.color || 'var(--k-emerald)' }}
               />
             }
-            label={board?.name || 'Без холста'}
+            label={board?.name || t('common.noBoard')}
             placeholder={!board}
             className="flex-auto min-w-0"
             onClick={() =>
@@ -576,13 +581,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
             className="k-tap flex-1 inline-flex items-center justify-center gap-2 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13.5px] font-semibold"
           >
             <NotePencil className="w-4 h-4" />
-            Открыть в редакторе
+            {t('feed.openInEditor')}
           </button>
 
           <button
             type="button"
             onClick={() => void onUpdateItem(item.id, { isPinned: !item.isPinned })}
-            aria-label={item.isPinned ? 'Открепить' : 'Закрепить'}
+            aria-label={item.isPinned ? t('common.unpin') : t('common.pin')}
             className={`k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl border ${
               item.isPinned
                 ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
@@ -598,7 +603,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               onSelectItem(null);
               void onDeleteItem(item.id);
             }}
-            aria-label="Удалить"
+            aria-label={t('common.delete')}
             className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-danger)]"
           >
             <Trash className="w-4 h-4" />
@@ -616,7 +621,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     const displayTitle =
       (item.title || '').trim() ||
       (item.body || '').trim().split('\n')[0]?.replace(/^#+\s*/, '').slice(0, 80) ||
-      'Без названия';
+      t('common.noTitle');
     const preview = stripLeadingTitle(
       stripMobileInlineMarkdown(item.body || item.summary || ''),
       displayTitle
@@ -642,17 +647,17 @@ export const FeedView: React.FC<FeedViewProps> = ({
         disabled={multiSelectMode}
         onLongPress={() => setActionItem(item)}
         leftAction={{
-          label: item.isPinned ? 'Открепить' : 'Закрепить',
+          label: item.isPinned ? t('common.unpin') : t('common.pin'),
           icon: <PushPin weight="fill" className="w-4 h-4" />,
           bgClass: 'bg-[var(--k-accent)]',
           textClass: 'text-[var(--k-ink-on-accent)]',
           onTrigger: () => {
             void onUpdateItem(item.id, { isPinned: !item.isPinned });
-            toast(item.isPinned ? 'Откреплено' : 'Закреплено сверху');
+            toast(item.isPinned ? t('common.unpinnedToast') : t('common.pinnedToast'));
           },
         }}
         rightAction={{
-          label: 'Удалить',
+          label: t('common.delete'),
           icon: <Trash weight="fill" className="w-4 h-4" />,
           bgClass: 'bg-[var(--k-danger)]',
           onTrigger: () => {
@@ -683,7 +688,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               localName={item.thumbPath || item.imagePath}
               fallbackUrl={item.ogImageUrl}
               ensureMediaUrl={ensureMediaUrl}
-              alt={item.title || 'Вложение'}
+              alt={item.title || t('common.attachment')}
               onImageClick={
                 multiSelectMode
                   ? undefined
@@ -719,13 +724,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0"
                   />
                 )}
-                <span className="truncate">{item.domain || getDnaHumanLabel(item)}</span>
+                <span className="truncate">{item.domain || getDnaLabel(item.dna, item.subKind)}</span>
               </span>
               <span className="inline-flex items-center gap-1.5 shrink-0">
                 {item.isPinned && !hasVisual ? (
                   <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)]" />
                 ) : null}
-                <span>{formatDateCompact(item.contentUpdatedAt || item.updatedAt)}</span>
+                <span>{formatDateCompact(item.contentUpdatedAt || item.createdAt)}</span>
                 {!multiSelectMode ? (
                   <button
                     type="button"
@@ -735,7 +740,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                       mobileBridge.haptic('light');
                       setActionItem(item);
                     }}
-                    aria-label="Действия с записью"
+                    aria-label={t('feed.actionsAria')}
                     className="inline-flex items-center justify-center w-6 h-6 -mr-1 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]"
                   >
                     <DotsThree weight="bold" className="w-4 h-4" />
@@ -837,8 +842,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
             <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
               {(
                 [
-                  { id: 'feed', label: 'Лента', testId: 'feed-mode-all' },
-                  { id: 'media', label: 'Медиа', testId: 'feed-mode-media' },
+                  { id: 'feed', label: t('feed.modeFeed'), testId: 'feed-mode-all' },
+                  { id: 'media', label: t('feed.modeMedia'), testId: 'feed-mode-media' },
                 ] as const
               ).map((m) => {
                 const active = feedMode === m.id;
@@ -874,17 +879,17 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
             <div className="flex items-center gap-2 shrink-0">
               <span className="text-[12px] text-[var(--k-ink-muted)] k-tabular">
-                {pluralRu(filteredItems.length, 'запись', 'записи', 'записей')}
+                {plural('item', filteredItems.length)}
               </span>
               <button
                 type="button"
                 data-testid="feed-sort-btn"
                 onClick={() => setSortPickerOpen(true)}
-                aria-label="Сортировка ленты"
+                aria-label={t('feed.sortTitle')}
                 className="k-tap inline-flex items-center gap-1 px-2 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11.5px] font-medium text-[var(--k-ink-secondary)]"
               >
                 <ArrowsDownUp className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                {isExpanded ? <span>{SORT_LABELS[sortMode]}</span> : null}
+                {isExpanded ? <span>{t(SORT_LABEL_KEYS[sortMode])}</span> : null}
               </button>
             </div>
           </div>
@@ -904,7 +909,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                 }`}
               >
-                {chip.label}
+                {t(chip.labelKey)}
               </button>
             ))}
 
@@ -993,7 +998,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               className="px-4 py-2 bg-[var(--k-accent-soft)] border-b border-[var(--k-border-focus)] flex items-center justify-between gap-2 shrink-0"
             >
               <span className="text-[13px] font-semibold text-[var(--k-ink-primary)]">
-                Выбрано: {selectedBulkIds.size}
+                {t('feed.selectedCount', { count: selectedBulkIds.size })}
               </span>
               <div className="flex items-center gap-1.5">
                 <button
@@ -1005,7 +1010,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-xl bg-[var(--k-bg-surface-1)] text-[12px] font-medium text-[var(--k-ink-primary)] disabled:opacity-40"
                 >
                   <FolderSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                  Раздел
+                  {t('feed.bulkOrbit')}
                 </button>
                 <button
                   type="button"
@@ -1022,12 +1027,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-xl bg-[var(--k-danger)] text-white text-[12px] font-semibold disabled:opacity-40"
                 >
                   <Trash className="w-3.5 h-3.5" />
-                  Удалить
+                  {t('common.delete')}
                 </button>
                 <button
                   type="button"
                   onClick={exitMultiSelect}
-                  aria-label="Завершить выбор"
+                  aria-label={t('feed.finishBulkAria')}
                   className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)]"
                 >
                   <X className="w-4 h-4" />
@@ -1045,12 +1050,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 <FileText weight="duotone" className="w-6 h-6 text-[var(--k-ink-muted)]" />
               </div>
               <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-                {searchQuery.trim() ? 'Ничего не нашлось' : 'Лента пока пуста'}
+                {searchQuery.trim() ? t('feed.emptySearchTitle') : t('feed.emptyTitle')}
               </div>
               <p className="text-[13px] text-[var(--k-ink-muted)] mt-1 max-w-xs">
                 {searchQuery.trim()
-                  ? 'Попробуй другой запрос или сбрось фильтры сверху.'
-                  : 'Нажми «+», чтобы сохранить мысль, голосовую заметку, фото или ссылку.'}
+                  ? t('feed.emptySearchHint')
+                  : t('feed.emptyHint')}
               </p>
               {!searchQuery.trim() && onQuickCapture ? (
                 <button
@@ -1062,7 +1067,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   className="k-tap mt-4 inline-flex items-center gap-1.5 px-4 h-10 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold"
                 >
                   <Plus weight="bold" className="w-4 h-4" />
-                  Создать запись
+                  {t('feed.createEntry')}
                 </button>
               ) : null}
             </div>
@@ -1096,7 +1101,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {!isExpanded ? (
         <BottomSheet
           open={Boolean(selectedItem)}
-          title={selectedItem ? getDnaHumanLabel(selectedItem) : ''}
+          title={selectedItem ? getDnaLabel(selectedItem.dna, selectedItem.subKind) : ''}
           isExpanded={false}
           onClose={() => onSelectItem(null)}
         >
@@ -1107,8 +1112,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {/* Long-Press / More Action Sheet */}
       <ItemActionSheet
         open={Boolean(actionItem)}
-        title={actionItem?.title || 'Запись'}
-        subtitle={actionItem ? getDnaHumanLabel(actionItem) : undefined}
+        title={actionItem?.title || t('feed.itemFallback')}
+        subtitle={actionItem ? getDnaLabel(actionItem.dna, actionItem.subKind) : undefined}
         actions={actionItem ? buildItemActions(actionItem) : []}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
@@ -1118,14 +1123,14 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {/* Sort Picker Sheet */}
       <MobilePickerSheet
         open={sortPickerOpen}
-        title="Сортировка ленты"
+        title={t('feed.sortTitle')}
         value={sortMode}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         options={[
-          { value: 'pinned_recent', label: SORT_LABELS.pinned_recent },
-          { value: 'recent', label: SORT_LABELS.recent },
-          { value: 'orbit', label: SORT_LABELS.orbit },
+          { value: 'pinned_recent', label: t(SORT_LABEL_KEYS.pinned_recent) },
+          { value: 'recent', label: t(SORT_LABEL_KEYS.recent) },
+          { value: 'orbit', label: t(SORT_LABEL_KEYS.orbit) },
         ]}
         onSelect={(val) => setSortMode(val as FeedSort)}
         onClose={() => setSortPickerOpen(false)}
@@ -1134,15 +1139,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {/* Section Picker Sheet */}
       <MobilePickerSheet
         open={Boolean(orbitPickerTarget)}
-        title="Выбрать раздел"
+        title={t('common.pickOrbit')}
         value={orbitPickerTarget?.currentValue ?? ''}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,
@@ -1155,12 +1160,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
           if (orbitPickerTarget.mode === 'bulk') {
             const ids = Array.from(selectedBulkIds);
             void Promise.all(ids.map((id) => onUpdateItem(id, { orbit: val }))).then(() => {
-              toast.success(`Перенесено записей: ${ids.length}`);
+              toast.success(t('feed.movedItemsCount', { count: ids.length }));
               exitMultiSelect();
             });
           } else if (orbitPickerTarget.itemId) {
             void onUpdateItem(orbitPickerTarget.itemId, { orbit: val });
-            toast.success('Раздел обновлён');
+            toast.success(t('common.orbitUpdated'));
           }
         }}
         onClose={() => setOrbitPickerTarget(null)}
@@ -1169,15 +1174,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {/* Canvas Picker Sheet */}
       <MobilePickerSheet
         open={Boolean(boardPickerTarget)}
-        title="Выбрать холст"
+        title={t('common.pickBoard')}
         value={boardPickerTarget?.currentValue ?? ''}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateBoard)}
-        createPlaceholder="Название холста…"
+        createPlaceholder={t('common.boardNamePlaceholder')}
         onCreateNew={onCreateBoard}
         options={[
-          { value: '', label: 'Без холста' },
+          { value: '', label: t('common.noBoard') },
           ...boards.map((b) => ({
             value: b.id,
             label: b.name,
@@ -1188,7 +1193,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
         onSelect={(val) => {
           if (!boardPickerTarget) return;
           void onUpdateItem(boardPickerTarget.itemId, { focusBoardId: val || null });
-          toast.success('Холст обновлён');
+          toast.success(t('common.boardUpdated'));
         }}
         onClose={() => setBoardPickerTarget(null)}
       />

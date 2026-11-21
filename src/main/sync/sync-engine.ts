@@ -33,7 +33,8 @@ import {
   type SyncStateKind,
   type SyncStatus,
 } from '@shared/sync-contract';
-import type { SecretPayload, VaultItem } from '@shared/types';
+import { APP_VERSION } from '@shared/app-version';
+import type { AppLocale, SecretPayload, VaultItem } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
 import type { VaultCrypto } from '../security/vault-crypto';
 import {
@@ -42,6 +43,7 @@ import {
   encryptRecordPayload,
   rewrapEnvelopePassphrase,
   rewrapEnvelopeRecoveryKey,
+  setSyncCryptoLocale,
   unwrapDekWithPassphrase,
   unwrapDekWithRecoveryKey,
   verifyKeyCheckToken,
@@ -102,7 +104,7 @@ function isEntityTypeConstraintError(err: { code?: string; message?: string } | 
 
 function isVaultLockedError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? '');
-  return msg.includes('Сейф заблокирован');
+  return msg.includes('Сейф заблокирован') || msg.toLowerCase().includes('vault is locked');
 }
 
 function normalizePlatform(raw: NodeJS.Platform): SyncPlatform {
@@ -116,26 +118,31 @@ function isRussianMessage(msg: string): boolean {
   return /[а-яё]/i.test(msg);
 }
 
-function translateSyncError(err: unknown): string {
+function translateSyncError(err: unknown, locale: AppLocale = 'ru'): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   const lower = raw.toLowerCase();
+  const isEn = locale === 'en';
   if (lower.includes('invalid login credentials')) {
-    return 'Неверная почта или пароль';
+    return isEn ? 'Invalid email or password' : 'Неверная почта или пароль';
   }
   if (lower.includes('email not confirmed')) {
-    return 'Почта ещё не подтверждена — перейди по ссылке из письма и нажми «Войти»';
+    return isEn
+      ? 'Email not confirmed yet — click the confirmation link in your inbox and sign in'
+      : 'Почта ещё не подтверждена — перейди по ссылке из письма и нажми «Войти»';
   }
   if (lower.includes('user already registered') || lower.includes('already been registered')) {
-    return 'Аккаунт с этой почтой уже существует — переключись на «Войти»';
+    return isEn
+      ? 'An account with this email already exists — switch to Sign in'
+      : 'Аккаунт с этой почтой уже существует — переключись на «Войти»';
   }
   if (lower.includes('password should be at least')) {
-    return 'Пароль должен содержать не менее 6 символов';
+    return isEn ? 'Password must be at least 6 characters' : 'Пароль должен содержать не менее 6 символов';
   }
   if (lower.includes('unable to validate email') || lower.includes('invalid email')) {
-    return 'Проверь формат электронной почты';
+    return isEn ? 'Check your email address format' : 'Проверь формат электронной почты';
   }
   if (lower.includes('rate limit') || lower.includes('too many requests')) {
-    return 'Слишком много попыток — подожди минуту и попробуй снова';
+    return isEn ? 'Too many attempts — wait a minute and try again' : 'Слишком много попыток — подожди минуту и попробуй снова';
   }
   if (
     lower.includes('jwt expired') ||
@@ -143,19 +150,25 @@ function translateSyncError(err: unknown): string {
     lower.includes('refresh_token_not_found') ||
     lower.includes('auth session missing')
   ) {
-    return 'Сессия синхронизации истекла — войди в аккаунт снова';
+    return isEn ? 'Sync session expired — sign in again' : 'Сессия синхронизации истекла — войди в аккаунт снова';
   }
   if (lower.includes('row-level security') || lower.includes('permission denied')) {
-    return 'Нет прав доступа к облачному хранилищу — попробуй перезайти в аккаунт';
+    return isEn
+      ? 'Missing cloud storage permissions — try signing out and back in'
+      : 'Нет прав доступа к облачному хранилищу — попробуй перезайти в аккаунт';
   }
   if (lower.includes('duplicate key') || lower.includes('23505')) {
-    return 'Ключ шифрования для этого аккаунта уже создан на другом устройстве';
+    return isEn
+      ? 'Encryption key for this account was already created on another device'
+      : 'Ключ шифрования для этого аккаунта уже создан на другом устройстве';
   }
   if (lower.includes('provider is not enabled') || lower.includes('unsupported provider')) {
-    return 'Вход через Google временно недоступен — войди по почте и паролю';
+    return isEn
+      ? 'Google sign-in is temporarily unavailable — sign in with email & password'
+      : 'Вход через Google временно недоступен — войди по почте и паролю';
   }
   if (lower.includes('access_denied')) {
-    return 'Вход через Google был отменён';
+    return isEn ? 'Google sign-in was cancelled' : 'Вход через Google был отменён';
   }
   if (
     lower.includes('fetch failed') ||
@@ -165,13 +178,21 @@ function translateSyncError(err: unknown): string {
     lower.includes('econnrefused') ||
     lower.includes('econnreset')
   ) {
-    return 'Нет связи с облаком синхронизации — данные сохранены локально и уйдут при появлении сети';
+    return isEn
+      ? 'Cannot reach cloud sync — changes are saved locally and will upload when back online'
+      : 'Нет связи с облаком синхронизации — данные сохранены локально и уйдут при появлении сети';
   }
   // Never expose raw English SQL/Postgres/SDK traces to end users
-  if (raw && isRussianMessage(raw) && !/(?:postgrest|postgres|pgrst|sqlstate|jwt)/i.test(raw)) {
+  if (
+    raw &&
+    !/(?:postgrest|postgres|pgrst|sqlstate|jwt)/i.test(raw) &&
+    (isEn ? /^[a-z0-9\s.,:;!?\-'"()]+$/i.test(raw) && raw.length <= 160 : isRussianMessage(raw))
+  ) {
     return raw;
   }
-  return 'Не удалось выполнить синхронизацию — попробуй повторить чуть позже';
+  return isEn
+    ? 'Sync failed — please try again shortly'
+    : 'Не удалось выполнить синхронизацию — попробуй повторить чуть позже';
 }
 
 function isNetworkLikeError(err: unknown): boolean {
@@ -415,7 +436,7 @@ export class SyncEngine {
     this.secureStore = new LocalSecureStore(opts.dataDir, opts.safeStorage);
     this.callbacks = opts.callbacks ?? {};
     this.isPackaged = Boolean(opts.isPackaged);
-    this.appVersion = opts.appVersion ?? '1.0.0';
+    this.appVersion = opts.appVersion ?? APP_VERSION;
     this.kdfIterations = opts.kdfIterationsOverride;
     this.disableTimers = Boolean(opts.disableTimers);
     this.disableRealtime = Boolean(opts.disableRealtime);
@@ -441,6 +462,19 @@ export class SyncEngine {
     this.repo.setMutationListener(() => {
       this.scheduleDirtyPush();
     });
+    setSyncCryptoLocale(this.repo.getLocale());
+  }
+
+  public setLocale(locale: AppLocale): void {
+    setSyncCryptoLocale(locale);
+  }
+
+  private get isEn(): boolean {
+    return this.repo.getLocale() === 'en';
+  }
+
+  private formatSyncErr(err: unknown): string {
+    return translateSyncError(err, this.repo.getLocale());
   }
 
   private getMinKdfIterations(): number {
@@ -593,7 +627,7 @@ export class SyncEngine {
           this.startBackgroundLoops();
         } else {
           this.state = 'offline';
-          this.lastError = translateSyncError(err);
+          this.lastError = this.formatSyncErr(err);
         }
       } else {
         this.state = 'signed_out';
@@ -700,7 +734,9 @@ export class SyncEngine {
       try {
         parsed = new URL(normalizedUrl);
       } catch {
-        throw new Error('Некорректный адрес сервера Supabase');
+        throw new Error(
+          this.isEn ? 'Invalid sync server URL' : 'Некорректный адрес сервера Supabase'
+        );
       }
       if (
         parsed.protocol !== 'https:' ||
@@ -709,10 +745,18 @@ export class SyncEngine {
         parsed.password ||
         /\s/.test(normalizedUrl)
       ) {
-        throw new Error('Адрес сервера Supabase должен быть валидным HTTPS-адресом');
+        throw new Error(
+          this.isEn
+            ? 'Sync server URL must be a valid HTTPS address'
+            : 'Адрес сервера Supabase должен быть валидным HTTPS-адресом'
+        );
       }
       if (cleanKey.length < 16) {
-        throw new Error('Укажи корректный публичный ключ проекта Supabase');
+        throw new Error(
+          this.isEn
+            ? 'Enter a valid public project key'
+            : 'Укажи корректный публичный ключ проекта Supabase'
+        );
       }
     }
 
@@ -732,12 +776,18 @@ export class SyncEngine {
   public async signUp(email: string, password: string): Promise<SyncAuthResult> {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      return { ok: false, error: 'Введи корректный адрес почты', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Enter a valid email address' : 'Введи корректный адрес почты',
+        status: this.getStatus(),
+      };
     }
     if (password.length < 6) {
       return {
         ok: false,
-        error: 'Пароль должен содержать не менее 6 символов',
+        error: this.isEn
+          ? 'Password must be at least 6 characters'
+          : 'Пароль должен содержать не менее 6 символов',
         status: this.getStatus(),
       };
     }
@@ -750,7 +800,7 @@ export class SyncEngine {
         password,
       });
       if (error) {
-        const msg = translateSyncError(error);
+        const msg = this.formatSyncErr(error);
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -788,7 +838,7 @@ export class SyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -798,7 +848,11 @@ export class SyncEngine {
   public async signIn(email: string, password: string): Promise<SyncAuthResult> {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
-      return { ok: false, error: 'Введи почту и пароль', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Enter email and password' : 'Введи почту и пароль',
+        status: this.getStatus(),
+      };
     }
 
     try {
@@ -809,7 +863,9 @@ export class SyncEngine {
         password,
       });
       if (error || !data.session?.user) {
-        const msg = translateSyncError(error ?? 'Не удалось войти');
+        const msg = this.formatSyncErr(
+          error ?? (this.isEn ? 'Sign-in failed' : 'Не удалось войти')
+        );
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -833,7 +889,7 @@ export class SyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -847,7 +903,9 @@ export class SyncEngine {
     if (this.googleAuthInFlight) {
       return {
         ok: false,
-        error: 'Окно входа через Google уже открыто в браузере',
+        error: this.isEn
+          ? 'Google sign-in window is already open in your browser'
+          : 'Окно входа через Google уже открыто в браузере',
         status: this.getStatus(),
       };
     }
@@ -856,7 +914,9 @@ export class SyncEngine {
     if (!openExternalFn) {
       return {
         ok: false,
-        error: 'Не удалось открыть браузер для входа через Google',
+        error: this.isEn
+          ? 'Could not open browser for Google sign-in'
+          : 'Не удалось открыть браузер для входа через Google',
         status: this.getStatus(),
       };
     }
@@ -880,14 +940,23 @@ export class SyncEngine {
 
           const timeout = setTimeout(() => {
             finish(() =>
-              reject(new Error('Время ожидания входа через Google истекло — попробуй ещё раз'))
+              reject(
+                new Error(
+                  this.isEn
+                    ? 'Google sign-in timed out — please try again'
+                    : 'Время ожидания входа через Google истекло — попробуй ещё раз'
+                )
+              )
             );
           }, timeoutMs);
 
-          const successHtml =
-            '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Вход в Kapsula выполнен</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Можешь закрыть вкладку и вернуться в приложение.</p></div></body></html>';
-          const errorHtml =
-            '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Вход не завершён</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Можешь закрыть вкладку, вернуться в Kapsula и попробовать снова.</p></div></body></html>';
+          const isEn = this.isEn;
+          const successHtml = isEn
+            ? '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Signed in to Kapsula</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">You can close this tab and return to the app.</p></div></body></html>'
+            : '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Вход в Kapsula выполнен</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Можешь закрыть вкладку и вернуться в приложение.</p></div></body></html>';
+          const errorHtml = isEn
+            ? '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Sign-in not completed</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Close this tab, return to Kapsula, and try again.</p></div></body></html>'
+            : '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Вход не завершён</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Можешь закрыть вкладку, вернуться в Kapsula и попробовать снова.</p></div></body></html>';
 
           let redirectTo = '';
 
@@ -911,8 +980,16 @@ export class SyncEngine {
                 res.end(errorHtml);
                 const msg =
                   errParam === 'access_denied'
-                    ? 'Вход через Google был отменён'
-                    : translateSyncError(errDesc || errParam || 'Не удалось завершить вход через Google');
+                    ? isEn
+                      ? 'Google sign-in was cancelled'
+                      : 'Вход через Google был отменён'
+                    : this.formatSyncErr(
+                        errDesc ||
+                          errParam ||
+                          (isEn
+                            ? 'Could not complete Google sign-in'
+                            : 'Не удалось завершить вход через Google')
+                      );
                 finish(() => reject(new Error(msg)));
                 return;
               }
@@ -930,14 +1007,30 @@ export class SyncEngine {
           });
 
           server.on('error', () => {
-            finish(() => reject(new Error('Не удалось открыть локальный адрес для входа через Google')));
+            finish(() =>
+              reject(
+                new Error(
+                  isEn
+                    ? 'Could not open local address for Google sign-in'
+                    : 'Не удалось открыть локальный адрес для входа через Google'
+                )
+              )
+            );
           });
 
           server.listen(0, '127.0.0.1', () => {
             const addr = server?.address();
             const port = typeof addr === 'object' && addr ? addr.port : 0;
             if (!port) {
-              finish(() => reject(new Error('Не удалось открыть локальный порт для входа')));
+              finish(() =>
+                reject(
+                  new Error(
+                    isEn
+                      ? 'Could not open local port for sign-in'
+                      : 'Не удалось открыть локальный порт для входа'
+                  )
+                )
+              );
               return;
             }
             redirectTo = `http://127.0.0.1:${port}/callback`;
@@ -954,15 +1047,22 @@ export class SyncEngine {
                 });
                 if (error || !data?.url) {
                   finish(() =>
-                    reject(new Error(translateSyncError(error ?? 'Не удалось открыть вход через Google')))
+                    reject(
+                      new Error(
+                        this.formatSyncErr(
+                          error ??
+                            (isEn
+                              ? 'Could not start Google sign-in'
+                              : 'Не удалось открыть вход через Google')
+                        )
+                      )
+                    )
                   );
                   return;
                 }
                 await openExternalFn(data.url);
               } catch (openErr) {
-                finish(() =>
-                  reject(new Error(translateSyncError(openErr)))
-                );
+                finish(() => reject(new Error(this.formatSyncErr(openErr))));
               }
             })();
           });
@@ -972,7 +1072,12 @@ export class SyncEngine {
       const { code } = await callbackPromise;
       const { data: exData, error: exErr } = await client.auth.exchangeCodeForSession(code);
       if (exErr || !exData.session?.user) {
-        const msg = translateSyncError(exErr ?? 'Не удалось подтвердить вход через Google');
+        const msg = this.formatSyncErr(
+          exErr ??
+            (this.isEn
+              ? 'Could not confirm Google sign-in'
+              : 'Не удалось подтвердить вход через Google')
+        );
         this.lastError = msg;
         this.emitStatus();
         return { ok: false, error: msg, status: this.getStatus() };
@@ -997,7 +1102,7 @@ export class SyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1018,7 +1123,11 @@ export class SyncEngine {
 
   public async setupPassphrase(passphrase: string): Promise<SyncSetupPassphraseResult> {
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Sign in to your sync account first' : 'Сначала войди в аккаунт синхронизации',
+        status: this.getStatus(),
+      };
     }
 
     try {
@@ -1028,11 +1137,14 @@ export class SyncEngine {
         this.emitStatus();
         return {
           ok: false,
-          error: 'Ключ шифрования для этого аккаунта уже создан на другом устройстве — введи существующую фразу',
+          error: this.isEn
+            ? 'An encryption key already exists for this account on another device — enter your existing passphrase'
+            : 'Ключ шифрования для этого аккаунта уже создан на другом устройстве — введи существующую фразу',
           status: this.getStatus(),
         };
       }
 
+      setSyncCryptoLocale(this.repo.getLocale());
       const { dek, recoveryKey, envelope } = await createKeyEnvelope(
         this.userId,
         passphrase,
@@ -1049,7 +1161,9 @@ export class SyncEngine {
           this.emitStatus();
           return {
             ok: false,
-            error: 'Ключ шифрования только что создан на другом устройстве — введи существующую фразу',
+            error: this.isEn
+              ? 'An encryption key was just created on another device — enter your existing passphrase'
+              : 'Ключ шифрования только что создан на другом устройстве — введи существующую фразу',
             status: this.getStatus(),
           };
         }
@@ -1074,7 +1188,7 @@ export class SyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1085,7 +1199,9 @@ export class SyncEngine {
     if (!this.userId || !this.dek) {
       return {
         ok: false,
-        error: 'Сначала подключи и расшифруй синхронизацию на этом устройстве',
+        error: this.isEn
+          ? 'Connect and unlock cloud sync on this device first'
+          : 'Сначала подключи и расшифруй синхронизацию на этом устройстве',
         status: this.getStatus(),
       };
     }
@@ -1093,7 +1209,11 @@ export class SyncEngine {
     try {
       const envelope = await this.fetchRemoteEnvelope(this.userId);
       if (!envelope) {
-        return { ok: false, error: 'Ключ шифрования не найден в облаке', status: this.getStatus() };
+        return {
+          ok: false,
+          error: this.isEn ? 'Encryption key not found in cloud' : 'Ключ шифрования не найден в облаке',
+          status: this.getStatus(),
+        };
       }
 
       const { recoveryKey, envelope: updated } = rewrapEnvelopeRecoveryKey(
@@ -1120,7 +1240,7 @@ export class SyncEngine {
         status: this.getStatus(),
       };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1129,7 +1249,11 @@ export class SyncEngine {
 
   public async unlockWithPassphrase(passphrase: string): Promise<SyncActionResult> {
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Sign in to your sync account first' : 'Сначала войди в аккаунт синхронизации',
+        status: this.getStatus(),
+      };
     }
 
     try {
@@ -1139,11 +1263,14 @@ export class SyncEngine {
         this.emitStatus();
         return {
           ok: false,
-          error: 'Для этого аккаунта ещё не задана секретная фраза',
+          error: this.isEn
+            ? 'No encryption passphrase has been set for this account yet'
+            : 'Для этого аккаунта ещё не задана секретная фраза',
           status: this.getStatus(),
         };
       }
 
+      setSyncCryptoLocale(this.repo.getLocale());
       const dek = await unwrapDekWithPassphrase(
         this.userId,
         passphrase,
@@ -1161,7 +1288,7 @@ export class SyncEngine {
       this.startBackgroundLoops();
       return await this.syncNow();
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1173,7 +1300,11 @@ export class SyncEngine {
     newPassphrase?: string
   ): Promise<SyncActionResult> {
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Sign in to your sync account first' : 'Сначала войди в аккаунт синхронизации',
+        status: this.getStatus(),
+      };
     }
 
     try {
@@ -1181,11 +1312,14 @@ export class SyncEngine {
       if (!envelope) {
         return {
           ok: false,
-          error: 'Ключ шифрования для этого аккаунта ещё не создан',
+          error: this.isEn
+            ? 'Encryption key for this account has not been created yet'
+            : 'Ключ шифрования для этого аккаунта ещё не создан',
           status: this.getStatus(),
         };
       }
 
+      setSyncCryptoLocale(this.repo.getLocale());
       const dek = unwrapDekWithRecoveryKey(this.userId, recoveryKey, envelope);
 
       if (newPassphrase && newPassphrase.trim().length > 0) {
@@ -1224,7 +1358,7 @@ export class SyncEngine {
       this.startBackgroundLoops();
       return await this.syncNow();
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1236,14 +1370,23 @@ export class SyncEngine {
     newPassphrase: string
   ): Promise<SyncActionResult> {
     if (!this.userId) {
-      return { ok: false, error: 'Сначала войди в аккаунт синхронизации', status: this.getStatus() };
+      return {
+        ok: false,
+        error: this.isEn ? 'Sign in to your sync account first' : 'Сначала войди в аккаунт синхронизации',
+        status: this.getStatus(),
+      };
     }
 
     try {
       const envelope = await this.fetchRemoteEnvelope(this.userId);
       if (!envelope) {
-        return { ok: false, error: 'Ключ шифрования не найден', status: this.getStatus() };
+        return {
+          ok: false,
+          error: this.isEn ? 'Encryption key not found' : 'Ключ шифрования не найден',
+          status: this.getStatus(),
+        };
       }
+      setSyncCryptoLocale(this.repo.getLocale());
       const dek = await unwrapDekWithPassphrase(
         this.userId,
         currentPassphrase,
@@ -1279,7 +1422,7 @@ export class SyncEngine {
       this.emitStatus();
       return { ok: true, status: this.getStatus() };
     } catch (err) {
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.emitStatus();
       return { ok: false, error: msg, status: this.getStatus() };
@@ -1617,11 +1760,18 @@ export class SyncEngine {
         ok: false,
         error:
           this.state === 'needs_passphrase_unlock'
-            ? 'Введи секретную фразу шифрования для запуска синхронизации'
-            : 'Синхронизация не подключена',
+            ? this.isEn
+              ? 'Enter your encryption passphrase to start syncing'
+              : 'Введи секретную фразу шифрования для запуска синхронизации'
+            : this.isEn
+              ? 'Cloud sync is not connected'
+              : 'Синхронизация не подключена',
         status: this.getStatus(),
       };
     }
+
+    const cancelledMsg = this.isEn ? 'Sync cancelled' : 'Синхронизация отменена';
+    setSyncCryptoLocale(this.repo.getLocale());
 
     const client = this.ensureClient();
     const userId = this.userId;
@@ -1642,13 +1792,17 @@ export class SyncEngine {
       if (this.needsEnvelopeVerification) {
         const remoteEnv = await this.fetchRemoteEnvelope(userId);
         if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+          return { ok: false, error: cancelledMsg, status: this.getStatus() };
         }
         if (!remoteEnv) {
           this.setDek(null);
           this.state = 'needs_passphrase_setup';
           this.emitStatus();
-          return { ok: false, error: 'Задай секретную фразу шифрования', status: this.getStatus() };
+          return {
+            ok: false,
+            error: this.isEn ? 'Set an encryption passphrase' : 'Задай секретную фразу шифрования',
+            status: this.getStatus(),
+          };
         }
         if (!verifyKeyCheckToken(dek, userId, remoteEnv.key_check_token)) {
           this.clearCachedDek(userId);
@@ -1657,7 +1811,9 @@ export class SyncEngine {
           this.emitStatus();
           return {
             ok: false,
-            error: 'Ключ шифрования изменился — введи актуальную секретную фразу',
+            error: this.isEn
+              ? 'Encryption key changed — enter your current passphrase'
+              : 'Ключ шифрования изменился — введи актуальную секретную фразу',
             status: this.getStatus(),
           };
         }
@@ -1691,7 +1847,7 @@ export class SyncEngine {
 
       while (true) {
         if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+          return { ok: false, error: cancelledMsg, status: this.getStatus() };
         }
 
         const { data: rows, error: pullErr } = await client
@@ -1712,7 +1868,7 @@ export class SyncEngine {
 
         for (const row of batch) {
           if (gen !== this.authGeneration || this.disposed) {
-            return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+            return { ok: false, error: cancelledMsg, status: this.getStatus() };
           }
           const nextSeq = Number(row.server_seq) || queryCursor;
           pageMaxSeq = Math.max(pageMaxSeq, nextSeq);
@@ -1818,7 +1974,7 @@ export class SyncEngine {
       }
 
       if (gen !== this.authGeneration || this.disposed) {
-        return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+        return { ok: false, error: cancelledMsg, status: this.getStatus() };
       }
 
       if (freedMediaAll.size > 0) {
@@ -1845,7 +2001,7 @@ export class SyncEngine {
 
       while (batchesProcessed < MAX_PUSH_BATCHES_PER_CYCLE) {
         if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+          return { ok: false, error: cancelledMsg, status: this.getStatus() };
         }
         const dirtyBatch = this.repo
           .listDirtyEntities(PUSH_BATCH_SIZE)
@@ -1855,7 +2011,7 @@ export class SyncEngine {
 
         for (const entry of dirtyBatch) {
           if (gen !== this.authGeneration || this.disposed) {
-            return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+            return { ok: false, error: cancelledMsg, status: this.getStatus() };
           }
           if (this.disabledOptionalEntityTypes.has(entry.entityType)) {
             this.repo.clearDirtyEntity(entry.entityType, entry.entityId, entry.dirtySeq);
@@ -2015,7 +2171,7 @@ export class SyncEngine {
       await this.syncDeviceRoster(client, userId);
 
       if (gen !== this.authGeneration || this.disposed) {
-        return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+        return { ok: false, error: cancelledMsg, status: this.getStatus() };
       }
 
       const finishedAt = Date.now();
@@ -2027,7 +2183,7 @@ export class SyncEngine {
       }
 
       if (recordErrors.length > 0) {
-        const msg = translateSyncError(recordErrors[0]);
+        const msg = this.formatSyncErr(recordErrors[0]);
         this.lastError = msg;
         this.state = 'error';
         this.emitStatus();
@@ -2056,9 +2212,9 @@ export class SyncEngine {
       };
     } catch (err) {
       if (gen !== this.authGeneration || this.disposed) {
-        return { ok: false, error: 'Синхронизация отменена', status: this.getStatus() };
+        return { ok: false, error: cancelledMsg, status: this.getStatus() };
       }
-      const msg = translateSyncError(err);
+      const msg = this.formatSyncErr(err);
       this.lastError = msg;
       this.state = isNetworkLikeError(err) ? 'offline' : 'error';
       this.emitStatus();
@@ -2252,14 +2408,18 @@ export class SyncEngine {
             throw err;
           }
           throw new Error(
-            'Не удалось прочитать локальный секрет для отправки в облако — синхронизация приостановлена для защиты данных Сейфа'
+            this.isEn
+              ? 'Could not read local Vault secret for sync — sync paused to protect Vault data'
+              : 'Не удалось прочитать локальный секрет для отправки в облако — синхронизация приостановлена для защиты данных Сейфа'
           );
         }
       } else {
         // Keep encrypted secret payload in E2EE envelope during reversible Trash so restore works cross-device.
         // Defer push while Vault is PIN-locked rather than emitting secretPayload: null and wiping cloud data.
         if (this.vaultCrypto.isLocked()) {
-          throw new Error('Сейф заблокирован мастер-кодом');
+          throw new Error(
+            this.isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом'
+          );
         }
         try {
           secretPayload = this.vaultCrypto.decryptSecret(rawRow.encrypted_payload);
@@ -2375,7 +2535,11 @@ export class SyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность синхронизируемого раздела');
+        throw new Error(
+          this.isEn
+            ? 'Corrupted synced section record'
+            : 'Нарушена целостность синхронизируемого раздела'
+        );
       }
       const res = this.repo.applySyncedOrbit(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2390,7 +2554,11 @@ export class SyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность синхронизируемой доски');
+        throw new Error(
+          this.isEn
+            ? 'Corrupted synced board record'
+            : 'Нарушена целостность синхронизируемой доски'
+        );
       }
       const res = this.repo.applySyncedFocusBoard(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2405,7 +2573,11 @@ export class SyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность события календаря');
+        throw new Error(
+          this.isEn
+            ? 'Corrupted synced calendar event'
+            : 'Нарушена целостность события календаря'
+        );
       }
       let blobsDownloaded = 0;
       if (!payload.deletedAt && payload.mediaRefs?.length) {
@@ -2429,7 +2601,11 @@ export class SyncEngine {
         encFields
       );
       if (payload.v !== 1 || payload.id !== row.entity_id) {
-        throw new Error('Нарушена целостность версии заметки');
+        throw new Error(
+          this.isEn
+            ? 'Corrupted synced note version'
+            : 'Нарушена целостность версии заметки'
+        );
       }
       const res = this.repo.applySyncedItemRevision(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2444,7 +2620,11 @@ export class SyncEngine {
         encFields
       );
       if (payload.v !== 1) {
-        throw new Error('Нарушена целостность настроек рабочего пространства');
+        throw new Error(
+          this.isEn
+            ? 'Corrupted workspace preferences payload'
+            : 'Нарушена целостность настроек рабочего пространства'
+        );
       }
       const res = this.repo.applySyncedWorkspacePrefs(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded: 0 };
@@ -2464,7 +2644,11 @@ export class SyncEngine {
       encFields
     );
     if (payload.v !== 1 || payload.id !== row.entity_id) {
-      throw new Error('Нарушена целостность синхронизируемой записи');
+      throw new Error(
+        this.isEn
+          ? 'Corrupted synced item record'
+          : 'Нарушена целостность синхронизируемой записи'
+      );
     }
 
     const isPurged = payload.purgedAt != null;

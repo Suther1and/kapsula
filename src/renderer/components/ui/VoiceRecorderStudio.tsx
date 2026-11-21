@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Microphone, PaperPlaneTilt, Sparkle, Stop, TextT, WarningCircle, X } from '@phosphor-icons/react';
 import type { VoiceDictationResult } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { formatDurationMmSs, friendlyErrorMessage } from '../../lib/format';
 import {
   type LiveVoiceSession,
@@ -34,6 +35,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
   onFallbackSaveAudio,
   onCancel,
 }) => {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<'starting' | 'recording' | 'processing' | 'no_speech_fallback' | 'error'>('starting');
   const [dictateStyle, setDictateStyle] = useState<'smart' | 'raw'>('smart');
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -125,7 +127,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
       })
       .catch((err) => {
         if (!cancelledRef.current) {
-          setErrorText(friendlyErrorMessage(err, 'Не удалось подключиться к микрофону.'));
+          setErrorText(friendlyErrorMessage(err, t('error.microphoneConnect')));
           setPhase('error');
         }
       });
@@ -177,7 +179,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
       setPendingWav(wav);
       setPhase('no_speech_fallback');
     } catch (err) {
-      setErrorText(friendlyErrorMessage(err, 'Не удалось обработать голосовую запись.'));
+      setErrorText(friendlyErrorMessage(err, t('error.voiceProcess')));
       setPhase('error');
     }
   };
@@ -187,14 +189,14 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--k-danger)]/35 bg-[var(--k-danger-soft)] px-3.5 py-2.5 text-[12.5px] text-[var(--k-ink-primary)]">
         <div className="flex items-center gap-2 min-w-0">
           <WarningCircle weight="fill" className="w-4 h-4 text-[var(--k-danger)] shrink-0" />
-          <span className="truncate">{errorText || 'Микрофон недоступен.'}</span>
+          <span className="truncate">{errorText || t('error.microphoneUnavailable')}</span>
         </div>
         <button
           type="button"
           onClick={onCancel}
           className="k-interactive px-2.5 py-1 rounded-lg bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12px] cursor-pointer shrink-0"
         >
-          Закрыть
+          {t('common.close')}
         </button>
       </div>
     );
@@ -206,7 +208,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
         <div className="flex items-center gap-2 min-w-0">
           <Microphone weight="duotone" className="w-4 h-4 text-[var(--k-amber)] shrink-0" />
           <span className="text-[var(--k-ink-primary)]">
-            Речь не распознана (для автоматической расшифровки добавь ключ ИИ в Настройках). Аудио можно сохранить:
+            {t('ui.voice.speechUnrecognized')}
           </span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -216,7 +218,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
               onClick={() => void onFallbackSaveAudio(pendingWav)}
               className="k-interactive px-2.5 py-1 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
             >
-              Сохранить аудио
+              {t('ui.voice.saveAudio')}
             </button>
           ) : null}
           <button
@@ -224,7 +226,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
             onClick={onCancel}
             className="k-interactive px-2.5 py-1 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] text-[12px] cursor-pointer"
           >
-            Отмена
+            {t('common.cancel')}
           </button>
         </div>
       </div>
@@ -250,13 +252,13 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
         </span>
         {phase === 'processing' ? (
           <span className="text-[12.5px] text-[var(--k-ink-primary)] truncate">
-            Сохраняю аудио и расшифровываю…
+            {t('ui.voice.savingAndTranscribing')}
           </span>
         ) : (
           <canvas
             ref={canvasRef}
             className="h-7 flex-1 min-w-[96px] max-w-[260px]"
-            aria-label="Индикатор громкости записи"
+            aria-label={t('ui.voice.volumeAria')}
           />
         )}
       </div>
@@ -274,7 +276,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
               }`}
             >
               <Sparkle weight="fill" className="w-3 h-3" />
-              Умно
+              {t('ui.voice.smart')}
             </button>
             <button
               type="button"
@@ -286,7 +288,7 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
               }`}
             >
               <TextT weight="bold" className="w-3 h-3" />
-              Дословно
+              {t('ui.voice.verbatim')}
             </button>
           </div>
         ) : null}
@@ -306,17 +308,17 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
             )}
             <span>
               {phase === 'processing'
-                ? 'Сохраняю…'
+                ? t('common.saving')
                 : saveAsNewItem || mode !== 'dictate'
-                  ? 'Сохранить'
-                  : 'Готово'}
+                  ? t('common.save')
+                  : t('common.done')}
             </span>
           </button>
 
           <button
             type="button"
             onClick={onCancel}
-            aria-label="Отменить запись"
+            aria-label={t('ui.voice.cancelAria')}
             className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
           >
             <X weight="bold" className="w-3.5 h-3.5" />

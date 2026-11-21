@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
   AiProvider,
+  AppLocale,
   AppearanceConfig,
   CalendarEventInput,
   CaptureInput,
@@ -38,6 +39,7 @@ import type {
   VaultQuery,
   VoiceDictationInput,
 } from '@shared/types';
+import { APP_VERSION } from '@shared/app-version';
 import { computeThemeTokens } from '@shared/color-engine';
 import { normalizeCardExpiry, recoverBankCardExpiry } from '@shared/russian-event-parser';
 import { DEFAULT_MONTHLY_CAP_USD, SECRET_CLIPBOARD_WIPE_MS } from '@shared/constants';
@@ -96,6 +98,7 @@ export interface AppRuntimeServices {
   applyWindowBackground?: () => void;
   refreshReminders?: () => void;
   reapplyShortcuts?: () => void;
+  onLocaleChanged?: (locale: AppLocale) => void;
 }
 
 const PIN_LOCKOUT_TIERS_MS: Array<{ minFails: number; durationMs: number }> = [
@@ -143,27 +146,38 @@ export async function writeConcealedClipboardText(text: string): Promise<void> {
   await clipboard.writeText(text);
 }
 
-export function redactLockedSecretItem(item: VaultItem): VaultItem {
+export function redactLockedSecretItem(item: VaultItem, locale: AppLocale = 'ru'): VaultItem {
   if (item.dna !== 'secret') return item;
+  const isEn = locale === 'en';
   const cleanedTitle = item.title
     .replace(/\s*·?\s*••••\s*\d{2,6}/g, '')
     .replace(/\d{4,}/g, '••••')
     .trim();
   const safeKindLabel =
     item.secretMeta?.kind === 'bank_card'
-      ? 'Банковская карта'
+      ? isEn
+        ? 'Bank card'
+        : 'Банковская карта'
       : item.secretMeta?.kind === 'api_key'
-        ? 'Ключ доступа'
+        ? isEn
+          ? 'Access key'
+          : 'Ключ доступа'
         : item.secretMeta?.kind === 'seed'
-          ? 'Фраза восстановления'
+          ? isEn
+            ? 'Recovery phrase'
+            : 'Фраза восстановления'
           : item.secretMeta?.kind === 'note'
-            ? 'Секретная заметка'
-            : 'Секрет';
+            ? isEn
+              ? 'Secret note'
+              : 'Секретная заметка'
+            : isEn
+              ? 'Secret'
+              : 'Секрет';
   return {
     ...item,
     title: cleanedTitle || safeKindLabel,
     body: '',
-    summary: 'Защищено мастер-кодом',
+    summary: isEn ? 'Protected by master PIN' : 'Защищено мастер-кодом',
     ocrText: '',
     extractedActions: [],
     secretMeta: item.secretMeta
@@ -258,13 +272,17 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return true;
   };
 
+  const getLocale = (): AppLocale => svc.getSettingsState().locale ?? svc.repo.getLocale();
+
   const handleTrusted = <Args extends unknown[], R>(
     channel: string,
     handler: (e: IpcMainInvokeEvent, ...args: Args) => R | Promise<R>
   ) => {
     ipcMain.handle(channel, (event, ...args) => {
       if (!isTrustedEvent(event)) {
-        throw new Error('Недоверенный источник запроса');
+        throw new Error(
+          getLocale() === 'en' ? 'Untrusted request source' : 'Недоверенный источник запроса'
+        );
       }
       return handler(event, ...(args as Args));
     });
@@ -313,12 +331,13 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('vault:query', (_e, q?: VaultQuery) => {
     const s = svc.getSettingsState();
+    const locale = s.locale ?? svc.repo.getLocale();
     const vaultLocked = Boolean(s.hasMasterPin && !s.vaultUnlocked);
     const effectiveQuery: VaultQuery =
       vaultLocked && q?.search?.trim() ? { ...q, includeSecrets: false } : (q ?? {});
     const items = svc.repo.queryItems(effectiveQuery);
     if (!vaultLocked) return items;
-    return items.map((it) => (it.dna === 'secret' ? redactLockedSecretItem(it) : it));
+    return items.map((it) => (it.dna === 'secret' ? redactLockedSecretItem(it, locale) : it));
   });
   handleTrusted('vault:stats', () => svc.repo.getStats());
 
@@ -366,8 +385,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     const existing = svc.repo.getItemById(id);
     if (!existing) return null;
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (existing.dna === 'secret' && s.hasMasterPin && !s.vaultUnlocked) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
     const cleanPatch = sanitizeUpdateItemPatch(patch);
     const effectivePatch: UpdateItemPatch = { ...cleanPatch };
@@ -411,8 +431,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     const existing = svc.repo.getItemById(id, { includeDeleted: true });
     if (!existing) return false;
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (existing.dna === 'secret' && s.hasMasterPin && !s.vaultUnlocked) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
     let ok = false;
     if (existing.deletedAt != null) {
@@ -436,8 +457,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     const existing = svc.repo.getItemById(id, { includeDeleted: true });
     if (!existing) return false;
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (existing.dna === 'secret' && s.hasMasterPin && !s.vaultUnlocked) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
     const res = svc.repo.purgeItemPermanently(id);
     if (res.purged) {
@@ -453,10 +475,15 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('vault:empty-trash', () => {
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (s.hasMasterPin && !s.vaultUnlocked) {
       const trashedSecrets = svc.repo.queryItems({ onlyDeleted: true, dna: 'secret', limit: 1 });
       if (trashedSecrets.length > 0) {
-        throw new Error('Разблокируй Сейф мастер-кодом, чтобы очистить секреты в корзине');
+        throw new Error(
+          isEn
+            ? 'Unlock Vault with master PIN to purge secrets in Trash'
+            : 'Разблокируй Сейф мастер-кодом, чтобы очистить секреты в корзине'
+        );
       }
     }
     const res = svc.repo.emptyTrash();
@@ -489,13 +516,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   handleTrusted('vault:duplicate-item', (_e, id: string) => {
     const src = svc.repo.getItemById(id);
     if (!src || src.dna === 'secret') return null;
+    const isEn = getLocale() === 'en';
     const created = svc.repo.createItem({
       dna: src.dna,
       subKind: src.subKind,
       orbit: src.orbit,
       modeCaptured: src.modeCaptured,
       focusBoardId: src.focusBoardId,
-      title: `${src.title} (копия)`.slice(0, 96),
+      title: `${src.title} ${isEn ? '(copy)' : '(копия)'}`.slice(0, 96),
       body: src.body,
       summary: src.summary,
       url: src.url,
@@ -525,12 +553,13 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   handleTrusted('vault:export-markdown', async (_e, id: string) => {
     const item = svc.repo.getItemById(id);
     if (!item || item.dna === 'secret') return { saved: false, path: null };
-    const safeFileName = (item.title || 'zametka')
+    const isEn = getLocale() === 'en';
+    const safeFileName = (item.title || (isEn ? 'note' : 'zametka'))
       .replace(/[\\/:*?"<>|]+/g, ' ')
       .trim()
-      .slice(0, 60) || 'zametka';
+      .slice(0, 60) || (isEn ? 'note' : 'zametka');
     const saveOpts: Electron.SaveDialogOptions = {
-      title: 'Экспорт заметки в Markdown',
+      title: isEn ? 'Export note as Markdown' : 'Экспорт заметки в Markdown',
       defaultPath: `${safeFileName}.md`,
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     };
@@ -540,8 +569,8 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     if (res.canceled || !res.filePath) return { saved: false, path: null };
     const md = [
       `# ${item.title}`,
-      item.tags.length > 0 ? `*Теги: ${item.tags.map((t) => `#${t}`).join(' ')}*` : '',
-      item.url ? `Источник: ${item.url}` : '',
+      item.tags.length > 0 ? `*${isEn ? 'Tags' : 'Теги'}: ${item.tags.map((t) => `#${t}`).join(' ')}*` : '',
+      item.url ? `${isEn ? 'Source' : 'Источник'}: ${item.url}` : '',
       '',
       item.body || item.summary || '',
     ]
@@ -592,8 +621,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   // Secrets & PIN
   handleTrusted('secret:reveal', (_e, id: string) => {
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (s.hasMasterPin && !s.vaultUnlocked) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
     const item = svc.repo.getItemById(id);
     const rawEnc = svc.repo.getRawEncryptedPayload(id);
@@ -738,14 +768,18 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   const handleSaveStructuredSecret = (input: StructuredSecretInput) => {
     const s = svc.getSettingsState();
+    const locale = s.locale ?? svc.repo.getLocale();
+    const isEn = locale === 'en';
     if ((input.id || svc.cryptoVault.isLocked()) && s.hasMasterPin && !s.vaultUnlocked) {
-      throw new Error('Сейф заблокирован мастер-кодом');
+      throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
-    const cleanService = (input.service || '').trim() || 'Личный сейф';
+    const cleanService = (input.service || '').trim() || (isEn ? 'Personal Vault' : 'Личный сейф');
     const rawValue = (input.secretValue || '').trim();
     const digits = rawValue.replace(/\D/g, '');
     const isCard = input.kind === 'bank_card';
-    const cardBrand = isCard ? detectCardBrand(digits) || 'Банковская карта' : undefined;
+    const cardBrand = isCard
+      ? detectCardBrand(digits, locale) || (isEn ? 'Bank card' : 'Банковская карта')
+      : undefined;
     const last4 = isCard && digits.length >= 4 ? digits.slice(-4) : undefined;
     const formattedValue = isCard && digits.length >= 12 ? formatCardDigits(digits) : rawValue;
     const normalizedExpiry = isCard ? normalizeCardExpiry(input.expiry) || input.expiry?.trim() || undefined : undefined;
@@ -783,7 +817,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       const parsedTotp = parseOtpAuthUri(input.totpUriOrSecret);
       if (!parsedTotp) {
         throw new Error(
-          'Не удалось распознать ключ 2FA — вставь секретный ключ целиком или ссылку из приложения-аутентификатора'
+          isEn
+            ? 'Could not recognize 2FA key — paste the full secret key or authenticator link'
+            : 'Не удалось распознать ключ 2FA — вставь секретный ключ целиком или ссылку из приложения-аутентификатора'
         );
       }
       totpFields = {
@@ -806,7 +842,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       loginHint: isCard
         ? last4
           ? `•••• ${last4}`
-          : 'Карта'
+          : isEn
+            ? 'Card'
+            : 'Карта'
         : maskLoginHint(input.login || input.cardHolder || '') ||
           (input.kind === 'api_key'
             ? rawValue.length > 8
@@ -854,18 +892,32 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
     const finalTitle =
       input.title?.trim() ||
-      (isCard ? `${cleanService}${last4 ? ` · •••• ${last4}` : ''}` : `${cleanService} · Доступ`);
+      (isCard
+        ? `${cleanService}${last4 ? ` · •••• ${last4}` : ''}`
+        : `${cleanService} · ${isEn ? 'Access' : 'Доступ'}`);
     const summaryLabel = isCard
       ? cardBrand && cardBrand !== 'Card'
-        ? `Банковская карта (${cardBrand}) · скрыта в Сейфе`
-        : 'Банковская карта · скрыта в Сейфе'
+        ? isEn
+          ? `Bank card (${cardBrand}) · hidden in Vault`
+          : `Банковская карта (${cardBrand}) · скрыта в Сейфе`
+        : isEn
+          ? 'Bank card · hidden in Vault'
+          : 'Банковская карта · скрыта в Сейфе'
       : input.kind === 'api_key'
-        ? 'Ключ доступа · скрыт в Сейфе'
+        ? isEn
+          ? 'Access key · hidden in Vault'
+          : 'Ключ доступа · скрыт в Сейфе'
         : input.kind === 'seed'
-          ? 'Фраза восстановления · скрыта в Сейфе'
+          ? isEn
+            ? 'Recovery phrase · hidden in Vault'
+            : 'Фраза восстановления · скрыта в Сейфе'
           : input.kind === 'note'
-            ? 'Секретная заметка · скрыта в Сейфе'
-            : 'Логин и пароль · скрыты в Сейфе';
+            ? isEn
+              ? 'Secret note · hidden in Vault'
+              : 'Секретная заметка · скрыта в Сейфе'
+            : isEn
+              ? 'Login & password · hidden in Vault'
+              : 'Логин и пароль · скрыты в Сейфе';
 
     if (input.id) {
       const updated = svc.repo.updateItem(input.id, {
@@ -899,7 +951,12 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       summary: summaryLabel,
       encryptedPayload: encrypted,
       secretMeta,
-      tags: input.tags && input.tags.length > 0 ? input.tags : ['сейф', isCard ? 'карта' : 'доступ'],
+      tags:
+        input.tags && input.tags.length > 0
+          ? input.tags
+          : isEn
+            ? ['vault', isCard ? 'card' : 'access']
+            : ['сейф', isCard ? 'карта' : 'доступ'],
       source: 'vault_ui',
       contentHash,
       aiStatus: 'skipped_secret',
@@ -913,14 +970,23 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     handleSaveStructuredSecret(input)
   );
   handleTrusted('secret:update-structured', (_e, input: StructuredSecretInput) => {
-    if (!input?.id) throw new Error('Не указан идентификатор записи Сейфа');
+    if (!input?.id) {
+      throw new Error(
+        getLocale() === 'en' ? 'Vault item ID is missing' : 'Не указан идентификатор записи Сейфа'
+      );
+    }
     return handleSaveStructuredSecret(input);
   });
 
   handleTrusted('secret:set-pin', (_e, pin: string | null) => {
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if ((s.hasMasterPin || svc.cryptoVault.isPinProtected()) && !s.vaultUnlocked) {
-      throw new Error('Сначала разблокируй Сейф текущим мастер-кодом');
+      throw new Error(
+        isEn
+          ? 'Unlock Vault with your current master PIN first'
+          : 'Сначала разблокируй Сейф текущим мастер-кодом'
+      );
     }
     if (pin === null || pin === '') {
       svc.cryptoVault.removePinProtection();
@@ -930,7 +996,11 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       svc.setVaultUnlocked(true);
     } else {
       if (typeof pin !== 'string' || pin.trim().length < 4) {
-        throw new Error('Мастер-код должен содержать минимум 4 символа');
+        throw new Error(
+          isEn
+            ? 'Master PIN must be at least 4 characters'
+            : 'Мастер-код должен содержать минимум 4 символа'
+        );
       }
       const cleanPin = pin.trim();
       // Eagerly migrate any legacy VDK-encrypted GCal tokens to configKey before wrapping VDK with PIN
@@ -961,9 +1031,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
 
     const { attempts, lockedUntil } = getPersistedPinLockState();
+    const isEn = getLocale() === 'en';
     if (Date.now() < lockedUntil) {
       const waitSec = Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000));
-      throw new Error(`Слишком много неверных попыток. Подожди ${waitSec} с`);
+      throw new Error(
+        isEn
+          ? `Too many failed attempts. Wait ${waitSec}s`
+          : `Слишком много неверных попыток. Подожди ${waitSec} с`
+      );
     }
 
     let ok = false;
@@ -1002,8 +1077,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       emitSettings();
       const waitSec = Math.ceil(lockoutMs / 1000);
       const waitLabel =
-        waitSec >= 60 ? `${Math.ceil(waitSec / 60)} мин` : `${waitSec} с`;
-      throw new Error(`Слишком много неверных попыток. Подожди ${waitLabel}`);
+        waitSec >= 60
+          ? `${Math.ceil(waitSec / 60)} ${isEn ? 'min' : 'мин'}`
+          : `${waitSec} ${isEn ? 's' : 'с'}`;
+      throw new Error(
+        isEn
+          ? `Too many failed attempts. Wait ${waitLabel}`
+          : `Слишком много неверных попыток. Подожди ${waitLabel}`
+      );
     }
     return false;
   });
@@ -1016,30 +1097,56 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('vault:biometric-unlock', async () => {
     const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
     if (!s.hasMasterPin && !svc.cryptoVault.isPinProtected()) {
       return { ok: true };
     }
     if (process.platform !== 'darwin') {
-      return { ok: false, error: 'Биометрическая разблокировка доступна на macOS (Touch ID)' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Biometric unlock is available on macOS (Touch ID)'
+          : 'Биометрическая разблокировка доступна на macOS (Touch ID)',
+      };
     }
     const canTouchId = Boolean(
       typeof systemPreferences?.canPromptTouchID === 'function' &&
         systemPreferences.canPromptTouchID()
     );
     if (!canTouchId) {
-      return { ok: false, error: 'Touch ID недоступен на этом устройстве' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Touch ID is unavailable on this device'
+          : 'Touch ID недоступен на этом устройстве',
+      };
     }
     if (!svc.cryptoVault.hasBiometricSlot()) {
-      return { ok: false, error: 'Включи вход по Touch ID в настройках Сейфа после ввода мастер-кода' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Enable Touch ID unlock in Vault settings after entering master PIN'
+          : 'Включи вход по Touch ID в настройках Сейфа после ввода мастер-кода',
+      };
     }
     try {
-      await systemPreferences.promptTouchID('Открыть Сейф Kapsula');
+      await systemPreferences.promptTouchID(
+        isEn ? 'Unlock Kapsula Vault' : 'Открыть Сейф Kapsula'
+      );
     } catch {
-      return { ok: false, error: 'Проверка Touch ID отменена' };
+      return {
+        ok: false,
+        error: isEn ? 'Touch ID verification canceled' : 'Проверка Touch ID отменена',
+      };
     }
     const unwrapped = svc.cryptoVault.unlockWithBiometric();
     if (!unwrapped) {
-      return { ok: false, error: 'Не удалось расшифровать ключ Сейфа — введи мастер-код' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Could not decrypt Vault key — enter master PIN'
+          : 'Не удалось расшифровать ключ Сейфа — введи мастер-код',
+      };
     }
     resetPersistedPinLockState();
     svc.setVaultUnlocked(true);
@@ -1157,16 +1264,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       cloudProxy: getCloudProxy(),
       hasGoogleKey: Boolean(svc.getApiKeyForProvider('google_ai_studio')),
       hasOpenRouterKey: Boolean(svc.getApiKeyForProvider('openrouter')),
+      locale: getLocale(),
     });
   });
 
   handleTrusted('ai:transform-text', async (_e, input: TextTransformInput) => {
     const text = typeof input?.text === 'string' ? input.text : '';
     const preset = input?.preset ?? 'structure';
+    const locale = getLocale();
     if (typeof input?.itemId === 'string' && input.itemId) {
       const existing = svc.repo.getItemById(input.itemId);
       if (existing?.dna === 'secret') {
-        throw new Error('Записи Сейфа не отправляются в ИИ-обработку');
+        throw new Error(
+          locale === 'en'
+            ? 'Vault items are never sent to AI processing'
+            : 'Записи Сейфа не отправляются в ИИ-обработку'
+        );
       }
       if (existing && text.trim()) {
         svc.repo.saveItemRevision({
@@ -1188,6 +1301,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       cloudProxy: getCloudProxy(),
       capUsd: s.monthlyCapUsd,
       repo: svc.repo,
+      locale,
     });
   });
 
@@ -1203,12 +1317,17 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         .filter((it): it is NonNullable<typeof it> => Boolean(it) && it!.dna !== 'secret');
 
       const s = svc.getSettingsState();
+      const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
       const preview =
         typeof input?.overrideBody === 'string' && input.overrideBody.trim()
           ? {
-              title: input.overrideTitle?.trim() || `Сводка (${sourceItems.length})`,
+              title:
+                input.overrideTitle?.trim() ||
+                (isEn ? `Summary (${sourceItems.length})` : `Сводка (${sourceItems.length})`),
               body: input.overrideBody.trim(),
-              summary: `Сведено из ${sourceItems.length} записей`,
+              summary: isEn
+                ? `Synthesized from ${sourceItems.length} notes`
+                : `Сведено из ${sourceItems.length} записей`,
               tags: Array.from(new Set(sourceItems.flatMap((i) => i.tags))).slice(0, 5),
               orbit: input.orbit ?? sourceItems.find((i) => i.orbit)?.orbit ?? '',
               usedCloud: true,
@@ -1560,6 +1679,10 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       svc.repo.setSetting('theme', patch.theme);
       appearanceOrThemeChanged = true;
     }
+    if (patch.locale === 'ru' || patch.locale === 'en') {
+      svc.repo.setLocale(patch.locale);
+      svc.onLocaleChanged?.(patch.locale);
+    }
     if (patch.appearance && typeof patch.appearance === 'object') {
       svc.repo.saveAppearanceConfig(patch.appearance as Partial<AppearanceConfig>);
       appearanceOrThemeChanged = true;
@@ -1630,16 +1753,23 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
     if (typeof patch.biometricUnlockEnabled === 'boolean') {
       const curState = svc.getSettingsState();
+      const isEn = (curState.locale ?? svc.repo.getLocale()) === 'en';
       if (patch.biometricUnlockEnabled) {
         const touchIdAvailable =
           process.platform === 'darwin' &&
           typeof systemPreferences.canPromptTouchID === 'function' &&
           Boolean(systemPreferences.canPromptTouchID());
         if (!touchIdAvailable) {
-          throw new Error('Вход по Touch ID доступен только на Mac с поддержкой Touch ID');
+          throw new Error(
+            isEn
+              ? 'Touch ID unlock is only available on a Mac with Touch ID'
+              : 'Вход по Touch ID доступен только на Mac с поддержкой Touch ID'
+          );
         }
         if (curState.hasMasterPin && !curState.vaultUnlocked) {
-          throw new Error('Сначала разблокируй Сейф мастер-кодом');
+          throw new Error(
+            isEn ? 'Unlock Vault with master PIN first' : 'Сначала разблокируй Сейф мастер-кодом'
+          );
         }
         const enabledOk = svc.cryptoVault.setBiometricSlotEnabled(true);
         svc.repo.setSetting('biometric_unlock_enabled', enabledOk ? 'true' : 'false');
@@ -1651,7 +1781,11 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     if (typeof patch.emailInboundWebhookUrl === 'string') {
       const trimmedHook = patch.emailInboundWebhookUrl.trim();
       if (trimmedHook && !/^https:\/\//i.test(trimmedHook)) {
-        throw new Error('Адрес обработчика должен начинаться с https://');
+        throw new Error(
+          getLocale() === 'en'
+            ? 'Webhook URL must start with https://'
+            : 'Адрес обработчика должен начинаться с https://'
+        );
       }
       svc.repo.setSetting('email_inbound_webhook_url', trimmedHook);
     }
@@ -1673,6 +1807,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
     let shortcutsChanged = false;
     const currentSettings = svc.getSettingsState();
+    const isEnShortcut = (currentSettings.locale ?? svc.repo.getLocale()) === 'en';
     const nextHudShortcut =
       typeof patch.hudShortcut === 'string'
         ? normalizeShortcutAccelerator(patch.hudShortcut, process.platform)
@@ -1682,23 +1817,46 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         ? normalizeShortcutAccelerator(patch.snatchShortcut, process.platform)
         : currentSettings.snatchShortcut;
 
-    const modHint = process.platform === 'darwin' ? 'Cmd, Option или Shift' : 'Ctrl, Alt или Shift';
+    const modHint =
+      process.platform === 'darwin'
+        ? isEnShortcut
+          ? 'Cmd, Option, or Shift'
+          : 'Cmd, Option или Shift'
+        : isEnShortcut
+          ? 'Ctrl, Alt, or Shift'
+          : 'Ctrl, Alt или Shift';
     if (typeof patch.hudShortcut === 'string') {
       if (!nextHudShortcut) {
-        throw new Error(`Укажи сочетание с клавишей-модификатором (${modHint})`);
+        throw new Error(
+          isEnShortcut
+            ? `Specify a shortcut with a modifier key (${modHint})`
+            : `Укажи сочетание с клавишей-модификатором (${modHint})`
+        );
       }
       if (nextHudShortcut === nextSnatchShortcut) {
-        throw new Error('Сочетания для быстрого запуска и захвата буфера не могут совпадать');
+        throw new Error(
+          isEnShortcut
+            ? 'Quick launch and clipboard capture shortcuts cannot be the same'
+            : 'Сочетания для быстрого запуска и захвата буфера не могут совпадать'
+        );
       }
       svc.repo.setSetting('hud_shortcut', nextHudShortcut);
       shortcutsChanged = true;
     }
     if (typeof patch.snatchShortcut === 'string') {
       if (!nextSnatchShortcut) {
-        throw new Error(`Укажи сочетание с клавишей-модификатором (${modHint})`);
+        throw new Error(
+          isEnShortcut
+            ? `Specify a shortcut with a modifier key (${modHint})`
+            : `Укажи сочетание с клавишей-модификатором (${modHint})`
+        );
       }
       if (nextHudShortcut === nextSnatchShortcut) {
-        throw new Error('Сочетания для быстрого запуска и захвата буфера не могут совпадать');
+        throw new Error(
+          isEnShortcut
+            ? 'Quick launch and clipboard capture shortcuts cannot be the same'
+            : 'Сочетания для быстрого запуска и захвата буфера не могут совпадать'
+        );
       }
       svc.repo.setSetting('snatch_shortcut', nextSnatchShortcut);
       shortcutsChanged = true;
@@ -1743,6 +1901,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         provider,
         apiKey: effectiveKey,
         cloudProxy: effectiveKey ? null : getCloudProxy(),
+        locale: getLocale(),
       });
     }
   );
@@ -1787,9 +1946,11 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   });
   handleTrusted('calendar:import-ics', async (_e, icsText?: string) => {
     let raw = typeof icsText === 'string' ? icsText : '';
+    const locale = getLocale();
+    const isEn = locale === 'en';
     if (!raw) {
       const openOpts: Electron.OpenDialogOptions = {
-        title: 'Импорт календаря (.ics)',
+        title: isEn ? 'Import calendar (.ics)' : 'Импорт календаря (.ics)',
         properties: ['openFile'],
         filters: [{ name: 'iCalendar', extensions: ['ics'] }],
       };
@@ -1799,7 +1960,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       if (pick.canceled || !pick.filePaths[0]) return { imported: 0 };
       raw = await fs.promises.readFile(pick.filePaths[0], 'utf8');
     }
-    const parsed = parseIcalFeed(raw);
+    const parsed = parseIcalFeed(raw, locale);
     for (const ev of parsed) {
       svc.repo.upsertCalendarEvent({
         ...ev,
@@ -1812,8 +1973,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   });
   handleTrusted('calendar:export-ics', async () => {
     const events = svc.repo.listCalendarEvents();
+    const isEn = getLocale() === 'en';
     const saveOpts: Electron.SaveDialogOptions = {
-      title: 'Экспорт календаря (.ics)',
+      title: isEn ? 'Export calendar (.ics)' : 'Экспорт календаря (.ics)',
       defaultPath: 'kapsula-calendar.ics',
       filters: [{ name: 'iCalendar', extensions: ['ics'] }],
     };
@@ -1826,7 +1988,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return { exported: events.length, path: pick.filePath };
   });
   handleTrusted('calendar:parse-date', (_e, rawText: string) =>
-    parseRussianDateExpression(rawText)
+    parseRussianDateExpression(rawText, undefined, getLocale())
   );
 
   // Universal Archive Import & Browser Extension
@@ -1836,10 +1998,11 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return res;
   });
   handleTrusted('bridges:pick-archive-file', async () => {
+    const isEn = getLocale() === 'en';
     const openOpts: Electron.OpenDialogOptions = {
-      title: 'Выбери архив заметок (JSON / HTML)',
+      title: isEn ? 'Choose notes archive (JSON / HTML)' : 'Выбери архив заметок (JSON / HTML)',
       properties: ['openFile'],
-      filters: [{ name: 'Архивы заметок', extensions: ['json', 'html', 'htm'] }],
+      filters: [{ name: isEn ? 'Note archives' : 'Архивы заметок', extensions: ['json', 'html', 'htm'] }],
     };
     const pick = svc.windows.vault
       ? await dialog.showOpenDialog(svc.windows.vault, openOpts)
@@ -1906,10 +2069,11 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('vault:export-backup', async () => {
     const stamp = new Date().toISOString().slice(0, 10);
+    const isEn = getLocale() === 'en';
     const saveOpts: Electron.SaveDialogOptions = {
-      title: 'Сохранить резервную копию Kapsula',
+      title: isEn ? 'Save Kapsula backup' : 'Сохранить резервную копию Kapsula',
       defaultPath: path.join(app.getPath('documents'), `kapsula-backup-${stamp}.json`),
-      filters: [{ name: 'Резервная копия Kapsula', extensions: ['json'] }],
+      filters: [{ name: isEn ? 'Kapsula backup' : 'Резервная копия Kapsula', extensions: ['json'] }],
     };
     const pick = svc.windows.vault
       ? await dialog.showSaveDialog(svc.windows.vault, saveOpts)
@@ -1951,6 +2115,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   // System Screen Capture
   handleTrusted('system:capture-screen', async (_e, opts?: { reopenHud?: boolean }) => {
+    const isEn = getLocale() === 'en';
     const wasHudVisible = Boolean(svc.windows.hud?.isVisible());
     if (wasHudVisible) {
       svc.windows.hideHud();
@@ -1967,18 +2132,25 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
           const status = systemPreferences.getMediaAccessStatus('screen');
           if (status !== 'granted') {
             throw new Error(
-              'Нет доступа к записи экрана. Разреши Kapsula в «Системные настройки → Конфиденциальность и безопасность → Запись экрана» и перезапусти приложение.'
+              isEn
+                ? 'Screen Recording permission is required. Allow Kapsula in System Settings → Privacy & Security → Screen Recording and restart the app.'
+                : 'Нет доступа к записи экрана. Разреши Kapsula в «Системные настройки → Конфиденциальность и безопасность → Запись экрана» и перезапусти приложение.'
             );
           }
         } catch (err) {
-          if (err instanceof Error && err.message.includes('Системные настройки')) {
+          if (
+            err instanceof Error &&
+            (err.message.includes('Системные настройки') || err.message.includes('System Settings'))
+          ) {
             throw err;
           }
         }
       }
       const first = sources[0];
       if (!first || first.thumbnail.isEmpty()) {
-        throw new Error('Не удалось получить снимок экрана.');
+        throw new Error(
+          isEn ? 'Could not capture screenshot.' : 'Не удалось получить снимок экрана.'
+        );
       }
       const pngBuf = first.thumbnail.toPNG();
       const s = svc.getSettingsState();
@@ -2125,25 +2297,30 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   });
 
   // Cloud E2EE Sync (Supabase)
+  const syncNotReadyErr = () =>
+    getLocale() === 'en'
+      ? 'Sync module is not initialized'
+      : 'Модуль синхронизации не инициализирован';
+
   handleTrusted('sync:status', () => {
     if (!svc.syncEngine) {
-      throw new Error('Модуль синхронизации не инициализирован');
+      throw new Error(syncNotReadyErr());
     }
     return svc.syncEngine.getStatus();
   });
 
   handleTrusted('sync:sign-up', async (_e, input: SyncAuthInput) => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.signUp(String(input?.email ?? ''), String(input?.password ?? ''));
   });
 
   handleTrusted('sync:sign-in', async (_e, input: SyncAuthInput) => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.signIn(String(input?.email ?? ''), String(input?.password ?? ''));
   });
 
   handleTrusted('sync:sign-in-google', async () => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     const res = await svc.syncEngine.signInWithGoogle({
       openExternal: (url) => shell.openExternal(url),
     });
@@ -2155,24 +2332,24 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   });
 
   handleTrusted('sync:sign-out', async () => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.signOut();
   });
 
   handleTrusted('sync:setup-passphrase', async (_e, passphrase: string) => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.setupPassphrase(String(passphrase ?? ''));
   });
 
   handleTrusted('sync:unlock-passphrase', async (_e, passphrase: string) => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.unlockWithPassphrase(String(passphrase ?? ''));
   });
 
   handleTrusted(
     'sync:unlock-recovery',
     async (_e, payload: { recoveryKey: string; newPassphrase?: string }) => {
-      if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+      if (!svc.syncEngine) throw new Error(syncNotReadyErr());
       return svc.syncEngine.unlockWithRecoveryKey(
         String(payload?.recoveryKey ?? ''),
         typeof payload?.newPassphrase === 'string' ? payload.newPassphrase : undefined
@@ -2183,7 +2360,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   handleTrusted(
     'sync:change-passphrase',
     async (_e, payload: { currentPassphrase: string; newPassphrase: string }) => {
-      if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+      if (!svc.syncEngine) throw new Error(syncNotReadyErr());
       return svc.syncEngine.changePassphrase(
         String(payload?.currentPassphrase ?? ''),
         String(payload?.newPassphrase ?? '')
@@ -2192,22 +2369,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   );
 
   handleTrusted('sync:now', async () => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.syncNow();
   });
 
   handleTrusted('sync:reconcile-full', async () => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.reconcileFull();
   });
 
   handleTrusted('sync:set-server-config', async (_e, input: SyncServerConfigInput | null) => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.setServerConfig(input);
   });
 
   handleTrusted('sync:regenerate-recovery', async () => {
-    if (!svc.syncEngine) throw new Error('Модуль синхронизации не инициализирован');
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
     return svc.syncEngine.regenerateRecoveryKey();
   });
 
@@ -2230,7 +2407,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         try {
           return app.getVersion();
         } catch {
-          return '1.0.1';
+          return APP_VERSION;
         }
       })(),
       mode: 'manual-download' as const,
@@ -2261,7 +2438,10 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         status: 'error' as const,
         currentVersion: app.getVersion(),
         mode: 'manual-download' as const,
-        error: 'Модуль обновлений не инициализирован',
+        error:
+          getLocale() === 'en'
+            ? 'Updater module is not initialized'
+            : 'Модуль обновлений не инициализирован',
       };
     }
     return svc.updater.downloadUpdate();
@@ -2280,6 +2460,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   // Safe, 100%-redacted diagnostics report
   handleTrusted('diagnostics:get-report', async () => {
     const s = svc.getSettingsState();
+    const locale = s.locale ?? svc.repo.getLocale();
     const stats = svc.repo.getStats();
     const orbitsCount = svc.repo.listOrbits().length;
     const boardsCount = svc.repo.listFocusBoards().length;
@@ -2291,13 +2472,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       cloudProxy: getCloudProxy(),
       hasGoogleKey: s.hasGoogleAiKey,
       hasOpenRouterKey: s.hasOpenRouterKey,
+      locale,
     }).catch(() => null);
 
     const appVersion = (() => {
       try {
         return app.getVersion();
       } catch {
-        return '1.0.1';
+        return APP_VERSION;
       }
     })();
 
@@ -2312,6 +2494,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       cloudQuota,
       updaterState,
       extraErrors: [calStatus.error],
+      locale,
     });
   });
 

@@ -50,6 +50,7 @@ import type {
   VaultTaskEntry,
 } from '@shared/types';
 import { decodeHtmlEntities } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { isMacPlatform } from '@shared/shortcuts';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
@@ -159,6 +160,7 @@ function parseMiniPreviewLines(raw: string, maxLines = 3): MiniPreviewLine[] {
 }
 
 const CompactStructuredPreview: React.FC<{ item: VaultItem }> = ({ item }) => {
+  const { t } = useI18n();
   const lines = useMemo(
     () => parseMiniPreviewLines(item.body || item.summary || item.url || '', 3),
     [item.body, item.summary, item.url]
@@ -173,7 +175,7 @@ const CompactStructuredPreview: React.FC<{ item: VaultItem }> = ({ item }) => {
       return (
         <div className="inline-flex items-center gap-1 text-[11px] text-[var(--k-ink-muted)]">
           <ImageSquare className="w-3 h-3" />
-          <span>{inlineImageCount > 1 ? `Фото (${inlineImageCount})` : 'Изображение'}</span>
+          <span>{inlineImageCount > 1 ? t('hud.photosCount', { count: inlineImageCount }) : t('dna.image')}</span>
         </div>
       );
     }
@@ -251,6 +253,7 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
   wipeSeconds,
   onLocked,
 }) => {
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<TotpCodeSnapshot | null>(null);
   const [copiedJustNow, setCopiedJustNow] = useState(false);
 
@@ -302,12 +305,12 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
         setCopiedJustNow(true);
         const w = r.wipeSeconds ?? wipeSeconds;
         toast.success(
-          w > 0 ? `2FA-код скопирован · очистится через ${w} с` : '2FA-код скопирован'
+          w > 0 ? t('vault.totpCopiedWipe', { seconds: w }) : t('vault.totpCopied')
         );
         window.setTimeout(() => setCopiedJustNow(false), 1600);
       }
     } catch {
-      toast.error('Не удалось скопировать 2FA-код');
+      toast.error(t('vault.totpCopyError'));
     }
   };
 
@@ -318,7 +321,7 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
       type="button"
       data-testid="hud-totp-copy-btn"
       onClick={(e) => void handleCopyTotp(e)}
-      title="Скопировать одноразовый 2FA-код"
+      title={t('vault.totpTitle')}
       className={`k-interactive k-mono k-tabular h-[28px] px-2.5 rounded-lg border text-[11.5px] font-medium inline-flex items-center gap-1.5 shrink-0 cursor-pointer select-none ${
         copiedJustNow
           ? 'bg-[var(--k-emerald-soft)] border-[var(--k-emerald)]/40 text-[var(--k-emerald)]'
@@ -328,7 +331,7 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
       {copiedJustNow ? (
         <>
           <Check weight="bold" className="w-3.5 h-3.5 shrink-0" />
-          <span>Готово</span>
+          <span>{t('common.done')}</span>
         </>
       ) : unlocked && snapshot ? (
         <>
@@ -342,11 +345,11 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
                 : 'bg-[var(--k-bg-surface-1)]/80 text-[var(--k-ink-secondary)]'
             }`}
           >
-            {snapshot.remainingSec} с
+            {snapshot.remainingSec} {t('common.secUnit')}
           </span>
         </>
       ) : (
-        <span>2FA-код</span>
+        <span>{t('vault.totpLabel')}</span>
       )}
     </button>
   );
@@ -358,8 +361,15 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   settings,
   onSettingsUpdated,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const prefersReduced = useReducedMotion();
   const isMac = isMacPlatform(window.kapsula?.platform);
+  const fallbackNoteTitleRef = useRef(t('dna.note'));
+  fallbackNoteTitleRef.current = t('dna.note');
+  const hudPlaceholderRef = useRef(isMac ? t('hud.pastedMac') : t('hud.pastedWin'));
+  hudPlaceholderRef.current = isMac ? t('hud.pastedMac') : t('hud.pastedWin');
 
   useEffect(() => {
     hydrateAppearanceFromSettings(settings.appearance, settings.theme);
@@ -473,7 +483,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     const fallbackTitle =
       itemsRef.current.find((i) => i.id === targetId)?.title ||
       allItemsRef.current.find((i) => i.id === targetId)?.title ||
-      'Заметка';
+      fallbackNoteTitleRef.current;
 
     try {
       const updated = await window.kapsula.updateItem(targetId, {
@@ -527,7 +537,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     if (!cur) return;
     setHudLightboxItem({
       ...cur,
-      title: info.alt || cur.title || 'Изображение',
+      title: info.alt || cur.title || tRef.current('dna.image'),
       summary: info.alt ? cur.title : '',
       imagePath: info.localFilename,
       thumbPath: info.localFilename,
@@ -544,7 +554,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       (targetId ? allItemsRef.current.find((c) => c.id === targetId) : undefined) ??
       allItemsRef.current.find((c) => c.title.trim().toLowerCase() === lower);
     if (!target) {
-      toast.info(`Заметка «${linkTitle}» не найдена`);
+      toast.info(tRef.current('note.studio.notFoundLink', { title: linkTitle }));
       return;
     }
     void flushHudEditorSaveRef.current();
@@ -579,9 +589,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       Typography,
       Highlight,
       Placeholder.configure({
-        placeholder: isMac
-          ? 'Начни писать, отмечай чекбоксы или вставь фото (⌘V)…'
-          : 'Начни писать, отмечай чекбоксы или вставь фото (Ctrl+V)…',
+        placeholder: () => hudPlaceholderRef.current,
       }),
       KapsulaImage.configure({
         compact: true,
@@ -653,9 +661,19 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       onAfterSave: () => setHudInsertingImage(false),
     });
     if (count > 0) {
-      toast.success(count === 1 ? 'Фото вставлено' : `Вставлено фото: ${count}`);
+      toast.success(
+        count === 1
+          ? tRef.current('hud.photoAddedOne')
+          : tRef.current('hud.photoAddedMany', { count })
+      );
     }
   };
+
+  useEffect(() => {
+    if (hudEditor && !hudEditor.isDestroyed) {
+      hudEditor.view.dispatch(hudEditor.state.tr);
+    }
+  }, [hudEditor, locale]);
 
   const hudToolbarState = useEditorState({
     editor: hudEditor,
@@ -844,9 +862,9 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     if (clean.length < 5 || /^https?:\/\/\S+$/i.test(clean) || dismissedEventText === clean) {
       return null;
     }
-    const parsed = parseRussianEvent(clean);
+    const parsed = parseRussianEvent(clean, Date.now(), undefined, locale);
     return parsed?.isEventIntent ? parsed : null;
-  }, [draftText, dismissedEventText]);
+  }, [draftText, dismissedEventText, locale]);
 
   // Engage screen protection ONLY when HUD is viewing Vault tab or a secret in Search tab
   useEffect(() => {
@@ -875,11 +893,9 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     const payload = target.url || latestBody || latestTitle;
     const pasted = await window.kapsula.pasteBackFromHud(payload, false);
     if (!pasted && isMacPlatform(window.kapsula?.platform)) {
-      toast.info(
-        'Скопировано в буфер. Для автовставки разреши Kapsula в «Системные настройки → Универсальный доступ».'
-      );
+      toast.info(t('hud.accessibilityHint'));
     }
-  }, []);
+  }, [t]);
 
   // Crisp Focus State Machine & Global HUD Shortcuts
   useEffect(() => {
@@ -968,8 +984,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
             if (res.ok) {
               toast.success(
                 res.wipeSeconds > 0
-                  ? `Скопировано · очистится через ${res.wipeSeconds} с`
-                  : 'Скопировано'
+                  ? t('hud.copiedWipe', { seconds: res.wipeSeconds })
+                  : t('common.copied')
               );
               void window.kapsula.closeHud();
             }
@@ -1021,7 +1037,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       const res = await transcribeItemWithWavFallback(target);
       if (!res.ok) {
         toast.error(
-          res.error || 'Не удалось расшифровать запись. Проверь настройки ИИ.'
+          res.error || t('cards.transcribeFailed')
         );
         return;
       }
@@ -1040,9 +1056,9 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         dirtyItemIdRef.current = null;
         setEditorSaveState('saved');
       }
-      toast.success('Голосовая заметка расшифрована');
+      toast.success(t('cards.transcribed'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось расшифровать запись.'));
+      toast.error(friendlyErrorMessage(err, t('cards.transcribeFailed'), locale));
     } finally {
       setHudTranscribingId(null);
     }
@@ -1124,7 +1140,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       ) {
         merged.push({
           id: `rem-${item.id}`,
-          title: item.title || 'Напоминание',
+          title: item.title || t('cal.kind.reminder'),
           color: 'var(--k-amber)',
           startAt: item.remindAt,
           allDay: false,
@@ -1158,12 +1174,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       setDismissedEventText(null);
       toast.success(
         activeParsedEvent && !isUrlOnly && !isDismissed && item.dna !== 'secret'
-          ? 'Сохранено и добавлено в Календарь'
-          : 'Сохранено в Kapsula'
+          ? t('hud.savedWithCalendar')
+          : t('hud.savedToKapsula')
       );
       await loadHudData(search);
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить запись.'));
+      toast.error(friendlyErrorMessage(err, t('composer.saveFailed'), locale));
     } finally {
       setSavingCapture(false);
     }
@@ -1178,15 +1194,15 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       const ok = await window.kapsula.unlockVaultPin(pinInput.trim());
       if (ok) {
         setPinInput('');
-        toast.success('Сейф разблокирован');
+        toast.success(t('pin.unlockedHud'));
         const fresh = await window.kapsula.getSettings();
         onSettingsUpdated(fresh);
         void loadHudData(searchRef.current);
       } else {
-        setPinError('Неверный мастер-код.');
+        setPinError(t('pin.wrongDot'));
       }
     } catch (err) {
-      setPinError(friendlyErrorMessage(err, 'Не удалось проверить мастер-код.'));
+      setPinError(friendlyErrorMessage(err, t('pin.verifyFailed'), locale));
     } finally {
       setUnlockingPin(false);
     }
@@ -1201,7 +1217,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       const res = await window.kapsula.promptBiometricUnlock();
       if (res.ok) {
         setPinInput('');
-        toast.success('Сейф разблокирован');
+        toast.success(t('pin.unlockedHud'));
         const fresh = await window.kapsula.getSettings();
         onSettingsUpdated(fresh);
         void loadHudData(searchRef.current);
@@ -1209,32 +1225,32 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         setPinError(res.error);
       }
     } catch (err) {
-      setPinError(friendlyErrorMessage(err, 'Не удалось выполнить биометрическую проверку'));
+      setPinError(friendlyErrorMessage(err, t('pin.bioFailed'), locale));
     } finally {
       setUnlockingBiometric(false);
     }
   };
 
   const tabOptions = [
-    { value: 'search' as HudTab, label: 'Поиск', icon: <MagnifyingGlass className="w-3.5 h-3.5" /> },
-    { value: 'capture' as HudTab, label: 'Записать', icon: <NotePencil className="w-3.5 h-3.5" /> },
-    { value: 'vault' as HudTab, label: 'Сейф', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
-    { value: 'today' as HudTab, label: 'Сегодня', icon: <CalendarBlank className="w-3.5 h-3.5" /> },
-    { value: 'important' as HudTab, label: 'Важное', icon: <Star className="w-3.5 h-3.5" /> },
+    { value: 'search' as HudTab, label: t('hud.tab.search'), icon: <MagnifyingGlass className="w-3.5 h-3.5" /> },
+    { value: 'capture' as HudTab, label: t('hud.tab.capture'), icon: <NotePencil className="w-3.5 h-3.5" /> },
+    { value: 'vault' as HudTab, label: t('hud.tab.vault'), icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+    { value: 'today' as HudTab, label: t('hud.tab.today'), icon: <CalendarBlank className="w-3.5 h-3.5" /> },
+    { value: 'important' as HudTab, label: t('hud.tab.important'), icon: <Star className="w-3.5 h-3.5" /> },
   ];
 
   const renderSecretQuickPills = (item: VaultItem) => {
     const kind = item.secretMeta?.kind;
     const isCard = kind === 'bank_card';
     const defaultLabel = isCard
-      ? 'Номер карты'
+      ? t('secret.sheet.cardNumberLabel')
       : kind === 'api_key'
-        ? 'Ключ'
+        ? t('vault.keyLabel')
         : kind === 'seed'
-          ? 'Фраза'
+          ? t('vault.phraseLabel')
           : kind === 'note'
-            ? 'Заметка'
-            : 'Пароль';
+            ? t('vault.noteLabel')
+            : t('vault.passwordLabel');
     return (
       <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
         {item.secretMeta?.hasTotp ? (
@@ -1247,7 +1263,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         ) : null}
         <CopySlotPill
           label={defaultLabel}
-          copiedLabel="Готово"
+          copiedLabel={t('common.done')}
           wipeSeconds={settings.clipboardAutoWipeSeconds ?? 30}
           tone="default"
           widthPx={isCard ? 128 : 124}
@@ -1265,7 +1281,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         {isCard && item.secretMeta?.expiry ? (
           <CopySlotPill
             label={item.secretMeta.expiry}
-            copiedLabel="Готово"
+            copiedLabel={t('common.done')}
             widthPx={86}
             heightPx={28}
             onCopy={async () => {
@@ -1274,7 +1290,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                 setTab('vault');
                 return false;
               }
-              if (r.ok) toast.success('Срок карты скопирован');
+              if (r.ok) toast.success(t('vault.cardExpiryCopied'));
               return r.ok;
             }}
           />
@@ -1282,7 +1298,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         {isCard && item.secretMeta?.hasCvv ? (
           <CopySlotPill
             label="CVV"
-            copiedLabel="Готово"
+            copiedLabel={t('common.done')}
             wipeSeconds={settings.clipboardAutoWipeSeconds ?? 30}
             widthPx={98}
             heightPx={28}
@@ -1299,8 +1315,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         ) : null}
         {!isCard && item.secretMeta?.hasLogin ? (
           <CopySlotPill
-            label="Логин"
-            copiedLabel="Готово"
+            label={t('vault.login')}
+            copiedLabel={t('common.done')}
             widthPx={90}
             heightPx={28}
             onCopy={async () => {
@@ -1382,7 +1398,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
               className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
             >
               <ArrowSquareOut className="w-3.5 h-3.5" />
-              Окно
+              {t('hud.windowBtn')}
             </button>
             <button
               type="button"
@@ -1446,7 +1462,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         autoFocus
                         value={search}
                         onValueChange={setSearch}
-                        placeholder="Поиск по заметкам, ссылкам, картам…"
+                        placeholder={t('hud.searchPlaceholder')}
                         className="flex-1 min-w-0 bg-transparent border-none outline-none text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
                       />
                     </div>
@@ -1462,7 +1478,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     >
                       {items.length > 0 ? (
                         <Command.Group
-                          heading={search.trim() ? `Найдено: ${items.length}` : 'Недавние записи'}
+                          heading={search.trim() ? t('hud.foundCount', { count: items.length }) : t('hud.recentItems')}
                           className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[var(--k-ink-muted)]"
                         >
                           {items.slice(0, 35).map((item) => {
@@ -1525,11 +1541,11 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                 <span className="inline-flex items-center gap-2 min-w-0">
                                   {rowIcon}
                                   <span className="truncate font-medium">
-                                    {item.title || getDnaHumanLabel(item)}
+                                    {item.title || getDnaHumanLabel(item, locale)}
                                   </span>
                                 </span>
                                 <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                                  {getDnaHumanLabel(item)}
+                                  {getDnaHumanLabel(item, locale)}
                                 </span>
                               </Command.Item>
                             );
@@ -1537,7 +1553,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         </Command.Group>
                       ) : (
                         <div className="px-3 py-6 text-center text-[12px] text-[var(--k-ink-muted)]">
-                          Ничего не найдено
+                          {t('hud.nothingFound')}
                         </div>
                       )}
                     </Command.List>
@@ -1546,7 +1562,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                   {/* Docked Quick Actions Footer (100% solid opaque surface) */}
                   <div className="shrink-0 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] p-2 flex flex-col gap-0.5">
                     <div className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      Действия
+                      {t('hud.actionsHeading')}
                     </div>
                     <button
                       type="button"
@@ -1562,13 +1578,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         weight="duotone"
                         className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0"
                       />
-                      <span>Новая заметка в редакторе</span>
+                      <span>{t('hud.newNoteInEditor')}</span>
                     </button>
                     <button
                       type="button"
                       onClick={async () => {
                         await window.kapsula.captureClipboard();
-                        toast.success('Сохранено из буфера обмена');
+                        toast.success(t('workspace.toast.pastedClipboard'));
                         await loadHudData(search);
                       }}
                       className="k-interactive flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-[12px] text-[var(--k-ink-primary)] hover:bg-[var(--k-accent-soft)] hover:text-[var(--k-accent)] text-left cursor-pointer"
@@ -1577,7 +1593,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         weight="duotone"
                         className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0"
                       />
-                      <span>Сохранить из буфера обмена</span>
+                      <span>{t('workspace.pasteClipboard')}</span>
                     </button>
                   </div>
                 </div>
@@ -1594,17 +1610,18 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         <div className="flex flex-col gap-3">
                           <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--k-ink-muted)]">
                             <span className="px-2 py-0.5 rounded-full bg-[var(--k-bg-surface-2)] font-medium">
-                              {getDnaHumanLabel(activeItem)}
+                              {getDnaHumanLabel(activeItem, locale)}
                             </span>
                             <span>
                               {formatRelativeDate(
-                                activeItem.contentUpdatedAt || activeItem.updatedAt
+                                activeItem.contentUpdatedAt || activeItem.createdAt,
+                                locale
                               )}
                             </span>
                           </div>
 
                           <div className="text-[16px] font-semibold leading-snug text-[var(--k-ink-primary)]">
-                            {activeItem.title || getDnaHumanLabel(activeItem)}
+                            {activeItem.title || getDnaHumanLabel(activeItem, locale)}
                           </div>
 
                           {isVaultLocked ? (
@@ -1614,17 +1631,17 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             >
                               <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--k-ink-primary)]">
                                 <LockKey weight="fill" className="w-4 h-4 text-[var(--k-amber)] shrink-0" />
-                                <span>Сейф заблокирован мастер-кодом</span>
+                                <span>{t('hud.vaultLockedHeading')}</span>
                               </div>
                               <div className="text-[12px] text-[var(--k-ink-secondary)] leading-relaxed">
-                                Разблокируй Сейф во вкладке «Сейф», чтобы копировать пароли, номера карт и одноразовые 2FA-коды.
+                                {t('hud.vaultLockedSub')}
                               </div>
                               <button
                                 type="button"
                                 onClick={() => setTab('vault')}
                                 className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                               >
-                                Разблокировать Сейф
+                                {t('vault.unlockButton')}
                               </button>
                             </div>
                           ) : (
@@ -1634,12 +1651,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                 <span>
                                   {activeItem.secretMeta?.kind === 'bank_card'
                                     ? [
-                                        activeItem.secretMeta.loginHint || 'Банковская карта',
+                                        activeItem.secretMeta.loginHint || t('vault.type.bank_card'),
                                         activeItem.secretMeta.expiry
-                                          ? `Срок ${activeItem.secretMeta.expiry}`
-                                          : 'Срок не указан',
+                                          ? t('secret.sheet.expiryField', { value: activeItem.secretMeta.expiry })
+                                          : t('vault.cardNoExpiry'),
                                       ].join(' · ')
-                                    : `Защищённая запись (${activeItem.secretMeta?.loginHint || 'Сейф'})`}
+                                    : t('hud.vaultItemLabel', { hint: activeItem.secretMeta?.loginHint || t('dna.vault') })}
                                 </span>
                               </div>
                               {renderSecretQuickPills(activeItem)}
@@ -1656,10 +1673,10 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             }}
                             className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                           >
-                            Открыть в Сейфе
+                            {t('hud.openInVault')}
                           </button>
                           <span className="inline-flex items-center gap-1 text-[11px] text-[var(--k-ink-muted)]">
-                            <KeyReturn className="w-3 h-3" /> Enter — открыть
+                            <KeyReturn className="w-3 h-3" /> {t('hud.enterToOpen')}
                           </span>
                         </div>
                       </div>
@@ -1671,8 +1688,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                           <div className="inline-flex items-center gap-0.5 rounded-lg bg-[var(--k-bg-surface-2)] p-0.5 border border-[var(--k-border-hairline)]">
                             <button
                               type="button"
-                              title="Заголовок"
-                              aria-label="Заголовок"
+                              title={t('hud.headingBtn')}
+                              aria-label={t('hud.headingBtn')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() =>
                                 hudEditor?.chain().focus().toggleHeading({ level: 2 }).run()
@@ -1690,8 +1707,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             </button>
                             <button
                               type="button"
-                              title="Маркированный список"
-                              aria-label="Список"
+                              title={t('hud.bulletList')}
+                              aria-label={t('hud.listShort')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => hudEditor?.chain().focus().toggleBulletList().run()}
                               className={`k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md cursor-pointer ${
@@ -1707,8 +1724,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             </button>
                             <button
                               type="button"
-                              title="Чек-лист"
-                              aria-label="Чек-лист"
+                              title={t('hud.checklist')}
+                              aria-label={t('hud.checklist')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => hudEditor?.chain().focus().toggleTaskList().run()}
                               className={`k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md cursor-pointer ${
@@ -1726,8 +1743,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               type="button"
                               data-testid="hud-insert-image-btn"
                               disabled={hudInsertingImage}
-                              title={isMac ? 'Вставить фото (или ⌘V)' : 'Вставить фото (или Ctrl+V)'}
-                              aria-label="Вставить фото"
+                              title={isMac ? t('hud.insertPhotoMac') : t('hud.insertPhotoWin')}
+                              aria-label={t('note.studio.insertPhoto')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
                                 setHudPickingImage(true);
@@ -1748,8 +1765,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             <span className="w-px h-3.5 bg-[var(--k-border-hairline)] mx-0.5" />
                             <button
                               type="button"
-                              title={isMac ? 'Отменить (⌘Z)' : 'Отменить (Ctrl+Z)'}
-                              aria-label="Отменить"
+                              title={isMac ? t('hud.undoMac') : t('hud.undoWin')}
+                              aria-label={t('common.undo')}
                               disabled={!hudToolbarState?.canUndo}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => hudEditor?.chain().focus().undo().run()}
@@ -1759,8 +1776,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             </button>
                             <button
                               type="button"
-                              title={isMac ? 'Повторить (⇧⌘Z)' : 'Повторить (Ctrl+Y)'}
-                              aria-label="Повторить"
+                              title={isMac ? t('hud.redoMac') : t('hud.redoWin')}
+                              aria-label={t('hud.redo')}
                               disabled={!hudToolbarState?.canRedo}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => hudEditor?.chain().focus().redo().run()}
@@ -1779,11 +1796,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                   : 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)]'
                               }`}
                             >
-                              {editorSaveState === 'saving' ? 'Сохраняю…' : 'Сохранено'}
+                              {editorSaveState === 'saving' ? t('common.saving') : t('common.saved')}
                             </span>
                             <span className="hidden sm:inline">
                               {formatRelativeDate(
-                                activeItem.contentUpdatedAt || activeItem.updatedAt
+                                activeItem.contentUpdatedAt || activeItem.createdAt,
+                                locale
                               )}
                             </span>
                           </div>
@@ -1804,7 +1822,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                 hudEditor?.commands.focus();
                               }
                             }}
-                            placeholder="Заголовок…"
+                            placeholder={t('hud.titlePlaceholder')}
                             className="w-full resize-none overflow-hidden bg-transparent border-none outline-none text-[16px] font-semibold tracking-[-0.004em] leading-snug text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] k-selectable shrink-0"
                           />
 
@@ -1821,7 +1839,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               {activeVoiceEmptyTranscript ? (
                                 <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--k-accent)]/25 bg-[var(--k-accent-soft)] px-3 py-2">
                                   <span className="text-[11.5px] text-[var(--k-ink-secondary)]">
-                                    Аудио ещё не расшифровано
+                                    {t('hud.audioNotTranscribed')}
                                   </span>
                                   <button
                                     type="button"
@@ -1840,8 +1858,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                     )}
                                     <span>
                                       {hudTranscribingId === activeItem.id
-                                        ? 'Расшифровываю…'
-                                        : 'Расшифровать через ИИ'}
+                                        ? t('cards.transcribing')
+                                        : t('cards.transcribeBtn')}
                                     </span>
                                   </button>
                                 </div>
@@ -1881,7 +1899,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                 className="k-interactive shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-md bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[11px] font-medium text-[var(--k-ink-primary)] hover:text-[var(--k-accent)] cursor-pointer"
                               >
                                 <ArrowSquareOut className="w-3 h-3" />
-                                <span>Перейти</span>
+                                <span>{t('hud.goBtn')}</span>
                               </button>
                             </div>
                           ) : null}
@@ -1916,20 +1934,20 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               }}
                               className="k-interactive h-7.5 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                             >
-                              Открыть
+                              {t('common.open')}
                             </button>
                             <button
                               type="button"
                               onClick={() => void handleHudPasteBack(activeItem)}
                               className="k-interactive h-7.5 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                             >
-                              Вставить в окно
+                              {t('hud.pasteToActiveWindow')}
                             </button>
                           </div>
                           <span className="inline-flex items-center gap-1 text-[10.5px] text-[var(--k-ink-muted)]">
-                            <KeyReturn className="w-3 h-3" /> Tab — править ·{' '}
-                            {isMacPlatform(window.kapsula?.platform) ? '⌘+Enter' : 'Ctrl+Enter'} —
-                            вставить
+                            <KeyReturn className="w-3 h-3" /> {t('hud.tabEditHint')}{' '}
+                            {isMacPlatform(window.kapsula?.platform) ? '⌘+Enter' : 'Ctrl+Enter'} —{' '}
+                            {t('hud.pasteWord')}
                           </span>
                         </div>
                       </div>
@@ -1938,10 +1956,10 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     <div className="h-full flex flex-col items-center justify-center text-center text-[var(--k-ink-muted)] gap-2 p-6">
                       <KapsulaEmblem size={32} />
                       <div className="text-[13.5px] font-medium text-[var(--k-ink-secondary)]">
-                        Быстрый доступ и правка заметок
+                        {t('hud.emptyTitle')}
                       </div>
                       <div className="text-[12px] max-w-[300px]">
-                        Ищи на русском или английском — например «билеты», «карта» или «design»
+                        {t('hud.emptyDesc')}
                       </div>
                     </div>
                   )}
@@ -1966,7 +1984,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[13px] font-semibold text-[var(--k-ink-primary)]">
-                    Мгновенная запись в хранилище
+                    {t('hud.captureHeading')}
                   </div>
                   <div className="flex items-center gap-2">
                     <SelectMenu
@@ -1974,7 +1992,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       value={draftOrbit}
                       onChange={setDraftOrbit}
                       options={[
-                        { value: '', label: 'Авто по смыслу' },
+                        { value: '', label: t('hud.autoByMeaning') },
                         ...orbits.map((o) => ({
                           value: o.id,
                           label: o.name,
@@ -1999,7 +2017,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         source: 'hud',
                       });
                       setRecordingVoice(false);
-                      toast.success('Голосовая заметка сохранена');
+                      toast.success(t('hud.voiceSaved'));
                       await loadHudData(search);
                     }}
                     onFallbackSaveAudio={async (wav) => {
@@ -2012,7 +2030,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         source: 'hud',
                       });
                       setRecordingVoice(false);
-                      toast.success('Аудио сохранено');
+                      toast.success(t('note.studio.audioSaved'));
                     }}
                     onCancel={() => setRecordingVoice(false)}
                   />
@@ -2028,7 +2046,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         void handleSaveCapture();
                       }
                     }}
-                    placeholder="Идея, ссылка, задача или напоминание — например «завтра в 15:00 созвон»…"
+                    placeholder={t('hud.capturePlaceholder')}
                     className="k-selectable flex-1 min-h-[160px] w-full resize-none rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] p-3.5 text-[13.5px] leading-relaxed text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none focus:border-[var(--k-border-focus)]"
                   />
                 )}
@@ -2037,7 +2055,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                   <div className="flex items-center gap-2 rounded-xl border border-[var(--k-accent)]/30 bg-[var(--k-accent-soft)] px-3 py-2 text-[12px] text-[var(--k-ink-primary)]">
                     <CalendarBlank weight="fill" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
                     <span className="truncate">
-                      Добавится в Календарь и Напоминания: <strong>{activeParsedEvent.label}</strong>
+                      {t('hud.calendarWillAdd')} <strong>{activeParsedEvent.label}</strong>
                       {activeParsedEvent.location ? ` · ${activeParsedEvent.location}` : ''}
                     </span>
                     <button
@@ -2045,7 +2063,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       onClick={() => setDismissedEventText(draftText.trim())}
                       className="ml-auto text-[11px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
                     >
-                      Убрать
+                      {t('hud.removeBadge')}
                     </button>
                   </div>
                 ) : null}
@@ -2058,7 +2076,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                     >
                       <Microphone weight="duotone" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                      Записать голос
+                      {t('hud.recordVoice')}
                     </button>
 
                     <button
@@ -2066,16 +2084,16 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       onClick={async () => {
                         try {
                           await window.kapsula.captureScreen({ reopenHud: true });
-                          toast.success('Скриншот экрана сохранён');
+                          toast.success(t('hud.screenshotSaved'));
                           await loadHudData(search);
                         } catch (err) {
-                          toast.error(friendlyErrorMessage(err, 'Не удалось сделать скриншот.'));
+                          toast.error(friendlyErrorMessage(err, t('hud.screenshotFailed'), locale));
                         }
                       }}
                       className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                     >
                       <Camera weight="duotone" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                      Скриншот экрана
+                      {t('hud.screenShotBtn')}
                     </button>
 
                     {clipPreview.text || clipPreview.hasImage ? (
@@ -2085,13 +2103,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                           await window.kapsula.captureClipboard({
                             orbitOverride: draftOrbit || undefined,
                           });
-                          toast.success('Буфер сохранён в Kapsula');
+                          toast.success(t('hud.clipboardSaved'));
                           await loadHudData(search);
                         }}
                         className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                       >
                         <ClipboardText className="w-3.5 h-3.5" />
-                        Взять из буфера
+                        {t('hud.pasteClipboardBtn')}
                       </button>
                     ) : null}
                   </div>
@@ -2103,7 +2121,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-4 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default cursor-pointer"
                   >
                     <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />
-                    Сохранить ({isMacPlatform(window.kapsula?.platform) ? '⌘+Enter' : 'Ctrl+Enter'})
+                    {t('hud.saveShortcutBtn', { shortcut: isMacPlatform(window.kapsula?.platform) ? '⌘+Enter' : 'Ctrl+Enter' })}
                   </button>
                 </div>
               </motion.div>
@@ -2132,15 +2150,15 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     <div className="w-10 h-10 rounded-full bg-[var(--k-emerald-soft)] text-[var(--k-emerald)] flex items-center justify-center mx-auto">
                       <LockKey weight="fill" className="w-5 h-5" />
                     </div>
-                    <div className="text-[14px] font-semibold">Сейф защищён мастер-кодом</div>
+                    <div className="text-[14px] font-semibold">{t('hud.vaultPinTitle')}</div>
                     <div className="text-[12px] text-[var(--k-ink-secondary)]">
-                      Введи код, чтобы копировать номера карт, CVV, пароли и 2FA-коды
+                      {t('hud.vaultPinSub')}
                     </div>
                     <input
                       type="password"
                       value={pinInput}
                       onChange={(e) => setPinInput(e.target.value)}
-                      placeholder="Мастер-код…"
+                      placeholder={t('hud.pinPlaceholder')}
                       autoFocus
                       className="h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3 text-center k-mono text-[14px] outline-none focus:border-[var(--k-border-focus)]"
                     />
@@ -2152,7 +2170,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       disabled={unlockingPin || unlockingBiometric || !pinInput.trim()}
                       className="k-interactive h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                     >
-                      Разблокировать Сейф
+                      {t('vault.unlockButton')}
                     </button>
                     {settings.biometricUnlockAvailable && settings.biometricUnlockEnabled ? (
                       <button
@@ -2165,17 +2183,17 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         <Fingerprint className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
                         <span>
                           {unlockingBiometric
-                            ? 'Подтверди личность…'
+                            ? t('pin.bioPrompt')
                             : isMac
-                              ? 'Открыть через Touch ID'
-                              : 'Войти по биометрии'}
+                              ? t('pin.bioTouchId')
+                              : t('pin.bioGeneric')}
                         </span>
                       </button>
                     ) : null}
                   </form>
                 ) : allSecretItems.length === 0 ? (
                   <div className="my-auto text-center text-[13px] text-[var(--k-ink-muted)]">
-                    В Сейфе пока пусто. Карты, пароли и ключи добавляются из главного окна.
+                    {t('hud.vaultEmpty')}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2.5">
@@ -2185,7 +2203,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         type="text"
                         value={vaultSearch}
                         onChange={(e) => setVaultSearch(e.target.value)}
-                        placeholder="Поиск по Сейфу (банк, сервис, последние 4 цифры)…"
+                        placeholder={t('hud.vaultSearchPlaceholder')}
                         data-testid="hud-vault-search-input"
                         className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
                       />
@@ -2193,13 +2211,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     <div className="text-[11.5px] text-[var(--k-ink-muted)] flex items-center justify-between">
                       <span>
                         {settings.clipboardAutoWipeSeconds > 0
-                          ? `Быстрое копирование секретов (очистка буфера через ${settings.clipboardAutoWipeSeconds} с)`
-                          : 'Быстрое копирование секретов (автоочистка буфера выключена)'}
+                          ? t('hud.vaultQuickCopyWipe', { seconds: settings.clipboardAutoWipeSeconds })
+                          : t('hud.vaultQuickCopyOff')}
                       </span>
                     </div>
                     {secretItems.length === 0 ? (
                       <div className="py-6 text-center text-[12.5px] text-[var(--k-ink-muted)]">
-                        По запросу «{vaultSearch}» в Сейфе ничего не найдено
+                        {t('hud.vaultNotFound', { query: vaultSearch })}
                       </div>
                     ) : null}
                     {secretItems.map((sec) => {
@@ -2208,8 +2226,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         ? [
                             sec.secretMeta?.loginHint || '••••',
                             sec.secretMeta?.expiry
-                              ? `Срок ${sec.secretMeta.expiry}`
-                              : 'Срок не указан',
+                              ? t('secret.sheet.expiryField', { value: sec.secretMeta.expiry })
+                              : t('vault.cardNoExpiry'),
                           ].join(' · ')
                         : sec.secretMeta?.loginHint || sec.summary;
                       return (
@@ -2267,7 +2285,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                       source: 'hud',
                     });
                     setTodayQuickTask('');
-                    toast.success('Задача добавлена');
+                    toast.success(t('hud.taskAdded'));
                     await loadHudData(search);
                   }}
                   className="flex items-center gap-2 shrink-0"
@@ -2275,7 +2293,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                   <input
                     value={todayQuickTask}
                     onChange={(e) => setTodayQuickTask(e.target.value)}
-                    placeholder="+ Быстрая задача на сегодня…"
+                    placeholder={t('hud.quickTaskPlaceholder')}
                     className="flex-1 h-9 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none focus:border-[var(--k-border-focus)]"
                   />
                   <button
@@ -2284,14 +2302,14 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     className="k-interactive h-9 px-3 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium inline-flex items-center gap-1 cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                   >
                     <Plus weight="bold" className="w-3.5 h-3.5" />
-                    Добавить
+                    {t('common.add')}
                   </button>
                 </form>
 
                 {todayScheduleEntries.length > 0 ? (
                   <div className="flex flex-col gap-1.5">
                     <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      События на сегодня
+                      {t('hud.eventsToday')}
                     </div>
                     {todayScheduleEntries.map((ev) => (
                       <div
@@ -2315,8 +2333,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                         </div>
                         <span className="k-mono text-[11px] text-[var(--k-ink-muted)] shrink-0">
                           {ev.allDay
-                            ? 'Весь день'
-                            : new Date(ev.startAt).toLocaleTimeString('ru-RU', {
+                            ? t('common.allDay')
+                            : new Date(ev.startAt).toLocaleTimeString(dateLocale, {
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}
@@ -2328,59 +2346,59 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
 
                 <div className="flex flex-col gap-1.5">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Открытые задачи ({openTasks.length})
+                    {t('hud.openTasksCount', { count: openTasks.length })}
                   </div>
                   {openTasks.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-[var(--k-border-hairline)] p-4 text-center text-[12.5px] text-[var(--k-ink-muted)] flex items-center justify-center gap-2">
                       <CheckCircle className="w-4 h-4 text-[var(--k-emerald)]" />
-                      Все текущие задачи выполнены
+                      {t('hud.allTasksDone')}
                     </div>
                   ) : (
-                    openTasks.map((t) => (
+                    openTasks.map((taskItem) => (
                       <div
-                        key={t.id}
+                        key={taskItem.id}
                         className="flex items-center gap-2.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 py-2"
                       >
                         <AnimatedCheckbox
                           size="sm"
-                          checked={t.done}
+                          checked={taskItem.done}
                           onChange={async (next) => {
-                            const prevDone = t.done;
+                            const prevDone = taskItem.done;
                             setTasks((prev) =>
-                              prev.map((row) => (row.id === t.id ? { ...row, done: next } : row))
+                              prev.map((row) => (row.id === taskItem.id ? { ...row, done: next } : row))
                             );
                             try {
                               await window.kapsula.toggleTask({
-                                itemId: t.itemId,
-                                sourceType: t.sourceType,
-                                taskIndex: t.taskIndex,
+                                itemId: taskItem.itemId,
+                                sourceType: taskItem.sourceType,
+                                taskIndex: taskItem.taskIndex,
                                 done: next,
                               });
                               await loadHudData(search);
                             } catch (err) {
                               setTasks((prev) =>
                                 prev.map((row) =>
-                                  row.id === t.id ? { ...row, done: prevDone } : row
+                                  row.id === taskItem.id ? { ...row, done: prevDone } : row
                                 )
                               );
-                              toast.error(friendlyErrorMessage(err));
+                              toast.error(friendlyErrorMessage(err, undefined, locale));
                             }
                           }}
                         />
                         <button
                           type="button"
                           onClick={() => {
-                            void window.kapsula.focusVaultItem(t.itemId);
+                            void window.kapsula.focusVaultItem(taskItem.itemId);
                             void window.kapsula.closeHud();
                           }}
                           className="flex-1 text-left min-w-0 cursor-pointer"
                         >
                           <div className="text-[12.5px] text-[var(--k-ink-primary)] truncate">
-                            {t.text}
+                            {taskItem.text}
                           </div>
-                          {!isStandaloneTaskSource(t, tasksCountByItemId.get(t.itemId) ?? 1) && t.itemTitle ? (
+                          {!isStandaloneTaskSource(taskItem, tasksCountByItemId.get(taskItem.itemId) ?? 1) && taskItem.itemTitle ? (
                             <div className="text-[11px] text-[var(--k-ink-muted)] truncate">
-                              {t.itemTitle}
+                              {taskItem.itemTitle}
                             </div>
                           ) : null}
                         </button>
@@ -2409,14 +2427,14 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3.5 py-2.5">
                   <div className="min-w-0">
                     <div className="text-[12px] font-medium text-[var(--k-ink-primary)]">
-                      Текущий буфер обмена
+                      {t('hud.currentClipboard')}
                     </div>
                     <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
                       {clipPreview.hasImage
-                        ? 'В буфере есть изображение'
+                        ? t('hud.clipboardHasImage')
                         : clipPreview.text
                           ? clipPreview.text
-                          : 'Пока пусто или защищённые данные'}
+                          : t('hud.clipboardEmptyOrProtected')}
                     </div>
                   </div>
                   <button
@@ -2424,26 +2442,26 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     onClick={async () => {
                       const saved = await window.kapsula.captureClipboard();
                       if (saved) {
-                        toast.success('Захвачено в Kapsula');
+                        toast.success(t('hud.snatchedToast'));
                         await loadHudData(search);
                       } else {
-                        toast.info('В буфере ничего нового не найдено');
+                        toast.info(t('hud.clipboardNothingNew'));
                       }
                     }}
                     className="k-interactive shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[12px] font-medium cursor-pointer"
                   >
                     <Sparkle weight="fill" className="w-3.5 h-3.5" />
-                    Сохранить буфер
+                    {t('hud.saveClipboardBtn')}
                   </button>
                 </div>
 
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                  Закреплённые записи ({pinnedItems.length})
+                  {t('hud.pinnedCount', { count: pinnedItems.length })}
                 </div>
 
                 {pinnedItems.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--k-border-hairline)] p-5 text-center text-[12.5px] text-[var(--k-ink-muted)]">
-                    Закрепляй важные заметки кнопкой закрепления — они будут под рукой в этом разделе.
+                    {t('hud.pinnedHint')}
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
@@ -2472,11 +2490,11 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                                   <span className="truncate">{orb.name}</span>
                                 </>
                               ) : (
-                                getDnaHumanLabel(item)
+                                getDnaHumanLabel(item, locale)
                               )}
                             </span>
                             <span className="k-tabular shrink-0">
-                              {formatDateCompact(item.createdAt)}
+                              {formatDateCompact(item.createdAt, locale)}
                             </span>
                           </div>
                           <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { mergeAttributes, Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import { Image as ImageIcon, LinkSimple, Trash } from '@phosphor-icons/react';
+import { tm } from './mobile-i18n';
 
 const KAPSULA_LOCAL_MEDIA_PREFIX = 'kapsula-media://local/';
 
@@ -29,7 +30,7 @@ interface KapsulaImageOptions {
 
 const MobileInlineImageView: React.FC<NodeViewProps> = ({ node, deleteNode, extension }) => {
   const rawSrc = String(node.attrs.src || '');
-  const alt = String(node.attrs.alt || 'Фото');
+  const alt = String(node.attrs.alt || tm('common.photo'));
   const opts = extension.options as KapsulaImageOptions;
   const localFilename = extractLocalFilenameFromSrc(rawSrc);
 
@@ -79,7 +80,7 @@ const MobileInlineImageView: React.FC<NodeViewProps> = ({ node, deleteNode, exte
       ) : (
         <div className="flex items-center justify-center gap-2 h-32 px-4 text-[12.5px] text-[var(--k-ink-muted)] bg-[var(--k-bg-surface-2)]">
           <ImageIcon className="w-4 h-4 shrink-0" />
-          <span>{broken ? 'Изображение недоступно' : 'Загружаю фото…'}</span>
+          <span>{broken ? tm('inlineImage.unavailable') : tm('inlineImage.loading')}</span>
         </div>
       )}
 
@@ -90,7 +91,7 @@ const MobileInlineImageView: React.FC<NodeViewProps> = ({ node, deleteNode, exte
           e.stopPropagation();
           deleteNode();
         }}
-        aria-label="Удалить фото из заметки"
+        aria-label={tm('inlineImage.removeAria')}
         className="k-tap absolute top-2 right-2 inline-flex items-center justify-center w-8 h-8 rounded-xl bg-black/60 text-white backdrop-blur-sm border border-white/15"
       >
         <Trash className="w-3.5 h-3.5" />

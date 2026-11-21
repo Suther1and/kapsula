@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner';
 import type { OrbitDef, VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, getDnaHumanLabel, getMediaUrl } from '../../lib/format';
 import { InlineReferenceVideo } from './InlineReferenceVideo';
 import { SectionIcon } from './SectionIcon';
@@ -39,6 +40,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
   onEditInStudio,
   onTogglePin,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
 
   const navigable = itemsList.filter((x) => x.dna !== 'secret');
@@ -102,7 +104,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             <button
               type="button"
               onClick={() => onSelectItem(navigable[currentIndex - 1]!)}
-              aria-label="Предыдущая запись"
+              aria-label={t('ui.quickLook.prevAria')}
               className="k-interactive fixed left-6 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] inline-flex items-center justify-center cursor-pointer"
             >
               <CaretLeft weight="bold" className="w-5 h-5" />
@@ -113,7 +115,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             <button
               type="button"
               onClick={() => onSelectItem(navigable[currentIndex + 1]!)}
-              aria-label="Следующая запись"
+              aria-label={t('ui.quickLook.nextAria')}
               className="k-interactive fixed right-6 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] inline-flex items-center justify-center cursor-pointer"
             >
               <CaretRight weight="bold" className="w-5 h-5" />
@@ -144,7 +146,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--k-border-hairline)] shrink-0">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] shrink-0">
-                  {getDnaHumanLabel(item)}
+                  {getDnaHumanLabel(item, locale)}
                 </span>
                 {orbit ? (
                   <span
@@ -159,7 +161,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   </span>
                 ) : null}
                 <span className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                  {formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
+                  {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
                 </span>
               </div>
 
@@ -168,7 +170,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   <button
                     type="button"
                     onClick={() => onTogglePin(item)}
-                    aria-label={item.isPinned ? 'Открепить' : 'Закрепить'}
+                    aria-label={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
                     className={`k-interactive w-8 h-8 rounded-lg inline-flex items-center justify-center cursor-pointer ${
                       item.isPinned
                         ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
@@ -184,16 +186,16 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   onClick={() => {
                     if (imgUrl && item.dna === 'shot') {
                       void window.kapsula.copyImage(item.imagePath || item.thumbPath || '');
-                      toast.success('Изображение скопировано');
+                      toast.success(t('ui.quickLook.imageCopied'));
                     } else {
                       void window.kapsula.copyText(item.url || bodyText || cleanTitle);
-                      toast.success('Скопировано');
+                      toast.success(t('common.copied'));
                     }
                   }}
                   className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Copy className="w-3.5 h-3.5" />
-                  <span>Копировать</span>
+                  <span>{t('common.copy')}</span>
                 </button>
 
                 <button
@@ -206,13 +208,13 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <PencilSimple className="w-3.5 h-3.5" />
-                  <span>Открыть редактор</span>
+                  <span>{t('ui.quickLook.openEditor')}</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={onClose}
-                  aria-label="Закрыть просмотр"
+                  aria-label={t('ui.quickLook.closeAria')}
                   className="k-interactive w-8 h-8 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                 >
                   <X weight="bold" className="w-4 h-4" />
@@ -241,15 +243,15 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
 
               {item.colorPalette && item.colorPalette.length > 0 ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-[var(--k-ink-muted)]">Палитра:</span>
+                  <span className="text-[11px] text-[var(--k-ink-muted)]">{t('ui.quickLook.palette')}</span>
                   {item.colorPalette.slice(0, 6).map((hex) => (
                     <button
                       key={hex}
                       type="button"
-                      title={`Скопировать ${hex}`}
+                      title={t('ui.quickLook.copyColor', { hex })}
                       onClick={() => {
                         void window.kapsula.copyText(hex);
-                        toast.success(`Цвет ${hex} скопирован`);
+                        toast.success(t('ui.quickLook.colorCopied', { hex }));
                       }}
                       className="k-interactive inline-flex items-center gap-1.5 h-6 pl-1 pr-2 rounded-full border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[10.5px] k-mono text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                     >
@@ -358,7 +360,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
 
             {/* Footer hint */}
             <div className="px-5 py-2 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/40 flex items-center justify-between text-[11px] text-[var(--k-ink-muted)] shrink-0">
-              <span>Пробел или Esc — закрыть · Enter — редактировать</span>
+              <span>{t('ui.quickLook.footerHint')}</span>
               {navigable.length > 1 && currentIndex >= 0 ? (
                 <span className="k-mono">
                   {currentIndex + 1} / {navigable.length} · ← →

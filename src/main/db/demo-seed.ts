@@ -102,6 +102,105 @@ export async function ensureDemoSeeded(
   if (!force && (alreadySeeded === 'true' || stats.total > 0)) return 0;
 
   const now = Date.now();
+  const locale = repo.getLocale();
+
+  if (locale === 'en') {
+    const workSection = repo.ensureOrganicOrbit('Work');
+    const personalSection = repo.ensureOrganicOrbit('Personal');
+    const ideasSection = repo.ensureOrganicOrbit('Ideas');
+    const readingSection = repo.ensureOrganicOrbit('Reading');
+
+    await pipeline.capture({
+      text: 'https://fs.blog/smart-notes/ — how to collect notes and ideas so they genuinely compound in work and study',
+      title: 'How to Build a Personal Knowledge Base',
+      orbitOverride: readingSection?.id ?? undefined,
+      source: 'demo',
+      tags: ['article', 'reading'],
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 45,
+    });
+
+    await pipeline.capture({
+      text: 'Service: Work Email\nLogin: demo@example.com\nPassword: DemoSecret-Kapsula-2026!',
+      source: 'demo',
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 90,
+    });
+
+    await pipeline.capture({
+      text: [
+        '## Weekend Trip Prep',
+        '',
+        '- [x] Double-check tickets and hotel booking',
+        '- [ ] Pack chargers and passport',
+        '- [ ] Map out Saturday walking route',
+        '- [ ] Download offline city map',
+      ].join('\n'),
+      title: 'Weekend Trip Checklist',
+      orbitOverride: personalSection?.id ?? undefined,
+      remindAt: now + 1000 * 60 * 120,
+      source: 'demo',
+      tags: ['travel', 'plan'],
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 140,
+    });
+
+    await pipeline.capture({
+      text: [
+        '## Project Sync Notes',
+        '',
+        'Aligned on goals for the next month and split key milestones:',
+        '',
+        '- Finalize presentation outline before Wednesday',
+        '- Gather team feedback on the updated timeline',
+        '- [ ] Share summary roadmap with stakeholders',
+      ].join('\n'),
+      title: 'Project Sync Notes',
+      orbitOverride: workSection?.id ?? undefined,
+      source: 'demo',
+      tags: ['meeting', 'project'],
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 180,
+    });
+
+    await pipeline.capture({
+      text: [
+        'Reading list for this quarter:',
+        '',
+        '- "How to Take Smart Notes" — Sönke Ahrens',
+        '- "Thinking, Fast and Slow" — Daniel Kahneman',
+        '- "The Design of Everyday Things" — Don Norman',
+      ].join('\n'),
+      title: 'Quarter Reading List',
+      orbitOverride: ideasSection?.id ?? undefined,
+      source: 'demo',
+      tags: ['books', 'study'],
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 210,
+    });
+
+    const shotDemo = await pipeline.capture({
+      imageBase64: generateDemoShotPngBase64(),
+      title: 'Project Visual Reference',
+      orbitOverride: ideasSection?.id ?? undefined,
+      source: 'demo',
+      tags: ['reference', 'ideas'],
+      isDemo: true,
+      createdAt: now - 1000 * 60 * 25,
+    });
+
+    repo.updateItem(shotDemo.id, {
+      dna: 'shot',
+      ocrText: 'Project Overview · Quarterly Metrics & Palette Swatches',
+      summary: '',
+      extractedActions: [],
+      colorPalette: ['#161922', '#F5A524', '#10B981', '#3B82F6'],
+    });
+
+    repo.setSetting('seed_done', 'true');
+    return 6;
+  }
+
   const workSection = repo.ensureOrganicOrbit('Работа');
   const personalSection = repo.ensureOrganicOrbit('Личное');
   const ideasSection = repo.ensureOrganicOrbit('Идеи');

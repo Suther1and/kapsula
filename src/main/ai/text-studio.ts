@@ -1,5 +1,5 @@
 import { DEFAULT_MONTHLY_CAP_USD } from '@shared/constants';
-import type { AiProvider, TextTransformPreset, TextTransformResult } from '@shared/types';
+import type { AiProvider, AppLocale, TextTransformPreset, TextTransformResult } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
 import { analyzeForSecret, detectCardBrand, passesLuhn, redactSecrets } from '../security/secret-shield';
 import type { FetchLike } from './decision-router';
@@ -154,12 +154,16 @@ function splitLongProseIntoParagraphs(text: string): string {
   return restoreTokens(rebuilt.join('\n\n'), tokens);
 }
 
-export function formatNoteLocally(rawText: string, preset: TextTransformPreset): TextTransformResult {
+export function formatNoteLocally(
+  rawText: string,
+  preset: TextTransformPreset,
+  locale: AppLocale = 'ru'
+): TextTransformResult {
   const raw = rawText.trim();
   if (!raw) {
     return { formattedText: '', extractedTasks: [], usedCloud: false };
   }
-
+  const isEn = locale === 'en';
   const titleSuggestion = deriveTitleSuggestion(raw);
 
   if (preset === 'polish') {
@@ -212,13 +216,19 @@ export function formatNoteLocally(rawText: string, preset: TextTransformPreset):
     const summaryText = keyLines.slice(0, 2).join(' ');
     const blocks: string[] = [];
     if (summaryText) {
-      blocks.push(`> **Главное:** ${summaryText}`);
+      blocks.push(isEn ? `> **TL;DR:** ${summaryText}` : `> **Главное:** ${summaryText}`);
     }
     if (keyLines.length > 1) {
-      blocks.push('## Ключевые тезисы\n' + keyLines.map((l) => `- ${l}`).join('\n'));
+      blocks.push(
+        (isEn ? '## Key Points\n' : '## Ключевые тезисы\n') +
+          keyLines.map((l) => `- ${l}`).join('\n')
+      );
     }
     if (tasks.length > 0) {
-      blocks.push('## Следующие шаги\n' + tasks.map((t) => `- [ ] ${t}`).join('\n'));
+      blocks.push(
+        (isEn ? '## Next Steps\n' : '## Следующие шаги\n') +
+          tasks.map((t) => `- [ ] ${t}`).join('\n')
+      );
     }
 
     return {
@@ -269,7 +279,7 @@ export function formatNoteLocally(rawText: string, preset: TextTransformPreset):
     const sections: string[] = [];
     if (structuredBody) sections.push(structuredBody);
     if (tasks.length > 0) {
-      sections.push(`## Задачи\n${tasks.map((t) => `- [ ] ${t}`).join('\n')}`);
+      sections.push(`${isEn ? '## Tasks' : '## Задачи'}\n${tasks.map((t) => `- [ ] ${t}`).join('\n')}`);
     }
     if (codeBlocks.length > 0) {
       sections.push(codeBlocks.join('\n\n'));
@@ -285,7 +295,7 @@ export function formatNoteLocally(rawText: string, preset: TextTransformPreset):
   };
 }
 
-const PRESET_PROMPT_RULES: Record<TextTransformPreset, string> = {
+const PRESET_PROMPT_RULES_RU: Record<TextTransformPreset, string> = {
   structure:
     'Разбей сплошной текст на логичные абзацы, оформи перечисления списками, а явные дела — чекбоксами `- [ ] ...`. Добавляй заголовки `## ...` только если в тексте реально 2+ разные темы.',
   tasks:
@@ -294,6 +304,17 @@ const PRESET_PROMPT_RULES: Record<TextTransformPreset, string> = {
     'Убери опечатки, слова-паразиты, лишние пробелы и причёши пунктуацию и кавычки «ёлочки» + длинное тире —. Исходный стиль, смысл и структуру сохрани.',
   summary:
     'Собери суть текста в короткую выжимку: сначала цитата `> **Главное:** ...`, затем ключевые тезисы списком `- ...` и при наличии — блок `- [ ] ...` с шагами.',
+};
+
+const PRESET_PROMPT_RULES_EN: Record<TextTransformPreset, string> = {
+  structure:
+    'Split walls of text into clear paragraphs, format lists cleanly, and convert action items into `- [ ] ...` checkboxes. Only add `## ...` headings if there are genuinely 2+ distinct topics.',
+  tasks:
+    'Extract all action items, commitments, and next steps into a crisp Markdown `- [ ] ...` checklist. Keep brief context above as a single short line if needed.',
+  polish:
+    'Fix typos, filler words, and awkward spacing while polishing punctuation cleanly. Preserve the original tone, facts, and structure.',
+  summary:
+    'Distill the essence concisely: start with `> **TL;DR:** ...`, then key bullet points `- ...`, and if applicable a `- [ ] ...` next-steps checklist.',
 };
 
 const INLINE_SECRET_PATTERNS: RegExp[] = [
@@ -401,9 +422,12 @@ export async function transformNoteText(params: {
   cloudProxy?: CloudAiProxyConfig | null;
   capUsd?: number;
   repo?: VaultRepository;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<TextTransformResult> {
-  const local = formatNoteLocally(params.text, params.preset);
+  const locale: AppLocale = params.locale ?? params.repo?.getLocale() ?? 'ru';
+  const isEn = locale === 'en';
+  const local = formatNoteLocally(params.text, params.preset, locale);
   if (!params.text.trim()) return local;
 
   const route = await resolveAiRoute({
@@ -435,17 +459,28 @@ export async function transformNoteText(params: {
     }
   }
 
-  const systemPrompt = [
-    'Ты — редактор личных заметок в приложении Kapsula.',
-    PRESET_PROMPT_RULES[params.preset],
-    'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:',
-    '- Никогда не выдумывай новые факты, цифры, даты или задачи, которых нет у пользователя.',
-    '- Сохраняй без искажений URL-ссылки, код в тройных бэктиках, команды, телефоны, имена и служебные маркеры вида [REDACTED_SECRET_0].',
-    '- Используй живую русскую типографику: кавычки «ёлочки» (не в коде), длинное тире —, без канцелярита.',
-    '- Никакого технического жаргона или комментариев от себя в тексте результата.',
-    'Верни строго JSON без markdown-обёртки:',
-    '{"titleSuggestion":"короткий заголовок без кавычек","formattedText":"готовый Markdown","extractedTasks":["задача 1"],"summary":"1 фраза о главном"}',
-  ].join('\n');
+  const systemPrompt = isEn
+    ? [
+        'You are a personal notes editor inside Kapsula.',
+        PRESET_PROMPT_RULES_EN[params.preset],
+        'MANDATORY RULES:',
+        '- Never invent facts, numbers, dates, or tasks that are not in the user text.',
+        '- Preserve URLs, fenced code blocks, commands, phone numbers, names, and [REDACTED_SECRET_0] placeholders untouched.',
+        '- Write in crisp, natural English with zero boilerplate or meta commentary.',
+        'Return strictly JSON without markdown fences:',
+        '{"titleSuggestion":"short unquoted title","formattedText":"formatted Markdown","extractedTasks":["task 1"],"summary":"1 sentence TL;DR"}',
+      ].join('\n')
+    : [
+        'Ты — редактор личных заметок в приложении Kapsula.',
+        PRESET_PROMPT_RULES_RU[params.preset],
+        'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:',
+        '- Никогда не выдумывай новые факты, цифры, даты или задачи, которых нет у пользователя.',
+        '- Сохраняй без искажений URL-ссылки, код в тройных бэктиках, команды, телефоны, имена и служебные маркеры вида [REDACTED_SECRET_0].',
+        '- Используй живую русскую типографику: кавычки «ёлочки» (не в коде), длинное тире —, без канцелярита.',
+        '- Никакого технического жаргона или комментариев от себя в тексте результата.',
+        'Верни строго JSON без markdown-обёртки:',
+        '{"titleSuggestion":"короткий заголовок без кавычек","formattedText":"готовый Markdown","extractedTasks":["задача 1"],"summary":"1 фраза о главном"}',
+      ].join('\n');
 
   try {
     const res = await callFlashLiteJson({

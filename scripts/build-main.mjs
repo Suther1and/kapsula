@@ -6,6 +6,10 @@ import path from 'node:path';
 
 const distMainDir = path.resolve(process.cwd(), 'dist/main');
 const distPreloadDir = path.resolve(process.cwd(), 'dist/preload');
+const pkgJson = JSON.parse(
+  fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')
+);
+const appVersion = String(pkgJson.version || '1.0.2').trim();
 fs.mkdirSync(distMainDir, { recursive: true });
 fs.mkdirSync(distPreloadDir, { recursive: true });
 
@@ -17,6 +21,9 @@ await esbuild.build({
   format: 'cjs',
   outfile: path.join(distMainDir, 'index.js'),
   external: ['electron', 'unpdf', 'unpdf/*', 'node:*'],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   sourcemap: false,
   logLevel: 'info',
 });

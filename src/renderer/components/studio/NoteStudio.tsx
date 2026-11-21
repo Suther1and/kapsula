@@ -63,8 +63,9 @@ import type {
   VaultItem,
 } from '@shared/types';
 import { truncateAtWordBoundary } from '@shared/html-entities';
-import { getMediaCategory } from '@shared/item-helpers';
-import { NOTE_TEMPLATES, type NoteTemplate } from '@shared/note-templates';
+import { useI18n } from '@shared/i18n/react';
+import { getMediaCategory, isGenericDraftTitle, isUntitledPlaceholderTitle } from '@shared/item-helpers';
+import { getNoteTemplates, type NoteTemplate } from '@shared/note-templates';
 import { isMacPlatform } from '@shared/shortcuts';
 import { extractWikiLinkTitles } from '@shared/task-helpers';
 import '../../styles/editor.css';
@@ -100,13 +101,6 @@ const lowlight = createLowlight(common);
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 const AUDIO_PATH_RE = /\.(?:wav|webm|ogg|oga|mp3|m4a)$/i;
 
-const PRESET_OPTIONS: Array<{ id: TextTransformPreset; label: string; desc: string }> = [
-  { id: 'structure', label: 'Структурировать', desc: 'Абзацы, списки, задачи и логика' },
-  { id: 'tasks', label: 'Выделить задачи', desc: 'Превратить дела в чек-лист' },
-  { id: 'polish', label: 'Причесать текст', desc: 'Пунктуация, «ёлочки» и чистота слога' },
-  { id: 'summary', label: 'Краткая выжимка', desc: 'Главное сверху + ключевые тезисы' },
-];
-
 const TEMPLATE_ICON_MAP = {
   meeting: UsersThree,
   idea: Lightbulb,
@@ -141,113 +135,6 @@ interface SlashCommandDef {
   icon: React.ComponentType<{ className?: string; weight?: 'regular' | 'bold' | 'duotone' | 'fill' }>;
 }
 
-const SLASH_COMMANDS: readonly SlashCommandDef[] = [
-  {
-    id: 'h1',
-    label: 'Заголовок 1',
-    hint: 'Крупный заголовок раздела',
-    keywords: 'h1 heading title заголовок крупный',
-    group: 'blocks',
-    icon: TextHOne,
-  },
-  {
-    id: 'h2',
-    label: 'Заголовок 2',
-    hint: 'Подзаголовок раздела',
-    keywords: 'h2 heading subtitle подзаголовок',
-    group: 'blocks',
-    icon: TextHTwo,
-  },
-  {
-    id: 'h3',
-    label: 'Заголовок 3',
-    hint: 'Малый подзаголовок',
-    keywords: 'h3 heading малый подзаголовок',
-    group: 'blocks',
-    icon: TextHThree,
-  },
-  {
-    id: 'task',
-    label: 'Чек-лист',
-    hint: 'Список дел с галочками',
-    keywords: 'task todo checklist чеклист задачи галочки',
-    group: 'blocks',
-    icon: CheckSquare,
-  },
-  {
-    id: 'bullet',
-    label: 'Маркированный список',
-    hint: 'Обычный список с точками',
-    keywords: 'bullet list ul список точки',
-    group: 'blocks',
-    icon: ListBullets,
-  },
-  {
-    id: 'ordered',
-    label: 'Нумерованный список',
-    hint: 'Список по порядку 1, 2, 3',
-    keywords: 'ordered number ol нумерованный шаги список',
-    group: 'blocks',
-    icon: ListNumbers,
-  },
-  {
-    id: 'quote',
-    label: 'Цитата',
-    hint: 'Выделенная мысль или вывод',
-    keywords: 'quote blockquote цитата акцент',
-    group: 'blocks',
-    icon: Quotes,
-  },
-  {
-    id: 'code',
-    label: 'Блок кода',
-    hint: 'С подсветкой синтаксиса',
-    keywords: 'code snippet код программа',
-    group: 'blocks',
-    icon: Code,
-  },
-  {
-    id: 'hr',
-    label: 'Разделитель',
-    hint: 'Горизонтальная линия между блоками',
-    keywords: 'hr divider line линия разделитель',
-    group: 'blocks',
-    icon: Minus,
-  },
-  {
-    id: 'image',
-    label: 'Вставить фото',
-    hint: 'Выбрать картинку с компьютера',
-    keywords: 'photo image picture img фото картинка изображение скриншот',
-    group: 'media',
-    icon: ImageSquare,
-  },
-  {
-    id: 'dictate',
-    label: 'Диктовка',
-    hint: 'Записать голос и вставить в заметку',
-    keywords: 'voice dictate audio голос диктовка микрофон',
-    group: 'media',
-    icon: Microphone,
-  },
-  {
-    id: 'beautify',
-    label: 'Причесать текст',
-    hint: 'Разобрать и аккуратно оформить заметку с ИИ',
-    keywords: 'ai beautify polish причесать оформить украсить ии',
-    group: 'media',
-    icon: Sparkle,
-  },
-  ...NOTE_TEMPLATES.map((tpl): SlashCommandDef => ({
-    id: `template-${tpl.id}` as SlashCommandId,
-    label: `Шаблон: ${tpl.label}`,
-    hint: tpl.description,
-    keywords: `template шаблон ${tpl.id} ${tpl.label.toLowerCase()} ${tpl.tags.join(' ')}`,
-    group: 'templates',
-    icon: TEMPLATE_ICON_MAP[tpl.id],
-  })),
-];
-
 export type StudioLayoutMode = 'sheet' | 'center' | 'full';
 
 interface NoteStudioProps {
@@ -273,7 +160,7 @@ interface NoteStudioProps {
   onClose?: () => void;
 }
 
-function deriveTitleFromBody(md: string): string {
+function deriveTitleFromBody(md: string, fallbackTitle: string): string {
   const first = (md || '')
     .split(/\r?\n/)
     .map((l) =>
@@ -289,19 +176,7 @@ function deriveTitleFromBody(md: string): string {
         .trim()
     )
     .find(Boolean);
-  return first ? truncateAtWordBoundary(first, 96) : 'Заметка';
-}
-
-function isGenericDraftTitle(val: string): boolean {
-  const clean = val.trim();
-  return (
-    !clean ||
-    clean === 'Заметка' ||
-    clean === 'Новая заметка' ||
-    clean === 'Быстрая заметка' ||
-    clean.startsWith('Голосовая заметка') ||
-    clean.startsWith('Аудиозапись')
-  );
+  return first ? truncateAtWordBoundary(first, 96) : fallbackTitle;
 }
 
 export const NoteStudio: React.FC<NoteStudioProps> = ({
@@ -325,7 +200,127 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   onRegisterClose,
   onClose,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
+  const noteTemplates = useMemo(() => getNoteTemplates(locale), [locale]);
+  const presetOptions = useMemo<Array<{ id: TextTransformPreset; label: string; desc: string }>>(
+    () => [
+      { id: 'structure', label: t('note.studio.ai.structure.label'), desc: t('note.studio.ai.structure.desc') },
+      { id: 'tasks', label: t('note.studio.ai.tasks.label'), desc: t('note.studio.ai.tasks.desc') },
+      { id: 'polish', label: t('note.studio.ai.polish.label'), desc: t('note.studio.ai.polish.desc') },
+      { id: 'summary', label: t('note.studio.ai.summary.label'), desc: t('note.studio.ai.summary.desc') },
+    ],
+    [t]
+  );
+  const slashCommands = useMemo<readonly SlashCommandDef[]>(
+    () => [
+      {
+        id: 'h1',
+        label: t('note.studio.cmd.h1.label'),
+        hint: t('note.studio.cmd.h1.hint'),
+        keywords: 'h1 heading title',
+        group: 'blocks',
+        icon: TextHOne,
+      },
+      {
+        id: 'h2',
+        label: t('note.studio.cmd.h2.label'),
+        hint: t('note.studio.cmd.h2.hint'),
+        keywords: 'h2 heading subtitle',
+        group: 'blocks',
+        icon: TextHTwo,
+      },
+      {
+        id: 'h3',
+        label: t('note.studio.cmd.h3.label'),
+        hint: t('note.studio.cmd.h3.hint'),
+        keywords: 'h3 heading small',
+        group: 'blocks',
+        icon: TextHThree,
+      },
+      {
+        id: 'task',
+        label: t('note.studio.cmd.todo.label'),
+        hint: t('note.studio.cmd.todo.hint'),
+        keywords: 'task todo checklist',
+        group: 'blocks',
+        icon: CheckSquare,
+      },
+      {
+        id: 'bullet',
+        label: t('note.studio.cmd.ul.label'),
+        hint: t('note.studio.cmd.ul.hint'),
+        keywords: 'bullet list ul',
+        group: 'blocks',
+        icon: ListBullets,
+      },
+      {
+        id: 'ordered',
+        label: t('note.studio.cmd.ol.label'),
+        hint: t('note.studio.cmd.ol.hint'),
+        keywords: 'ordered number ol steps',
+        group: 'blocks',
+        icon: ListNumbers,
+      },
+      {
+        id: 'quote',
+        label: t('note.studio.cmd.quote.label'),
+        hint: t('note.studio.cmd.quote.hint'),
+        keywords: 'quote blockquote',
+        group: 'blocks',
+        icon: Quotes,
+      },
+      {
+        id: 'code',
+        label: t('note.studio.cmd.code.label'),
+        hint: t('note.studio.cmd.code.hint'),
+        keywords: 'code snippet',
+        group: 'blocks',
+        icon: Code,
+      },
+      {
+        id: 'hr',
+        label: t('note.studio.cmd.hr.label'),
+        hint: t('note.studio.cmd.hr.hint'),
+        keywords: 'hr divider line',
+        group: 'blocks',
+        icon: Minus,
+      },
+      {
+        id: 'image',
+        label: t('note.studio.cmd.photo.label'),
+        hint: t('note.studio.cmd.photo.hint'),
+        keywords: 'photo image picture img screenshot',
+        group: 'media',
+        icon: ImageSquare,
+      },
+      {
+        id: 'dictate',
+        label: t('note.studio.cmd.voice.label'),
+        hint: t('note.studio.cmd.voice.hint'),
+        keywords: 'voice dictate audio mic',
+        group: 'media',
+        icon: Microphone,
+      },
+      {
+        id: 'beautify',
+        label: t('note.studio.cmd.ai.label'),
+        hint: t('note.studio.cmd.ai.hint'),
+        keywords: 'ai beautify polish format',
+        group: 'media',
+        icon: Sparkle,
+      },
+      ...noteTemplates.map((tpl): SlashCommandDef => ({
+        id: `template-${tpl.id}` as SlashCommandId,
+        label: t('note.studio.cmd.templatePrefix', { label: tpl.label }),
+        hint: tpl.description,
+        keywords: `template ${tpl.id} ${tpl.label.toLowerCase()} ${tpl.tags.join(' ')}`,
+        group: 'templates',
+        icon: TEMPLATE_ICON_MAP[tpl.id],
+      })),
+    ],
+    [t, noteTemplates]
+  );
   const [title, setTitle] = useState(isDraft ? '' : item.title || '');
   const [liveBody, setLiveBody] = useState(item.body || '');
   const [tags, setTags] = useState<string[]>(item.tags || []);
@@ -389,6 +384,14 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const itemRef = useRef(item);
   itemRef.current = item;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
+  const fallbackTitleRef = useRef(t('dna.note'));
+  fallbackTitleRef.current = t('dna.note');
+  const bodyPlaceholderRef = useRef(t('note.studio.bodyPlaceholder'));
+  bodyPlaceholderRef.current = t('note.studio.bodyPlaceholder');
   const isDraftRef = useRef(isDraft);
   isDraftRef.current = isDraft;
   const persistedDraftIdRef = useRef<string | null>(isDraft ? null : item.id);
@@ -427,7 +430,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     const cur = itemRef.current;
     setInlineLightboxItem({
       ...cur,
-      title: info.alt || cur.title || 'Изображение',
+      title: info.alt || cur.title || tRef.current('dna.image'),
       summary: info.alt ? cur.title : '',
       imagePath: info.localFilename,
       thumbPath: info.localFilename,
@@ -466,7 +469,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     if (found) {
       onSelectRelatedItemRef.current?.(found);
     } else {
-      toast.info(`Заметка «${linkTitle}» не найдена`);
+      toast.info(tRef.current('note.studio.notFoundLink', { title: linkTitle }));
     }
   };
 
@@ -519,7 +522,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         lowlight,
       }),
       Placeholder.configure({
-        placeholder: 'Начни писать или введи «/» для вставки блока…',
+        placeholder: () => bodyPlaceholderRef.current,
       }),
       Typography,
       Highlight,
@@ -711,7 +714,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     });
     if (count > 0) {
       playTactileTick(soundEnabled, 'soft');
-      toast.success(count === 1 ? 'Фото вставлено в заметку' : `Вставлено фото: ${count}`);
+      toast.success(
+        count === 1
+          ? tRef.current('note.studio.photosInserted')
+          : tRef.current('note.studio.photosInsertedMany', { count })
+      );
     }
   };
 
@@ -805,7 +812,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           return;
         }
         dirtyRef.current = false;
-        const effectiveTitle = rawTitle || deriveTitleFromBody(rawBody);
+        const effectiveTitle = rawTitle || deriveTitleFromBody(rawBody, fallbackTitleRef.current);
         const createPromise = window.kapsula
           .capture({
             title: effectiveTitle,
@@ -866,7 +873,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         setSaveState('saved');
         return;
       }
-      const nextTitle = rawTitle || deriveTitleFromBody(rawBody);
+      const nextTitle = rawTitle || deriveTitleFromBody(rawBody, fallbackTitleRef.current);
       try {
         const patch: Record<string, unknown> = {
           title: nextTitle,
@@ -1012,7 +1019,14 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     el.style.height = `${el.scrollHeight}px`;
   }, [title, layoutMode, item.id]);
 
-  // Reset floating link input whenever editor selection collapses
+    // Refresh TipTap placeholder text immediately when locale switches
+    useEffect(() => {
+      if (editor && !editor.isDestroyed) {
+        editor.view.dispatch(editor.state.tr);
+      }
+    }, [editor, locale]);
+
+    // Reset floating link input whenever editor selection collapses
   useEffect(() => {
     if (!editor) return;
     const onSelectionUpdate = () => {
@@ -1050,7 +1064,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     const effectiveId = persistedDraftIdRef.current || curItem.id;
     const isEmptyUntouched =
       !curBody &&
-      (!curTitle || curTitle === 'Новая заметка') &&
+      isUntitledPlaceholderTitle(curTitle) &&
       !curItem.imagePath &&
       !curItem.mediaPath &&
       !curItem.url;
@@ -1123,7 +1137,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     if (!editor || beautifying) return;
     const rawMd = editor.getMarkdown().trim();
     if (!rawMd) {
-      toast.info('Напиши или надиктуй текст, чтобы красиво его оформить');
+      toast.info(t('note.studio.writeFirstToast'));
       return;
     }
 
@@ -1153,7 +1167,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         const nextTitle =
           isGenericDraftTitle(title) && res.titleSuggestion
             ? res.titleSuggestion
-            : title.trim() || deriveTitleFromBody(nextMd);
+            : title.trim() || deriveTitleFromBody(nextMd, fallbackTitleRef.current);
         if (nextTitle !== title) {
           setTitle(nextTitle);
           titleRef.current = nextTitle;
@@ -1170,12 +1184,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         const revs = await refreshRevisions();
         if (revs[0]) setQuickRevertRevId(revs[0].id);
         playTactileTick(soundEnabled, 'success');
-        toast.success('Текст оформлен', {
-          description: res.usedCloud ? 'ИИ привёл структуру в порядок' : 'Отформатировано локально',
+        toast.success(t('note.studio.beautifiedToast'), {
+          description: res.usedCloud ? t('note.studio.beautifiedAiDesc') : t('note.studio.beautifiedLocalDesc'),
         });
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось оформить заметку'));
+      toast.error(friendlyErrorMessage(err, t('note.studio.beautifyFailed'), locale));
     } finally {
       setBeautifying(false);
     }
@@ -1206,7 +1220,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           return;
         }
         toast.error(
-          res.error || 'Не удалось расшифровать запись. Проверь подключение и ключ ИИ в Настройках.'
+          res.error || t('note.studio.transcribeFailedLong')
         );
         return;
       }
@@ -1221,7 +1235,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         res.extractedTasks.length > 0 &&
         !/^\s*[-*]\s+\[[ xX]\]/m.test(nextBody)
       ) {
-        const checklistBlock = `## Задачи\n${res.extractedTasks.map((t) => `- [ ] ${t}`).join('\n')}`;
+        const checklistBlock = `## ${t('note.studio.tasksHeading')}\n${res.extractedTasks.map((task) => `- [ ] ${task}`).join('\n')}`;
         nextBody = nextBody.trim() ? `${nextBody.trim()}\n\n${checklistBlock}` : checklistBlock;
         const patched = await window.kapsula.updateItem(effectiveId, { body: nextBody });
         if (patched) res.item = patched;
@@ -1247,11 +1261,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       await refreshRevisions();
       playTactileTick(soundEnabled, 'success');
       toast.success(
-        extractTasks ? 'Задачи выделены из записи' : 'Голосовая заметка расшифрована'
+        extractTasks ? t('note.studio.audioTasksExtracted') : t('cards.transcribed')
       );
     } catch (err) {
       toast.error(
-        friendlyErrorMessage(err, 'Не удалось расшифровать аудио. Проверь настройки ИИ.')
+        friendlyErrorMessage(err, t('note.studio.audioTranscribeFailed'), locale)
       );
     } finally {
       setTranscribing(false);
@@ -1282,9 +1296,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       onItemUpdated(reverted);
       await refreshRevisions();
       playTactileTick(soundEnabled, 'soft');
-      toast.success('Версия восстановлена');
+      toast.success(t('note.studio.versionRestored'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось восстановить версию'));
+      toast.error(friendlyErrorMessage(err, t('note.studio.versionRestoreFailed'), locale));
     } finally {
       setRestoringRevId(null);
     }
@@ -1332,11 +1346,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) return [];
-    if (!slashQuery) return SLASH_COMMANDS;
-    return SLASH_COMMANDS.filter((cmd) =>
+    if (!slashQuery) return slashCommands;
+    return slashCommands.filter((cmd) =>
       `${cmd.label} ${cmd.hint} ${cmd.keywords}`.toLowerCase().includes(slashQuery)
     );
-  }, [slashQuery]);
+  }, [slashQuery, slashCommands]);
 
   const filteredWikiItems = useMemo(() => {
     if (wikiQuery === null) return [];
@@ -1362,7 +1376,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
     if (cmdId.startsWith('template-')) {
       const tplId = cmdId.slice('template-'.length);
-      const tpl = NOTE_TEMPLATES.find((t) => t.id === tplId);
+      const tpl = noteTemplates.find((tplEntry) => tplEntry.id === tplId);
       if (tpl) applyNoteTemplate(tpl);
       return;
     }
@@ -1449,10 +1463,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const boardOptions = useMemo(
     () => [
-      { value: '', label: 'Без холста' },
+      { value: '', label: t('nav.noBoard') },
       ...focusBoards.map((b) => ({ value: b.id, label: b.name, dotColor: b.color })),
     ],
-    [focusBoards]
+    [focusBoards, t]
   );
 
   // Use explicit vault-wide availableTags or derive frequency-sorted tags from allItemsForLinks
@@ -1466,9 +1480,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
     }
     return Array.from(freq.entries())
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'))
-      .map(([t]) => t);
-  }, [availableTags, allItemsForLinks]);
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], dateLocale))
+      .map(([tag]) => tag);
+  }, [availableTags, allItemsForLinks, dateLocale]);
 
   const activeOrbitId = isDraft && !persistedDraftIdRef.current ? draftOrbit : item.orbit || '';
   const activeOrbit = useMemo(
@@ -1482,15 +1496,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     const cleanBody = (editor?.getMarkdown() ?? bodyMarkdownRef.current).trim();
     const combined = [cleanTitle, cleanBody].filter(Boolean).join('\n\n');
     if (!combined) {
-      toast.info('Заметка пока пуста');
+      toast.info(t('note.studio.emptyCopyInfo'));
       return;
     }
     try {
       await window.kapsula.copyText(combined);
       playTactileTick(soundEnabled, 'soft');
-      toast.success('Заметка скопирована');
+      toast.success(t('note.studio.noteCopied'));
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось скопировать'));
+      toast.error(friendlyErrorMessage(err, t('error.copyFailed'), locale));
     }
   };
 
@@ -1619,11 +1633,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 type="button"
                 data-testid="note-studio-close"
                 onClick={() => void handleCloseStudio()}
-                aria-label="Назад к списку"
+                aria-label={t('note.studio.backToList')}
                 className="k-interactive k-focus-ring inline-flex items-center gap-1.5 h-7.5 pl-2 pr-2 rounded-lg text-[12.5px] font-medium text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
               >
                 <ArrowLeft weight="bold" className="w-3.5 h-3.5 shrink-0" />
-                <span>Назад</span>
+                <span>{t('common.back')}</span>
                 <span className="k-mono text-[10px] text-[var(--k-ink-muted)] px-1 py-0.25 rounded bg-[var(--k-bg-surface-2)]/85 ml-0.5 hidden sm:inline">
                   Esc
                 </span>
@@ -1643,7 +1657,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 <button
                   type="button"
                   data-testid="note-studio-orbit-breadcrumb"
-                  title={`Раздел: ${activeOrbit.name} · нажми, чтобы сменить`}
+                  title={t('cards.sectionChipTitle', { name: activeOrbit.name })}
                   style={{
                     backgroundColor: `color-mix(in srgb, ${activeOrbit.color} 13%, transparent)`,
                     borderColor: `color-mix(in srgb, ${activeOrbit.color} 28%, transparent)`,
@@ -1661,18 +1675,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 <button
                   type="button"
                   data-testid="note-studio-orbit-breadcrumb"
-                  title="Выбрать раздел"
+                  title={t('note.studio.chooseSection')}
                   className="k-interactive inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[7px] border border-dashed border-[var(--k-border-strong)]/70 bg-transparent text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]/70 cursor-pointer min-w-0 max-w-[180px]"
                 >
                   <FolderSimple className="w-3.5 h-3.5 shrink-0 opacity-75" />
-                  <span className="truncate">Без раздела</span>
+                  <span className="truncate">{t('nav.noSection')}</span>
                 </button>
               )
             }
           >
             <div className="space-y-0.5 max-h-[240px] overflow-y-auto text-[12.5px]">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                Раздел
+                {t('cards.sectionChipEmpty')}
               </div>
               <button
                 type="button"
@@ -1688,7 +1702,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               >
                 <span className="inline-flex items-center gap-2 min-w-0">
                   <FolderSimple className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                  <span>Без раздела</span>
+                  <span>{t('nav.noSection')}</span>
                 </span>
                 {!activeOrbitId ? <Check weight="bold" className="w-3.5 h-3.5 shrink-0" /> : null}
               </button>
@@ -1726,10 +1740,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           {/* Subtle Relative Date & Save Status */}
           <span className="text-[11.5px] text-[var(--k-ink-muted)]/85 k-tabular truncate hidden @[480px]:inline">
             {saveState === 'saving'
-              ? '· Сохраняю…'
+              ? t('note.studio.statusSaving')
               : !isDraft
-                ? `· ${formatRelativeDate(item.updatedAt)}`
-                : '· Новая заметка'}
+                ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
+                : t('note.studio.statusNew')}
           </span>
         </div>
 
@@ -1740,12 +1754,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               type="button"
               data-testid="studio-revert-original-btn"
               onClick={() => void handleQuickRevert(quickRevertRevId)}
-              title="Вернуть оригинал"
-              aria-label="Вернуть оригинал"
+              title={t('note.studio.revertOriginal')}
+              aria-label={t('note.studio.revertOriginal')}
               className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-accent)] hover:border-[var(--k-border-strong)] cursor-pointer mr-0.5"
             >
               <ArrowCounterClockwise weight="bold" className="w-3.5 h-3.5" />
-              <span className="hidden @[520px]:inline">Вернуть оригинал</span>
+              <span className="hidden @[520px]:inline">{t('note.studio.revertOriginal')}</span>
             </button>
           ) : null}
 
@@ -1754,8 +1768,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               type="button"
               data-testid="studio-favorite-btn"
               onClick={() => void applyMetaPatch({ isPinned: !item.isPinned })}
-              aria-label={item.isPinned ? 'Убрать из избранного' : 'В избранное'}
-              title={item.isPinned ? 'Убрать из избранного' : 'В избранное'}
+              aria-label={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
+              title={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
               className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
                 item.isPinned
                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
@@ -1783,10 +1797,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               data-testid="studio-history-btn"
               title={
                 revisions.length > 0
-                  ? `История версий (${revisions.length})`
-                  : 'История версий'
+                  ? t('note.studio.versionHistoryCount', { count: revisions.length })
+                  : t('rev.title')
               }
-              aria-label="История версий"
+              aria-label={t('rev.title')}
               onClick={() => void handleOpenHistoryModal()}
               className="k-interactive relative inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
             >
@@ -1806,8 +1820,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               <button
                 type="button"
                 data-testid="studio-more-menu-btn"
-                aria-label="Ещё действия"
-                title="Ещё действия"
+                aria-label={t('common.moreActions')}
+                title={t('common.moreActions')}
                 className="k-interactive inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
               >
                 <DotsThree weight="bold" className="w-4.5 h-4.5" />
@@ -1824,7 +1838,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                <span>Скопировать текст</span>
+                <span>{t('cards.ctx.copyText')}</span>
               </button>
 
               <button
@@ -1836,12 +1850,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               >
                 <span className="inline-flex items-center gap-2">
                   <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                  <span>{beautifying ? 'Причёсываю…' : 'Причесать с ИИ'}</span>
+                  <span>{beautifying ? t('note.studio.beautifying') : t('note.studio.beautifyWithAi')}</span>
                 </span>
               </button>
 
               <div className="px-2 pb-1 pt-0.5 grid grid-cols-2 gap-1">
-                {PRESET_OPTIONS.map((opt) => (
+                {presetOptions.map((opt) => (
                   <button
                     key={opt.id}
                     type="button"
@@ -1875,7 +1889,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
               >
                 <Microphone className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                <span>{showVoiceStudio ? 'Скрыть диктовку' : 'Надиктовать голосом'}</span>
+                <span>{showVoiceStudio ? t('note.studio.hideDictation') : t('note.studio.startDictation')}</span>
               </button>
 
               <button
@@ -1887,13 +1901,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
               >
                 <ImageSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                <span>Вставить фото</span>
+                <span>{t('note.studio.insertPhoto')}</span>
               </button>
 
               {focusBoards.length > 0 ? (
                 <div className="px-2 py-1.5 mt-1 space-y-1 border-t border-[var(--k-border-hairline)]">
                   <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Холст
+                    {t('workspace.view.board')}
                   </div>
                   <SelectMenu
                     size="sm"
@@ -1920,7 +1934,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                   >
                     <ClockCounterClockwise className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                    <span>История версий ({revisions.length})</span>
+                    <span>{t('note.studio.versionHistoryCount', { count: revisions.length })}</span>
                   </button>
                   <button
                     type="button"
@@ -1931,7 +1945,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                   >
                     <Archive className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                    <span>{item.isArchived ? 'Вернуть из архива' : 'В архив'}</span>
+                    <span>{item.isArchived ? t('workspace.returnFromArchive') : t('note.studio.toArchive')}</span>
                   </button>
                   <button
                     type="button"
@@ -1942,7 +1956,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] text-left cursor-pointer"
                   >
                     <Trash className="w-3.5 h-3.5" />
-                    <span>В корзину</span>
+                    <span>{t('workspace.toTrashShort')}</span>
                   </button>
                 </>
               ) : null}
@@ -1956,8 +1970,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 type="button"
                 data-testid="note-studio-close"
                 onClick={() => void handleCloseStudio()}
-                aria-label="Закрыть заметку"
-                title="Закрыть (Esc)"
+                aria-label={t('note.studio.closeNote')}
+                title={t('note.studio.closeEsc')}
                 className="k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
               >
                 <X weight="bold" className="w-4 h-4" />
@@ -2022,7 +2036,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
                   onDraftPersistedRef.current?.(created);
                   playTactileTick(soundEnabled, 'success');
-                  toast.success('Голос и аудио сохранены в заметке');
+                  toast.success(t('note.studio.voiceAndAudioSaved'));
                   return;
                 }
                 const effectiveId = persistedDraftIdRef.current || item.id;
@@ -2034,7 +2048,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   } else {
                     editor.chain().focus().insertContent(`\n\n${inserted}`, { contentType: 'markdown' }).run();
                   }
-                  if (res.titleSuggestion && (!title.trim() || title.trim() === 'Заметка')) {
+                  if (res.titleSuggestion && isGenericDraftTitle(title)) {
                     setTitle(res.titleSuggestion);
                     titleRef.current = res.titleSuggestion;
                   }
@@ -2046,7 +2060,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   await refreshRevisions();
                   playTactileTick(soundEnabled, 'success');
                 }
-                toast.success('Голос и аудио прикреплены к заметке');
+                toast.success(t('note.studio.voiceAndAudioAttached'));
               }}
               onFallbackSaveAudio={async (wav) => {
                 setShowVoiceStudio(false);
@@ -2059,7 +2073,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   mediaMeta: { waveformPeaks: wav.peaks },
                 });
                 if (isDraftRef.current) onDraftPersisted?.(created);
-                toast.success('Аудиозапись сохранена');
+                toast.success(t('note.studio.audioSaved'));
               }}
               onCancel={() => setShowVoiceStudio(false)}
             />
@@ -2084,8 +2098,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 />
                 <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
                   <CopySlotPill
-                    label="Фото"
-                    copiedLabel="Скопировано"
+                    label={t('cards.photoLabel')}
+                    copiedLabel={t('common.copied')}
                     widthPx={104}
                     heightPx={28}
                     onCopy={() => window.kapsula.copyImage(item.imagePath || item.thumbPath || '')}
@@ -2093,8 +2107,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   {onOpenShotLightbox ? (
                     <button
                       type="button"
-                      aria-label="Открыть во весь экран"
-                      title="Открыть во весь экран"
+                      aria-label={t('note.studio.openFullscreen')}
+                      title={t('note.studio.openFullscreen')}
                       onClick={() => onOpenShotLightbox(item)}
                       className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg border border-white/15 bg-black/55 text-white hover:bg-black/75 cursor-pointer"
                     >
@@ -2106,13 +2120,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               {item.ocrText ? (
                 <details className="px-3.5 py-2 border-t border-[var(--k-border-hairline)] text-[12px] text-[var(--k-ink-secondary)]">
                   <summary className="cursor-pointer select-none font-medium text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]">
-                    Текст со скриншота
+                    {t('note.studio.ocrTitle')}
                   </summary>
                   <div className="mt-2 flex items-start justify-between gap-2 k-selectable">
                     <p className="m-0 whitespace-pre-wrap leading-relaxed">{item.ocrText}</p>
                     <CopySlotPill
-                      label="Текст"
-                      copiedLabel="Готово"
+                      label={t('note.studio.textLabel')}
+                      copiedLabel={t('common.done')}
                       widthPx={82}
                       heightPx={24}
                       onCopy={() => window.kapsula.copyText(item.ocrText)}
@@ -2150,10 +2164,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       ) : (
                         <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
                       )}
-                      <span>{transcribing ? 'Расшифровываю…' : 'Расшифровать через ИИ'}</span>
+                      <span>{transcribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
                     </button>
                     <span className="text-[11.5px] text-[var(--k-ink-muted)]">
-                      Переведёт запись в чистый текст и выделит главное
+                      {t('note.studio.transcribeHint')}
                     </span>
                   </>
                 ) : (
@@ -2170,7 +2184,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       ) : (
                         <ArrowCounterClockwise className="w-3.5 h-3.5" />
                       )}
-                      <span>{transcribing ? 'Расшифровываю…' : 'Перерасшифровать'}</span>
+                      <span>{transcribing ? t('cards.transcribing') : t('note.studio.retranscribe')}</span>
                     </button>
                     <button
                       type="button"
@@ -2184,7 +2198,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       ) : (
                         <ListChecks weight="bold" className="w-3.5 h-3.5" />
                       )}
-                      <span>{extractingVoiceTasks ? 'Выделяю задачи…' : 'Выделить задачи'}</span>
+                      <span>{extractingVoiceTasks ? t('note.studio.extractingTasks') : t('note.studio.extractTasks')}</span>
                     </button>
                   </div>
                 )}
@@ -2193,7 +2207,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               {item.mediaMeta?.transcript &&
               item.mediaMeta.transcript.trim() !== liveBody.trim() ? (
                 <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 py-2 text-[12.5px] text-[var(--k-ink-secondary)] k-selectable">
-                  <span className="font-medium text-[var(--k-ink-muted)] mr-1.5">Расшифровка:</span>
+                  <span className="font-medium text-[var(--k-ink-muted)] mr-1.5">{t('note.studio.transcriptLabel')}</span>
                   {item.mediaMeta.transcript}
                 </div>
               ) : null}
@@ -2210,8 +2224,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 <CopySlotPill
-                  label="Ссылка"
-                  copiedLabel="Готово"
+                  label={t('dna.link')}
+                  copiedLabel={t('common.done')}
                   widthPx={84}
                   heightPx={28}
                   onCopy={() => window.kapsula.copyText(item.url || '')}
@@ -2221,7 +2235,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   onClick={() => void window.kapsula.openExternal(item.url || '')}
                   className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                 >
-                  <span>Открыть</span>
+                  <span>{t('common.open')}</span>
                   <ArrowSquareOut className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -2239,10 +2253,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   <div className="text-[11.5px] text-[var(--k-ink-muted)]">
                     {[
                       formatFileSize(item.mediaMeta?.fileSize),
-                      item.mediaMeta?.pageCount ? `${item.mediaMeta.pageCount} стр.` : '',
+                      item.mediaMeta?.pageCount ? t('common.pagesShort', { count: item.mediaMeta.pageCount }) : '',
                     ]
                       .filter(Boolean)
-                      .join(' · ') || 'Документ'}
+                      .join(' · ') || t('dna.document')}
                   </div>
                 </div>
               </div>
@@ -2252,12 +2266,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   onClick={() => void window.kapsula.openMediaFile(item.mediaPath!)}
                   className="k-interactive h-7 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                 >
-                  Открыть
+                  {t('common.open')}
                 </button>
                 <button
                   type="button"
                   onClick={() => void window.kapsula.revealMediaFile(item.mediaPath!)}
-                  aria-label="Показать в папке"
+                  aria-label={t('cards.showInFolder')}
                   className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
@@ -2280,7 +2294,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   editor?.commands.focus();
                 }
               }}
-              placeholder="Без названия"
+              placeholder={t('common.noTitle')}
               className="w-full resize-none overflow-hidden bg-transparent border-none outline-none text-[28px] sm:text-[31px] font-bold tracking-[-0.006em] leading-[1.22] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]/55 k-selectable"
             />
 
@@ -2305,7 +2319,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     <button
                       type="button"
                       data-testid="studio-insert-menu-btn"
-                      title="Вставить блок, фото или шаблон (или введи «/» в тексте)"
+                      title={t('note.studio.insertTitle')}
                       className="k-interactive inline-flex items-center gap-1 h-[26px] px-2 rounded-full border border-transparent hover:border-[var(--k-border-hairline)] hover:bg-[var(--k-bg-surface-2)]/80 text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
                     >
                       {insertingImage ? (
@@ -2313,13 +2327,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       ) : (
                         <Plus weight="bold" className="w-3 h-3" />
                       )}
-                      <span>Вставить</span>
+                      <span>{t('note.studio.insertShort')}</span>
                     </button>
                   }
                 >
                   <div className="space-y-0.5 text-[12.5px]">
                     <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      Вставить в заметку
+                      {t('note.studio.insertHeading')}
                     </div>
                     <button
                       type="button"
@@ -2333,7 +2347,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     >
                       <span className="inline-flex items-center gap-2">
                         <ImageSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                        <span>Фото</span>
+                        <span>{t('note.studio.insert.photo')}</span>
                       </span>
                       <span className="k-mono text-[10px] text-[var(--k-ink-muted)]">
                         {isMacPlatform(window.kapsula?.platform) ? '⌘V' : 'Ctrl+V'}
@@ -2348,7 +2362,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <CheckSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Чек-лист</span>
+                      <span>{t('note.studio.insert.checklist')}</span>
                     </button>
                     <button
                       type="button"
@@ -2359,7 +2373,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <TextHTwo className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Заголовок</span>
+                      <span>{t('note.studio.insert.heading')}</span>
                     </button>
                     <button
                       type="button"
@@ -2370,7 +2384,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <ListBullets className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Список</span>
+                      <span>{t('note.studio.insert.list')}</span>
                     </button>
                     <button
                       type="button"
@@ -2381,7 +2395,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <Quotes className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Цитата</span>
+                      <span>{t('note.studio.insert.quote')}</span>
                     </button>
                     <button
                       type="button"
@@ -2392,7 +2406,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <Code className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Блок кода</span>
+                      <span>{t('note.studio.insert.code')}</span>
                     </button>
                     <button
                       type="button"
@@ -2403,15 +2417,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
                     >
                       <Microphone className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>Голосовая диктовка</span>
+                      <span>{t('note.studio.insert.voice')}</span>
                     </button>
 
                     <div className="h-px bg-[var(--k-border-hairline)] my-1" />
                     <div className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      Шаблоны
+                      {t('note.studio.templates')}
                     </div>
                     <div className="grid grid-cols-2 gap-1 px-1 pb-0.5">
-                      {NOTE_TEMPLATES.map((tpl) => {
+                      {noteTemplates.map((tpl) => {
                         const Icon = TEMPLATE_ICON_MAP[tpl.id];
                         return (
                           <button
@@ -2431,7 +2445,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     </div>
 
                     <div className="px-2 pt-1 text-[10.5px] text-[var(--k-ink-muted)] border-t border-[var(--k-border-hairline)]">
-                      Также работает «/» в тексте и «[[» для связей
+                      {t('note.studio.slashHint')}
                     </div>
                   </div>
                 </PopoverSurface>
@@ -2453,9 +2467,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               >
                 <div className="flex flex-wrap items-center gap-1.5 py-0.5">
                   <span className="text-[11.5px] text-[var(--k-ink-muted)] mr-0.5">
-                    Начать с шаблона:
+                    {t('note.studio.startFromTemplate')}
                   </span>
-                  {NOTE_TEMPLATES.map((tpl) => {
+                  {noteTemplates.map((tpl) => {
                     const Icon = TEMPLATE_ICON_MAP[tpl.id];
                     return (
                       <button
@@ -2509,8 +2523,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   />
                   <button
                     type="submit"
-                    aria-label="Применить ссылку"
-                    title="Применить ссылку"
+                    aria-label={t('note.studio.applyLink')}
+                    title={t('note.studio.applyLink')}
                     className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] cursor-pointer"
                   >
                     <Check weight="bold" className="w-3.5 h-3.5" />
@@ -2518,8 +2532,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   {toolbarState?.link ? (
                     <button
                       type="button"
-                      aria-label="Убрать ссылку"
-                      title="Убрать ссылку"
+                      aria-label={t('note.studio.removeLink')}
+                      title={t('note.studio.removeLink')}
                       onClick={() => {
                         editor.chain().focus().extendMarkRange('link').unsetLink().run();
                         setBubbleLinkEditing(false);
@@ -2531,7 +2545,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   ) : null}
                   <button
                     type="button"
-                    aria-label="Отмена"
+                    aria-label={t('common.cancel')}
                     onClick={() => {
                       setBubbleLinkEditing(false);
                       editor.commands.focus();
@@ -2545,8 +2559,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 <>
                   <button
                     type="button"
-                    title={isMacPlatform(window.kapsula?.platform) ? 'Жирный (⌘B)' : 'Жирный (Ctrl+B)'}
-                    aria-label="Жирный"
+                    title={`${t('note.studio.toolbar.bold')} (${isMacPlatform(window.kapsula?.platform) ? '⌘B' : 'Ctrl+B'})`}
+                    aria-label={t('note.studio.toolbar.bold')}
                     onClick={() => editor.chain().focus().toggleBold().run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.bold
@@ -2558,8 +2572,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
-                    title={isMacPlatform(window.kapsula?.platform) ? 'Курсив (⌘I)' : 'Курсив (Ctrl+I)'}
-                    aria-label="Курсив"
+                    title={`${t('note.studio.toolbar.italic')} (${isMacPlatform(window.kapsula?.platform) ? '⌘I' : 'Ctrl+I'})`}
+                    aria-label={t('note.studio.toolbar.italic')}
                     onClick={() => editor.chain().focus().toggleItalic().run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.italic
@@ -2571,8 +2585,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
-                    title="Зачёркнутый"
-                    aria-label="Зачёркнутый"
+                    title={t('note.studio.toolbar.strike')}
+                    aria-label={t('note.studio.toolbar.strike')}
                     onClick={() => editor.chain().focus().toggleStrike().run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.strike
@@ -2584,8 +2598,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
-                    title="Код"
-                    aria-label="Код"
+                    title={t('note.studio.toolbar.code')}
+                    aria-label={t('note.studio.toolbar.code')}
                     onClick={() => editor.chain().focus().toggleCode().run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.code
@@ -2597,8 +2611,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
-                    title="Выделение"
-                    aria-label="Выделение"
+                    title={t('note.studio.toolbar.highlight')}
+                    aria-label={t('note.studio.toolbar.highlight')}
                     onClick={() => editor.chain().focus().toggleHighlight().run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.highlight
@@ -2611,8 +2625,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   <span className="w-px h-4 bg-[var(--k-border-hairline)] mx-0.5" />
                   <button
                     type="button"
-                    title="Заголовок H2"
-                    aria-label="Заголовок H2"
+                    title={t('note.studio.toolbar.h2')}
+                    aria-label={t('note.studio.toolbar.h2')}
                     onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.h2
@@ -2624,8 +2638,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
-                    title="Ссылка"
-                    aria-label="Ссылка"
+                    title={t('note.studio.toolbar.link')}
+                    aria-label={t('note.studio.toolbar.link')}
                     onClick={handleOpenBubbleLink}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.link
@@ -2653,7 +2667,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 <div data-testid="note-studio-backlinks" className="flex flex-col gap-1.5">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-accent)] flex items-center gap-1.5">
                     <LinkSimple weight="bold" className="w-3.5 h-3.5" />
-                    <span>Обратные ссылки ({relatedState.backlinks.length})</span>
+                    <span>{t('note.studio.backlinks', { count: relatedState.backlinks.length })}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {relatedState.backlinks.map((bk) => (
@@ -2674,7 +2688,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               {relatedState.related.length > 0 ? (
                 <div data-testid="note-studio-related" className="flex flex-col gap-1.5">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Похожие записи ({relatedState.related.length})
+                    {t('note.studio.related', { count: relatedState.related.length })}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {relatedState.related.map((rel) => (
@@ -2741,7 +2755,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   className="fixed z-[135] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
                 >
                   <div className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Команды и шаблоны
+                    {t('note.studio.commandsAndTemplates')}
                   </div>
                   <div className="relative">
                     <div
@@ -2824,7 +2838,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   className="fixed z-[135] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
                 >
                   <div className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    Связать с заметкой
+                    {t('note.studio.linkWithNote')}
                   </div>
                   {filteredWikiItems.map((cand, idx) => {
                     const active = idx === wikiIndex % filteredWikiItems.length;

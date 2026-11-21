@@ -2,17 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Hash, Plus, X } from '@phosphor-icons/react';
-
-const DEFAULT_STARTER_TAGS = [
-  'идея',
-  'важно',
-  'работа',
-  'личное',
-  'проект',
-  'задача',
-  'референс',
-  'почитать',
-] as const;
+import { getDefaultStarterTags } from '@shared/constants';
+import { useI18n } from '@shared/i18n/react';
 
 interface InlineTagEditorProps {
   tags: string[];
@@ -40,6 +31,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
   availableTags = [],
   onChange,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -60,6 +52,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
   );
 
   // Merge vault tags (frequency-ordered from parent) with quiet universal starter tags
+  const starterTags = getDefaultStarterTags(locale);
   const suggestionPool = useMemo(() => {
     const existingSet = new Set(tags.map((t) => t.toLowerCase()));
     const seen = new Set<string>();
@@ -73,7 +66,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
       }
     }
 
-    for (const fallback of DEFAULT_STARTER_TAGS) {
+    for (const fallback of starterTags) {
       if (!existingSet.has(fallback) && !seen.has(fallback)) {
         seen.add(fallback);
         merged.push(fallback);
@@ -81,7 +74,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
     }
 
     return merged;
-  }, [availableTags, tags]);
+  }, [availableTags, tags, starterTags]);
 
   const options = useMemo<TagSuggestionOption[]>(() => {
     const matched = queryLower
@@ -231,7 +224,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
           <span>{tag}</span>
           <button
             type="button"
-            aria-label={`Удалить тег ${tag}`}
+            aria-label={t('ui.tagRemoveAria', { tag })}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => removeTag(tag)}
             className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-colors cursor-pointer"
@@ -271,8 +264,8 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
             setActiveIndex(0);
           }}
           onKeyDown={handleKeyDown}
-          placeholder="тег"
-          aria-label="Добавить тег"
+          placeholder={t('ui.tagPlaceholder')}
+          aria-label={t('ui.tagAddAria')}
           aria-autocomplete="list"
           aria-expanded={open && options.length > 0}
           className={`h-[26px] w-[124px] pl-6 pr-2 rounded-full border text-[11.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none transition-[border-color,background-color] duration-140 select-text ${
@@ -332,7 +325,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
                   className="z-[140] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1 shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
                 >
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    {queryLower ? 'Подходящие теги' : 'Предложения тегов'}
+                    {queryLower ? t('ui.tagMatches') : t('ui.tagSuggestions')}
                   </div>
                   <div className="max-h-[210px] overflow-y-auto flex flex-col gap-0.5">
                     {options.map((opt, idx) => {
@@ -358,7 +351,7 @@ export const InlineTagEditor: React.FC<InlineTagEditorProps> = ({
                           {opt.kind === 'create' ? (
                             <>
                               <Plus weight="bold" className="w-3.5 h-3.5 shrink-0 text-[var(--k-accent)]" />
-                              <span className="truncate">Создать «#{opt.tag}»</span>
+                              <span className="truncate">{t('ui.tagCreate', { tag: opt.tag })}</span>
                             </>
                           ) : (
                             <>

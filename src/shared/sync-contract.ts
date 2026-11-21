@@ -1,6 +1,7 @@
 import type {
   AiStatus,
   AppearanceConfig,
+  AppLocale,
   CalendarChecklistItem,
   CalendarEventKind,
   CalendarRecurrence,
@@ -293,6 +294,7 @@ export interface SyncedItemRevisionPayload {
 export interface SyncedWorkspacePrefsPayload {
   v: 1;
   id: 'default';
+  locale?: AppLocale;
   taskBoardColumns?: TaskBoardColumn[];
   appearance?: AppearanceConfig;
   updatedAt: number;

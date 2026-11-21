@@ -29,6 +29,7 @@ import type {
   CalendarRecurrence,
   VaultItem,
 } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { getDnaHumanLabel } from '../../lib/format';
@@ -65,29 +66,29 @@ interface CalendarEventSheetProps {
 
 const EVENT_COLORS = ['#E86A33', '#10B981', '#3B82F6', '#A855F7', '#F59E0B', '#EF4444'];
 
-const DURATION_OPTIONS: Array<{ value: DurationPreset; label: string }> = [
-  { value: 'none', label: 'Без конца' },
-  { value: 15, label: '15 мин' },
-  { value: 30, label: '30 мин' },
-  { value: 45, label: '45 мин' },
-  { value: 60, label: '1 ч' },
-  { value: 90, label: '1,5 ч' },
-  { value: 120, label: '2 ч' },
-  { value: 'custom', label: 'Своё' },
-];
+const DURATION_OPTIONS = [
+  { value: 'none' as DurationPreset, labelKey: 'cal.duration.none' },
+  { value: 15 as DurationPreset, labelKey: 'cal.duration.15' },
+  { value: 30 as DurationPreset, labelKey: 'cal.duration.30' },
+  { value: 45 as DurationPreset, labelKey: 'cal.duration.45' },
+  { value: 60 as DurationPreset, labelKey: 'cal.duration.60' },
+  { value: 90 as DurationPreset, labelKey: 'cal.duration.90' },
+  { value: 120 as DurationPreset, labelKey: 'cal.duration.120' },
+  { value: 'custom' as DurationPreset, labelKey: 'cal.duration.custom' },
+] as const;
 
-const RECURRENCE_OPTIONS: Array<{ value: CalendarRecurrence; label: string }> = [
-  { value: 'none', label: 'Не повторять' },
-  { value: 'daily', label: 'Каждый день' },
-  { value: 'weekdays', label: 'По будням' },
-  { value: 'weekly', label: 'Каждую неделю' },
-  { value: 'monthly', label: 'Каждый месяц' },
-];
+const RECURRENCE_OPTIONS = [
+  { value: 'none' as CalendarRecurrence, labelKey: 'cal.repeat.none' },
+  { value: 'daily' as CalendarRecurrence, labelKey: 'cal.repeat.daily' },
+  { value: 'weekdays' as CalendarRecurrence, labelKey: 'cal.repeat.weekdays' },
+  { value: 'weekly' as CalendarRecurrence, labelKey: 'cal.repeat.weekly' },
+  { value: 'monthly' as CalendarRecurrence, labelKey: 'cal.repeat.monthly' },
+] as const;
 
-const KIND_LABELS: Record<CalendarEventKind, string> = {
-  event: 'Событие',
-  reminder: 'Напоминание',
-  task: 'Дедлайн',
+const KIND_LABEL_KEYS: Record<CalendarEventKind, 'cal.kind.event' | 'cal.kind.reminder' | 'cal.kind.task'> = {
+  event: 'cal.kind.event',
+  reminder: 'cal.kind.reminder',
+  task: 'cal.kind.task',
 };
 
 function toDateInputValue(ts: number): string {
@@ -134,22 +135,26 @@ function computeEndFromTime(dateStr: string, startMs: number, endTimeStr: string
   return base.getTime();
 }
 
-function formatReadableEventWhen(ev: CalendarEvent): { dateLabel: string; timeLabel: string } {
+function formatReadableEventWhen(
+  ev: CalendarEvent,
+  dateLocale: string,
+  allDayText: string
+): { dateLabel: string; timeLabel: string } {
   const d = new Date(ev.startAt);
-  const rawDate = d.toLocaleDateString('ru-RU', {
+  const rawDate = d.toLocaleDateString(dateLocale, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
   });
   const dateLabel = rawDate.charAt(0).toUpperCase() + rawDate.slice(1);
   if (ev.allDay) {
-    return { dateLabel, timeLabel: 'Весь день' };
+    return { dateLabel, timeLabel: allDayText };
   }
-  const start = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const start = d.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' });
   if (!ev.hasEndTime) {
     return { dateLabel, timeLabel: start };
   }
-  const end = new Date(ev.endAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const end = new Date(ev.endAt).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' });
   return { dateLabel, timeLabel: `${start} – ${end}` };
 }
 
@@ -165,6 +170,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
   onToggleDone,
   onOpenVaultItem,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
 
   // Existing events open in View Mode by default; new events open directly in Edit Mode
@@ -268,14 +274,14 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
   const parsedSmart = useMemo(() => {
     const clean = smartText.trim();
     if (clean.length < 4) return null;
-    const res = parseRussianEvent(clean);
+    const res = parseRussianEvent(clean, Date.now(), undefined, locale);
     return res?.isEventIntent ? res : null;
-  }, [smartText]);
+  }, [smartText, locale]);
 
   const applySmartParse = (textToParse: string) => {
-    const parsed = parseRussianEvent(textToParse.trim());
+    const parsed = parseRussianEvent(textToParse.trim(), Date.now(), undefined, locale);
     if (!parsed) return false;
-    setTitle(parsed.title || title || 'Событие');
+    setTitle(parsed.title || title || t('cal.kind.event'));
     setDateStr(toDateInputValue(parsed.startAt));
     setAllDay(parsed.allDay);
     if (!parsed.allDay) {
@@ -426,9 +432,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
   if (typeof document === 'undefined') return null;
 
   const isLocationUrl = /^https?:\/\/\S+$/i.test(location.trim());
-  const recurrenceLabel =
-    RECURRENCE_OPTIONS.find((r) => r.value === (event?.recurrence ?? recurrence))?.label ?? '';
-  const readableWhen = event ? formatReadableEventWhen(event) : null;
+  const recurrenceOpt = RECURRENCE_OPTIONS.find(
+    (r) => r.value === (event?.recurrence ?? recurrence)
+  );
+  const recurrenceLabel = recurrenceOpt ? t(recurrenceOpt.labelKey) : '';
+  const readableWhen = event
+    ? formatReadableEventWhen(event, dateLocale, t('common.allDay'))
+    : null;
 
   return createPortal(
     <AnimatePresence>
@@ -465,13 +475,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                 <span className="text-[13px] font-medium text-[var(--k-ink-secondary)] truncate">
                   {event
                     ? mode === 'view'
-                      ? KIND_LABELS[event.kind] ?? 'Событие'
-                      : 'Редактирование'
-                    : 'Новое событие'}
+                      ? t(KIND_LABEL_KEYS[event.kind] ?? 'cal.kind.event')
+                      : t('cal.sheet.editing')
+                    : t('cal.sheet.newEvent')}
                 </span>
                 {event?.externalSource === 'vault_auto' ? (
                   <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium shrink-0">
-                    Из заметки
+                    {t('cal.sheet.fromNoteBadge')}
                   </span>
                 ) : null}
               </div>
@@ -482,7 +492,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                     type="button"
                     data-testid="calendar-event-delete-btn"
                     onClick={() => void onDelete(event.id)}
-                    aria-label="Удалить событие"
+                    aria-label={t('cal.sheet.deleteAria')}
                     className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
                   >
                     <Trash className="w-4 h-4" />
@@ -492,7 +502,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  aria-label="Закрыть карточку"
+                  aria-label={t('cal.sheet.closeAria')}
                   className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                 >
                   <X className="w-4 h-4" />
@@ -552,7 +562,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                             </span>
                             <div className="min-w-0">
                               <div className="text-[12.5px] font-semibold text-[var(--k-ink-primary)]">
-                                Ссылка на встречу
+                                {t('cal.sheet.meetingLink')}
                               </div>
                               <div className="text-[11.5px] text-[var(--k-ink-secondary)] truncate">
                                 {location.trim()}
@@ -562,10 +572,10 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                           <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               type="button"
-                              title="Скопировать ссылку"
+                              title={t('cal.sheet.copyLink')}
                               onClick={() => {
                                 void window.kapsula.copyText(location.trim());
-                                toast.success('Ссылка скопирована');
+                                toast.success(t('cal.sheet.linkCopied'));
                               }}
                               className="k-interactive w-8 h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center justify-center cursor-pointer"
                             >
@@ -576,7 +586,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               onClick={() => void window.kapsula.openExternal(location.trim())}
                               className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium inline-flex items-center gap-1 cursor-pointer"
                             >
-                              <span>Открыть</span>
+                              <span>{t('common.open')}</span>
                               <ArrowSquareOut className="w-3.5 h-3.5" />
                             </button>
                           </div>
@@ -595,7 +605,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                         <div className="flex items-center justify-between text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                           <span className="inline-flex items-center gap-1.5">
                             <ListChecks className="w-3.5 h-3.5" />
-                            Подготовка
+                            {t('cal.sheet.prep')}
                           </span>
                           <span className="k-mono">
                             {checklist.filter((c) => c.done).length}/{checklist.length}
@@ -632,7 +642,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                     {notes.trim() ? (
                       <div className="space-y-1.5">
                         <div className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                          Детали
+                          {t('common.details')}
                         </div>
                         <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/45 p-3.5 text-[13.5px] leading-relaxed text-[var(--k-ink-primary)] whitespace-pre-wrap k-selectable">
                           {notes.trim()}
@@ -645,7 +655,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       <div className="space-y-2">
                         <div className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] inline-flex items-center gap-1.5">
                           <Paperclip className="w-3.5 h-3.5" />
-                          Связанные записи
+                          {t('cal.sheet.linkedItems')}
                         </div>
                         <div className="space-y-1.5">
                           {attachments.map((attId) => {
@@ -660,10 +670,10 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               >
                                 <div className="min-w-0">
                                   <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-                                    {found.title || getDnaHumanLabel(found)}
+                                    {found.title || getDnaHumanLabel(found, locale)}
                                   </div>
                                   <div className="text-[11px] text-[var(--k-ink-muted)]">
-                                    {getDnaHumanLabel(found)}
+                                    {getDnaHumanLabel(found, locale)}
                                   </div>
                                 </div>
                                 <ArrowSquareOut className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
@@ -677,14 +687,14 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                     {!location.trim() && checklist.length === 0 && !notes.trim() && attachments.length === 0 ? (
                       <div className="rounded-xl border border-dashed border-[var(--k-border-hairline)] p-5 text-center space-y-2">
                         <div className="text-[12.5px] text-[var(--k-ink-muted)]">
-                          Дополнительных деталей пока нет
+                          {t('cal.sheet.noExtraDetails')}
                         </div>
                         <button
                           type="button"
                           onClick={() => setMode('edit')}
                           className="k-interactive text-[12px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer"
                         >
-                          Добавить заметку, ссылку или чек-лист
+                          {t('cal.sheet.addDetailsCta')}
                         </button>
                       </div>
                     ) : null}
@@ -703,7 +713,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                         }`}
                       >
                         <Check weight="bold" className="w-4 h-4" />
-                        <span>{event.isDone ? 'Выполнено' : 'Отметить выполненным'}</span>
+                        <span>{event.isDone ? t('cal.sheet.completed') : t('cal.sheet.markCompleted')}</span>
                       </button>
                     ) : (
                       <span />
@@ -716,7 +726,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                     >
                       <PencilSimple className="w-3.5 h-3.5" />
-                      <span>Изменить</span>
+                      <span>{t('common.edit')}</span>
                     </button>
                   </div>
                 </motion.div>
@@ -751,7 +761,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                 applySmartParse(smartText);
                               }
                             }}
-                            placeholder="Быстрый разбор: «Пятница 15:00 созвон в Zoom на 45 мин»…"
+                            placeholder={t('cal.sheet.quickParsePlaceholder')}
                             className="flex-1 bg-transparent border-none outline-none text-[12.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
                           />
                           {parsedSmart ? (
@@ -760,13 +770,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               onClick={() => applySmartParse(smartText)}
                               className="k-interactive h-6 px-2.5 rounded-md bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11px] font-medium cursor-pointer shrink-0"
                             >
-                              Заполнить
+                              {t('cal.sheet.fillBtn')}
                             </button>
                           ) : null}
                         </div>
                         {parsedSmart ? (
                           <div className="text-[11px] text-[var(--k-ink-secondary)] pl-5">
-                            Распознано: <strong className="text-[var(--k-ink-primary)]">{parsedSmart.label}</strong>
+                            {t('cal.sheet.recognized')} <strong className="text-[var(--k-ink-primary)]">{parsedSmart.label}</strong>
                             {parsedSmart.location ? ` · ${parsedSmart.location}` : ''}
                           </div>
                         ) : null}
@@ -782,7 +792,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                         data-testid="calendar-event-title-input"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        placeholder="Название встречи, дела или дедлайна…"
+                        placeholder={t('cal.sheet.titlePlaceholder')}
                         className="w-full h-10 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3.5 text-[15px] font-semibold outline-none focus:border-[var(--k-border-focus)]"
                       />
 
@@ -790,9 +800,9 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                         <div className="inline-flex items-center gap-1 rounded-lg bg-[var(--k-bg-surface-2)] p-0.5 border border-[var(--k-border-hairline)]">
                           {(
                             [
-                              ['event', 'Событие'],
-                              ['reminder', 'Напоминание'],
-                              ['task', 'Дедлайн'],
+                              ['event', t('cal.kind.event')],
+                              ['reminder', t('cal.kind.reminder')],
+                              ['task', t('cal.kind.task')],
                             ] as const
                           ).map(([k, lbl]) => (
                             <button
@@ -816,7 +826,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               key={hex}
                               type="button"
                               onClick={() => setColor(hex)}
-                              aria-label={`Цвет ${hex}`}
+                              aria-label={t('nav.pickColor', { hex })}
                               className={`w-5 h-5 rounded-full transition-transform duration-120 cursor-pointer ${
                                 color === hex ? 'scale-115 ring-2 ring-[var(--k-ink-primary)]/40' : 'opacity-75 hover:opacity-100'
                               }`}
@@ -833,7 +843,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                         <label className="flex-1 min-w-[140px] space-y-1">
                           <span className="text-[11px] font-medium text-[var(--k-ink-muted)] flex items-center gap-1">
                             <CalendarBlank className="w-3.5 h-3.5" />
-                            Дата
+                            {t('cal.sheet.dateLabel')}
                           </span>
                           <input
                             type="date"
@@ -847,7 +857,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                           <label className="w-[116px] space-y-1">
                             <span className="text-[11px] font-medium text-[var(--k-ink-muted)] flex items-center gap-1">
                               <Clock className="w-3.5 h-3.5" />
-                              Начало
+                              {t('cal.sheet.startLabel')}
                             </span>
                             <input
                               type="time"
@@ -868,7 +878,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                 : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
                             }`}
                           >
-                            Весь день
+                            {t('common.allDay')}
                           </button>
                         </div>
                       </div>
@@ -876,7 +886,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       {!allDay ? (
                         <div className="space-y-1.5">
                           <span className="text-[11px] font-medium text-[var(--k-ink-muted)]">
-                            Длительность
+                            {t('cal.sheet.durationLabel')}
                           </span>
                           <div className="flex flex-wrap items-center gap-1.5" data-testid="duration-pills">
                             {DURATION_OPTIONS.map((opt) => {
@@ -902,7 +912,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                       : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:border-[var(--k-border-strong)] hover:text-[var(--k-ink-primary)]'
                                   }`}
                                 >
-                                  {opt.label}
+                                  {t(opt.labelKey)}
                                 </button>
                               );
                             })}
@@ -910,7 +920,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
 
                           {durationPreset === 'custom' ? (
                             <div className="pt-1 flex items-center gap-2">
-                              <span className="text-[12px] text-[var(--k-ink-muted)]">Окончание:</span>
+                              <span className="text-[12px] text-[var(--k-ink-muted)]">{t('cal.sheet.endLabel')}</span>
                               <input
                                 type="time"
                                 value={customEndTime}
@@ -926,7 +936,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       <div className="space-y-1.5 pt-1 border-t border-[var(--k-border-hairline)]">
                         <span className="text-[11px] font-medium text-[var(--k-ink-muted)] inline-flex items-center gap-1">
                           <ArrowsClockwise className="w-3 h-3" />
-                          Повтор
+                          {t('cal.sheet.repeatLabel')}
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {RECURRENCE_OPTIONS.map((opt) => {
@@ -942,7 +952,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                     : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
                                 }`}
                               >
-                                {opt.label}
+                                {t(opt.labelKey)}
                               </button>
                             );
                           })}
@@ -954,14 +964,14 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                     <div className="space-y-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)] flex items-center gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-[var(--k-ink-muted)]" />
-                        Место или ссылка на созвон
+                        {t('cal.sheet.placeOrLink')}
                       </label>
                       <div className="flex items-center gap-2">
                         <input
                           type="text"
                           value={location}
                           onChange={(e) => setLocation(e.target.value)}
-                          placeholder="Адрес, кабинет или ссылка (Zoom, Meet, Телемост)…"
+                          placeholder={t('cal.sheet.placePlaceholder')}
                           className="flex-1 h-9 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3 text-[13px] outline-none focus:border-[var(--k-border-focus)]"
                         />
                         {isLocationUrl ? (
@@ -971,7 +981,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                             className="k-interactive h-9 px-3 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-accent)] hover:border-[var(--k-accent)]/40 inline-flex items-center gap-1 cursor-pointer shrink-0"
                           >
                             <ArrowSquareOut className="w-3.5 h-3.5" />
-                            Открыть
+                            {t('common.open')}
                           </button>
                         ) : null}
                       </div>
@@ -982,7 +992,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       <div className="flex items-center justify-between">
                         <span className="text-[11.5px] font-medium text-[var(--k-ink-secondary)] flex items-center gap-1.5">
                           <ListChecks className="w-3.5 h-3.5 text-[var(--k-ink-muted)]" />
-                          Чек-лист подготовки
+                          {t('cal.sheet.prepChecklist')}
                         </span>
                         {checklist.length > 0 ? (
                           <span className="text-[11px] k-mono text-[var(--k-ink-muted)]">
@@ -1021,7 +1031,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                 onClick={() =>
                                   setChecklist((prev) => prev.filter((c) => c.id !== entry.id))
                                 }
-                                aria-label="Удалить пункт"
+                                aria-label={t('cal.sheet.removeChecklistItemAria')}
                                 className="opacity-0 group-hover:opacity-100 text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] transition-opacity cursor-pointer"
                               >
                                 <X className="w-3.5 h-3.5" />
@@ -1043,7 +1053,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               handleAddChecklistItem();
                             }
                           }}
-                          placeholder="Добавить пункт: взять паспорт, подготовить вопросы…"
+                          placeholder={t('cal.sheet.addChecklistPlaceholder')}
                           className="flex-1 h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-2.5 text-[12.5px] outline-none focus:border-[var(--k-border-focus)]"
                         />
                         <button
@@ -1062,13 +1072,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                     <div className="space-y-1.5">
                       <label className="text-[11.5px] font-medium text-[var(--k-ink-secondary)] flex items-center gap-1.5">
                         <NotePencil className="w-3.5 h-3.5 text-[var(--k-ink-muted)]" />
-                        Заметки, контакты и детали
+                        {t('cal.sheet.notesDetails')}
                       </label>
                       <textarea
                         rows={4}
                         value={notes}
                         onChange={(e) => setNotes(e.target.value)}
-                        placeholder="Повестка встречи, телефон врача, номер заказа, важные детали…"
+                        placeholder={t('cal.sheet.notesPlaceholder')}
                         className="k-selectable w-full rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-3 text-[13px] leading-relaxed resize-y outline-none focus:border-[var(--k-border-focus)]"
                       />
                     </div>
@@ -1078,7 +1088,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11.5px] font-medium text-[var(--k-ink-secondary)] flex items-center gap-1.5">
                           <Paperclip className="w-3.5 h-3.5 text-[var(--k-ink-muted)]" />
-                          Связанные материалы из Kapsula
+                          {t('cal.sheet.linkedMaterials')}
                         </span>
 
                         <PopoverSurface
@@ -1093,7 +1103,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                             >
                               <LinkSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                              Прикрепить запись
+                              {t('cal.sheet.attachItem')}
                             </button>
                           }
                         >
@@ -1103,13 +1113,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                               autoFocus
                               value={attachQuery}
                               onChange={(e) => setAttachQuery(e.target.value)}
-                              placeholder="Поиск заметки, ссылки или файла…"
+                              placeholder={t('cal.sheet.searchItemPlaceholder')}
                               className="w-full h-8 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-2.5 text-[12px] outline-none focus:border-[var(--k-border-focus)]"
                             />
                             <div className="max-h-52 overflow-y-auto space-y-1">
                               {attachableItems.length === 0 ? (
                                 <div className="py-4 text-center text-[11.5px] text-[var(--k-ink-muted)]">
-                                  Подходящих записей не найдено
+                                  {t('cal.sheet.noMatchingItems')}
                                 </div>
                               ) : (
                                 attachableItems.map((candidate) => (
@@ -1124,10 +1134,10 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                     className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-accent-soft)] transition-colors duration-100 flex items-center justify-between gap-2 cursor-pointer"
                                   >
                                     <span className="truncate text-[12px] font-medium text-[var(--k-ink-primary)]">
-                                      {candidate.title || getDnaHumanLabel(candidate)}
+                                      {candidate.title || getDnaHumanLabel(candidate, locale)}
                                     </span>
                                     <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                                      {getDnaHumanLabel(candidate)}
+                                      {getDnaHumanLabel(candidate, locale)}
                                     </span>
                                   </button>
                                 ))
@@ -1152,13 +1162,13 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                                   className="text-left min-w-0 flex-1 hover:text-[var(--k-accent)] cursor-pointer"
                                 >
                                   <div className="text-[12.5px] font-medium truncate">
-                                    {found?.title || 'Связанная запись'}
+                                    {found?.title || t('cal.sheet.linkedFallback')}
                                   </div>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setAttachments((prev) => prev.filter((id) => id !== attId))}
-                                  aria-label="Открепить запись"
+                                  aria-label={t('cal.sheet.detachItemAria')}
                                   className="text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] cursor-pointer"
                                 >
                                   <X className="w-3.5 h-3.5" />
@@ -1178,7 +1188,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       onClick={() => (event ? setMode('view') : onClose())}
                       className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                     >
-                      Отмена
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="submit"
@@ -1188,7 +1198,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                       className="k-interactive h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:cursor-default"
                     >
                       <Check weight="bold" className="w-3.5 h-3.5" />
-                      <span>{saving ? 'Сохраняю…' : event ? 'Сохранить' : 'Добавить событие'}</span>
+                      <span>{saving ? t('common.saving') : event ? t('common.save') : t('cal.sheet.submitNew')}</span>
                     </button>
                   </div>
                 </motion.div>

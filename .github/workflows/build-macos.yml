@@ -64,8 +64,6 @@ jobs:
             ls release/*-arm64.dmg >/dev/null
             ls release/*-x64.dmg >/dev/null
           fi
-          (cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt)
-          cat release/SHA256SUMS-macos.txt
 
       - name: Upload .dmg artifacts
         uses: actions/upload-artifact@v4
@@ -73,7 +71,6 @@ jobs:
           name: Kapsula-macOS-dmg
           path: |
             release/*.dmg
-            release/SHA256SUMS-macos.txt
           retention-days: 30
           if-no-files-found: error
 
@@ -98,4 +95,3 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             release/*.dmg
-            release/SHA256SUMS-macos.txt

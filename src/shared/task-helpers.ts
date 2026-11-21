@@ -1,4 +1,4 @@
-import type { TaskBoardColumn, TaskBoardItemMeta, TaskPriority } from './types';
+import type { AppLocale, TaskBoardColumn, TaskBoardItemMeta, TaskPriority, VaultTaskEntry } from './types';
 
 export type TaskColumnIconId =
   | 'tray'
@@ -27,12 +27,57 @@ export const TASK_COLUMN_ICONS: Array<{ id: TaskColumnIconId; label: string }> =
   { id: 'none', label: 'Без иконки' },
 ];
 
+export const TASK_COLUMN_ICONS_EN: Array<{ id: TaskColumnIconId; label: string }> = [
+  { id: 'tray', label: 'Inbox' },
+  { id: 'flame', label: 'In Progress' },
+  { id: 'clock', label: 'Waiting' },
+  { id: 'check', label: 'Done' },
+  { id: 'star', label: 'Important' },
+  { id: 'flag', label: 'Priority' },
+  { id: 'lightning', label: 'Urgent' },
+  { id: 'folder', label: 'Project' },
+  { id: 'bookmark', label: 'Bookmark' },
+  { id: 'sparkles', label: 'Ideas' },
+  { id: 'none', label: 'No icon' },
+];
+
+export function getTaskColumnIcons(locale: AppLocale = 'ru'): Array<{ id: TaskColumnIconId; label: string }> {
+  return locale === 'en' ? TASK_COLUMN_ICONS_EN : TASK_COLUMN_ICONS;
+}
+
 export const DEFAULT_TASK_BOARD_COLUMNS: TaskBoardColumn[] = [
   { id: 'inbox', title: 'Входящие', color: '#94A3B8', order: 0, icon: 'tray' },
   { id: 'in_progress', title: 'В работе', color: '#E86A33', order: 1, icon: 'flame' },
   { id: 'waiting', title: 'Жду', color: '#F5A524', order: 2, icon: 'clock' },
   { id: 'done', title: 'Готово', color: '#2EA06B', order: 3, isDone: true, icon: 'check' },
 ];
+
+export const DEFAULT_TASK_BOARD_COLUMNS_EN: TaskBoardColumn[] = [
+  { id: 'inbox', title: 'Inbox', color: '#94A3B8', order: 0, icon: 'tray' },
+  { id: 'in_progress', title: 'In Progress', color: '#E86A33', order: 1, icon: 'flame' },
+  { id: 'waiting', title: 'Waiting', color: '#F5A524', order: 2, icon: 'clock' },
+  { id: 'done', title: 'Done', color: '#2EA06B', order: 3, isDone: true, icon: 'check' },
+];
+
+export function getDefaultTaskBoardColumns(locale: AppLocale = 'ru'): TaskBoardColumn[] {
+  return locale === 'en' ? DEFAULT_TASK_BOARD_COLUMNS_EN : DEFAULT_TASK_BOARD_COLUMNS;
+}
+
+const DEFAULT_COLUMN_TITLES_BY_ID: Record<string, { ru: string; en: string }> = {
+  inbox: { ru: 'Входящие', en: 'Inbox' },
+  in_progress: { ru: 'В работе', en: 'In Progress' },
+  waiting: { ru: 'Жду', en: 'Waiting' },
+  done: { ru: 'Готово', en: 'Done' },
+};
+
+/** Localizes untouched default column titles on language switch while preserving custom names. */
+export function localizeTaskBoardColumnTitle(col: Pick<TaskBoardColumn, 'id' | 'title'>, locale: AppLocale): string {
+  const known = DEFAULT_COLUMN_TITLES_BY_ID[col.id];
+  if (known && (col.title === known.ru || col.title === known.en)) {
+    return known[locale];
+  }
+  return col.title;
+}
 
 const VALID_COLUMN_ICON_IDS = new Set<string>(TASK_COLUMN_ICONS.map((entry) => entry.id));
 
@@ -372,6 +417,7 @@ export function reconcileTaskMeta(
       columnId: finalColumnId,
       ...(finalPrevColumnId ? { prevColumnId: finalPrevColumnId } : {}),
       boardOrder,
+      ...(base?.customOrder ? { customOrder: true } : {}),
       priority: sanitizePriority(base?.priority),
       dueAt: typeof base?.dueAt === 'number' && Number.isFinite(base.dueAt) ? base.dueAt : null,
       textHash: hash,
@@ -453,4 +499,71 @@ export function extractWikiLinkTitles(body: string | null | undefined): string[]
   }
 
   return titles;
+}
+
+/**
+ * Keeps untouched checklist tasks grouped cleanly per source note (newest note first,
+ * original checklist order within each note), while honoring manually reordered cards (`customOrder`).
+ */
+export function sortColumnTasks(tasks: VaultTaskEntry[]): VaultTaskEntry[] {
+  if (tasks.length <= 1) return [...tasks];
+
+  const noteUpdatedAtMap = new Map<string, number>();
+  for (const t of tasks) {
+    const prev = noteUpdatedAtMap.get(t.itemId) ?? 0;
+    if (t.updatedAt > prev) noteUpdatedAtMap.set(t.itemId, t.updatedAt);
+  }
+
+  const untouched = tasks.filter((t) => !t.customOrder);
+  untouched.sort((a, b) => {
+    const noteDiff =
+      (noteUpdatedAtMap.get(b.itemId) ?? b.updatedAt) -
+      (noteUpdatedAtMap.get(a.itemId) ?? a.updatedAt);
+    if (noteDiff !== 0) return noteDiff;
+    const itemDiff = a.itemId.localeCompare(b.itemId);
+    if (itemDiff !== 0) return itemDiff;
+    const idxDiff = a.taskIndex - b.taskIndex;
+    if (idxDiff !== 0) return idxDiff;
+    return a.id.localeCompare(b.id);
+  });
+
+  const untouchedOrder = new Map<string, number>();
+  untouched.forEach((t, idx) => {
+    untouchedOrder.set(t.id, idx * 1000);
+  });
+
+  return [...tasks].sort((a, b) => {
+    const aOrd = a.customOrder ? (a.boardOrder ?? 0) : (untouchedOrder.get(a.id) ?? 0);
+    const bOrd = b.customOrder ? (b.boardOrder ?? 0) : (untouchedOrder.get(b.id) ?? 0);
+    if (aOrd !== bOrd) return aOrd - bOrd;
+    if (Boolean(a.customOrder) !== Boolean(b.customOrder)) {
+      return a.customOrder ? -1 : 1;
+    }
+    return b.updatedAt - a.updatedAt;
+  });
+}
+
+export function computeColumnDropOrder(siblings: VaultTaskEntry[], insertIdx: number): number {
+  if (siblings.length === 0) return 1000;
+
+  let untouchedIdx = 0;
+  const effectiveOrders = siblings.map((t) => {
+    if (t.customOrder) return t.boardOrder ?? 0;
+    const val = untouchedIdx * 1000;
+    untouchedIdx += 1;
+    return val;
+  });
+
+  if (insertIdx <= 0) {
+    return effectiveOrders[0]! - 1000;
+  }
+  if (insertIdx >= siblings.length) {
+    return effectiveOrders[effectiveOrders.length - 1]! + 1000;
+  }
+  const prevOrder = effectiveOrders[insertIdx - 1]!;
+  const afterOrder = effectiveOrders[insertIdx]!;
+  if (Math.abs(afterOrder - prevOrder) > 1e-6) {
+    return (prevOrder + afterOrder) / 2;
+  }
+  return prevOrder + 0.5;
 }

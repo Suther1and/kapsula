@@ -34,8 +34,10 @@ import type {
   StructuredSecretInput,
   VaultItem,
 } from '@shared/types';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
 import { formatCardPanGroups } from '@renderer/lib/format';
-import { filterItemsByQuery, getCardBrandLabel, pluralRu } from '../lib/mobile-helpers';
+import { filterItemsByQuery, getCardBrandLabel } from '../lib/mobile-helpers';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { pushBackHandler } from '../lib/back-stack';
 import { mobileBridge } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
@@ -128,13 +130,13 @@ interface VaultViewProps {
   onCreateOrbit?: (name: string, color: string) => Promise<string>;
 }
 
-const SECRET_FILTERS: Array<{ id: 'all' | SecretKind; label: string }> = [
-  { id: 'all', label: 'Всё' },
-  { id: 'bank_card', label: 'Карты' },
-  { id: 'password', label: 'Пароли' },
-  { id: 'api_key', label: 'Ключи' },
-  { id: 'seed', label: 'Сид-фразы' },
-  { id: 'note', label: 'Заметки' },
+const SECRET_FILTERS: Array<{ id: 'all' | SecretKind; labelKey: MobileDictKey }> = [
+  { id: 'all', labelKey: 'vault.filterAll' },
+  { id: 'bank_card', labelKey: 'vault.filterCards' },
+  { id: 'password', labelKey: 'vault.filterPasswords' },
+  { id: 'api_key', labelKey: 'vault.filterKeys' },
+  { id: 'seed', labelKey: 'vault.filterSeeds' },
+  { id: 'note', labelKey: 'vault.filterNotes' },
 ];
 
 interface CopyBadgeState {
@@ -168,6 +170,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
   onDeleteSecret,
   onCreateOrbit,
 }) => {
+  const { locale, t, plural } = useMobileI18n();
   const [kindFilter, setKindFilter] = useState<'all' | SecretKind>('all');
   const [localSearch, setLocalSearch] = useState('');
   const [revealUntilById, setRevealUntilById] = useState<Record<string, number>>({});
@@ -317,7 +320,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     if (!onUnlockWithPin || pinBusy || liveLockoutSec > 0) return;
     const pin = pinDraft.trim();
     if (pin.length < 4) {
-      setPinError('Введи мастер-ПИН (от 4 символов)');
+      setPinError(t('vault.pinPromptMin4'));
       return;
     }
     setPinBusy(true);
@@ -334,7 +337,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
         if (res.lockoutRemainingSec > 0) {
           setLiveLockoutSec(res.lockoutRemainingSec);
         }
-        setPinError(res.error || 'Неверный мастер-ПИН');
+        setPinError(res.error || t('vault.pinWrong'));
         mobileBridge.haptic('error');
       }
     } finally {
@@ -437,7 +440,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     }
     const wipe = await onCopySecretField(itemId, field);
     if (wipe === null) {
-      toast.error('Не удалось скопировать данные');
+      toast.error(t('vault.copyFailed'));
       return;
     }
     mobileBridge.haptic('success');
@@ -446,7 +449,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     // For sensitive countdown fields, the live top progress banner + green button badge already
     // confirm copy without spawning a bottom toast that covers adjacent 08/29 & CVV buttons!
     if (!isCountdownField) {
-      toast.success(`${label}: скопировано`, { duration: 1800 });
+      toast.success(t('vault.copiedBadge', { label }), { duration: 1800 });
     }
   };
 
@@ -516,19 +519,17 @@ export const VaultView: React.FC<VaultViewProps> = ({
   const handleSubmitSecret = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!secretValue.trim() && kind !== 'note') {
-      toast.error(kind === 'bank_card' ? 'Введи номер карты' : 'Введи секретное значение');
+      toast.error(kind === 'bank_card' ? t('vault.enterCardNumber') : t('vault.enterSecretValue'));
       return;
     }
     const cleanTotp = totpUriOrSecret.trim();
     if (cleanTotp && !isValidTotpInput(cleanTotp)) {
-      toast.error(
-        'Не удалось распознать ключ 2FA — вставь секретный ключ целиком или ссылку из приложения-аутентификатора'
-      );
+      toast.error(t('vault.totpParseError'));
       return;
     }
     setSaving(true);
     try {
-      const cleanName = title.trim() || 'Секрет';
+      const cleanName = title.trim() || t('vault.secretFallback');
       const saved = await onUpsertSecret({
         id: editId,
         kind,
@@ -553,7 +554,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
       onSelectSecret(saved.id);
       setEditorMode('closed');
       mobileBridge.haptic('success');
-      toast.success(editId ? 'Запись Сейфа обновлена' : 'Сохранено в Сейф');
+      toast.success(editId ? t('vault.secretUpdated') : t('vault.secretSaved'));
     } finally {
       setSaving(false);
     }
@@ -586,37 +587,42 @@ export const VaultView: React.FC<VaultViewProps> = ({
     return [
       {
         id: 'copy-main',
-        label: isCard ? 'Скопировать номер карты' : 'Скопировать значение',
+        label: isCard ? t('vault.copyCardPan') : t('vault.copyValue'),
         icon: <Copy className="w-5 h-5" />,
         accent: true,
         onSelect: () =>
-          void handleCopy(null, item.id, 'secretValue', isCard ? 'Номер карты' : 'Значение'),
+          void handleCopy(
+            null,
+            item.id,
+            'secretValue',
+            isCard ? t('vault.cardPanLabel') : t('vault.valueLabel')
+          ),
       },
       ...(hasTotp
         ? [
             {
               id: 'copy-totp',
-              label: 'Скопировать код 2FA',
+              label: t('vault.copyTotp'),
               icon: <Clock className="w-5 h-5" />,
-              onSelect: () => void handleCopy(null, item.id, 'totp', 'Код 2FA'),
+              onSelect: () => void handleCopy(null, item.id, 'totp', t('vault.totpLabel')),
             },
           ]
         : []),
       {
         id: 'reveal',
-        label: revealed ? 'Скрыть данные' : 'Показать на 30 с',
+        label: revealed ? t('vault.hideData') : t('vault.reveal30s'),
         icon: revealed ? <EyeSlash className="w-5 h-5" /> : <Eye className="w-5 h-5" />,
         onSelect: () => void handleToggleReveal(null, item.id),
       },
       {
         id: 'edit',
-        label: 'Редактировать запись',
+        label: t('vault.editSecret'),
         icon: <PencilSimple className="w-5 h-5" />,
         onSelect: () => void openEditForm(item),
       },
       {
         id: 'delete',
-        label: 'Удалить из Сейфа',
+        label: t('vault.deleteSecret'),
         icon: <Trash className="w-5 h-5" />,
         danger: true,
         onSelect: () => {
@@ -644,11 +650,11 @@ export const VaultView: React.FC<VaultViewProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <h2 className="text-[19px] font-bold text-[var(--k-ink-primary)]">Сейф защищён</h2>
+            <h2 className="text-[19px] font-bold text-[var(--k-ink-primary)]">{t('vault.lockedTitle')}</h2>
             <p className="text-[13.5px] leading-relaxed text-[var(--k-ink-secondary)]">
               {pinModeActive
-                ? 'Введи мастер-ПИН, чтобы открыть банковские карты, пароли и ключи.'
-                : 'Подтверди вход по отпечатку, лицу или мастер-ПИНу, чтобы открыть Сейф.'}
+                ? t('vault.lockedHintPin')
+                : t('vault.lockedHintBio')}
             </p>
           </div>
 
@@ -665,12 +671,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   if (pinError) setPinError(null);
                 }}
                 disabled={pinBusy || liveLockoutSec > 0}
-                placeholder="Мастер-ПИН"
+                placeholder={t('vault.masterPinPlaceholder')}
                 className="w-full h-12 px-4 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-center k-mono text-[16px] tracking-[0.22em] placeholder:tracking-normal text-[var(--k-ink-primary)] disabled:opacity-50"
               />
               {liveLockoutSec > 0 ? (
                 <div className="rounded-xl px-3 py-2 bg-[var(--k-danger-soft)] text-[12px] text-[var(--k-danger)] text-center">
-                  Слишком много попыток · повтор через {liveLockoutSec} с
+                  {t('vault.tooManyAttemptsWait', { sec: liveLockoutSec })}
                 </div>
               ) : pinError ? (
                 <div className="text-[12.5px] text-[var(--k-danger)] text-center">{pinError}</div>
@@ -682,7 +688,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 className="k-tap w-full h-12 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 shadow-sm disabled:opacity-45"
               >
                 <LockOpen weight="bold" className="w-4 h-4" />
-                {pinBusy ? 'Проверяю…' : 'Открыть Сейф'}
+                {pinBusy ? t('vault.unlocking') : t('vault.unlockVault')}
               </button>
               {biometricEnabled ? (
                 <button
@@ -694,7 +700,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   className="k-tap w-full h-10 rounded-xl bg-[var(--k-bg-surface-2)] text-[13px] font-medium text-[var(--k-ink-secondary)] inline-flex items-center justify-center gap-1.5"
                 >
                   <Fingerprint className="w-4 h-4 text-[var(--k-accent)]" />
-                  Войти по биометрии
+                  {t('vault.unlockBiometric')}
                 </button>
               ) : null}
             </form>
@@ -707,7 +713,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 className="k-tap w-full h-12 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 shadow-sm"
               >
                 <LockOpen weight="bold" className="w-4 h-4" />
-                Разблокировать Сейф
+                {t('vault.unlockAction')}
               </button>
 
               {hasMasterPin && onUnlockWithPin ? (
@@ -718,15 +724,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   className="k-tap w-full h-10 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[13px] font-medium text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-1.5"
                 >
                   <LockKey className="w-4 h-4 text-[var(--k-accent)]" />
-                  Ввести мастер-ПИН
+                  {t('vault.enterMasterPin')}
                 </button>
               ) : null}
 
               {noBiometricNotice ? (
                 <div className="rounded-2xl p-3 bg-[var(--k-amber-soft)] border border-[var(--k-amber)]/30 text-left space-y-2">
                   <p className="text-[12px] leading-relaxed text-[var(--k-amber)]">
-                    На устройстве не настроена блокировка экрана или биометрия. Задай мастер-ПИН в
-                    настройках, чтобы безопасно открывать Сейф.
+                    {t('vault.noDeviceLockHint')}
                   </p>
                   {onOpenSecuritySettings ? (
                     <button
@@ -734,7 +739,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                       onClick={onOpenSecuritySettings}
                       className="k-tap w-full h-9 rounded-xl bg-[var(--k-bg-surface-1)] text-[12.5px] font-semibold text-[var(--k-ink-primary)]"
                     >
-                      Настроить мастер-ПИН
+                      {t('vault.setupMasterPinBtn')}
                     </button>
                   ) : null}
                 </div>
@@ -743,14 +748,9 @@ export const VaultView: React.FC<VaultViewProps> = ({
           )}
 
           <p className="text-[11.5px] text-[var(--k-ink-muted)]">
-            В Сейфе{' '}
-            {pluralRu(
-              allSecrets.length,
-              'защищённая запись',
-              'защищённые записи',
-              'защищённых записей'
-            )}{' '}
-            · очистка буфера {wipeSeconds} с
+            {t('vault.inVaultPrefix')}{' '}
+            {plural('secretEntry', allSecrets.length)}{' '}
+            · {t('vault.wipeSuffix', { sec: wipeSeconds })}
           </p>
         </div>
       </div>
@@ -781,7 +781,9 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <>
             <Check weight="bold" className="w-3.5 h-3.5 shrink-0" />
             <span className="k-mono text-[11.5px]">
-              {copyBadge.remainingSec > 0 ? `${copyBadge.remainingSec} с` : 'Готово'}
+              {copyBadge.remainingSec > 0
+                ? t('common.secondsShort', { count: copyBadge.remainingSec })
+                : t('vault.clipboardReady')}
             </span>
           </>
         ) : (
@@ -816,13 +818,15 @@ export const VaultView: React.FC<VaultViewProps> = ({
     return (
       <div
         data-testid={`mobile-totp-row-${itemId}`}
-        onClick={(e) => void handleCopy(e, itemId, 'totp', 'Код 2FA')}
+        onClick={(e) => void handleCopy(e, itemId, 'totp', t('vault.totpLabel'))}
         className="relative mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 border border-[var(--k-border-hairline)] px-3 py-2 cursor-pointer"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <TotpRing remainingSec={snap.remainingSec} period={snap.period} size={26} />
           <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">2FA-код</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">
+              {t('vault.totpBadge')}
+            </div>
             <div className="k-mono text-[16.5px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
               {formatTotpCode(snap.code)}
             </div>
@@ -839,7 +843,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           {isCopied ? (
             <>
               <Check weight="bold" className="w-3 h-3" />
-              <span className="k-mono">{copyBadge.remainingSec} с</span>
+              <span className="k-mono">{t('common.secondsShort', { count: copyBadge.remainingSec })}</span>
             </>
           ) : (
             <>
@@ -861,7 +865,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     const isSelected = selectedSecretId === item.id;
 
     if (itemKind === 'bank_card') {
-      const brand = getCardBrandLabel(meta?.cardBrand);
+      const brand = getCardBrandLabel(meta?.cardBrand, locale);
       const last4 = meta?.last4 || '••••';
       const panDisplay =
         revealed && dec?.secretValue
@@ -876,13 +880,13 @@ export const VaultView: React.FC<VaultViewProps> = ({
           key={item.id}
           onLongPress={() => setActionSecret(item)}
           leftAction={{
-            label: 'Номер',
+            label: t('vault.panShort'),
             icon: <Copy weight="bold" className="w-4 h-4" />,
             bgClass: 'bg-[var(--k-emerald)]',
-            onTrigger: () => void handleCopy(null, item.id, 'secretValue', 'Номер карты'),
+            onTrigger: () => void handleCopy(null, item.id, 'secretValue', t('vault.cardPanLabel')),
           }}
           rightAction={{
-            label: 'Удалить',
+            label: t('common.delete'),
             icon: <Trash weight="fill" className="w-4 h-4" />,
             bgClass: 'bg-[var(--k-danger)]',
             onTrigger: () => {
@@ -912,7 +916,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 </span>
                 <div className="min-w-0">
                   <div className="text-[14px] font-semibold leading-tight truncate text-[var(--k-ink-primary)]">
-                    {item.title || meta?.service || 'Банковская карта'}
+                    {item.title || meta?.service || t('vault.kindBankCard')}
                   </div>
                   <div className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-secondary)] truncate">
                     {brand}
@@ -926,14 +930,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
               <div className="flex items-center gap-1 shrink-0">
                 {revealed && remaskSec > 0 ? (
                   <span className="k-mono text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]">
-                    {remaskSec} с
+                    {t('common.secondsShort', { count: remaskSec })}
                   </span>
                 ) : null}
                 <button
                   type="button"
                   data-testid={`mobile-secret-reveal-${item.id}`}
                   onClick={(e) => void handleToggleReveal(e, item.id)}
-                  aria-label={revealed ? 'Скрыть данные карты' : 'Показать данные карты'}
+                  aria-label={revealed ? t('vault.hideCardAria') : t('vault.showCardAria')}
                   className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]"
                 >
                   {revealed ? <EyeSlash className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -945,7 +949,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                     mobileBridge.haptic('light');
                     setActionSecret(item);
                   }}
-                  aria-label="Действия с картой"
+                  aria-label={t('vault.cardActionsAria')}
                   className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)]/70 text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
                 >
                   <DotsThree weight="bold" className="w-4 h-4" />
@@ -959,7 +963,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
             <div className="relative flex items-center justify-between gap-2 text-[12px] text-[var(--k-ink-secondary)] mb-2.5">
               <span className="k-mono">
-                <span className="text-[10px] text-[var(--k-ink-muted)] mr-1">СРОК</span>
+                <span className="text-[10px] text-[var(--k-ink-muted)] mr-1">{t('vault.cardExpiryHeader')}</span>
                 {expiryDisplay || '—'}
               </span>
               {hasCvv ? (
@@ -982,7 +986,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             ) : null}
 
             <div className="relative flex items-center gap-1.5 flex-wrap pt-2.5 border-t border-[var(--k-border-hairline)]">
-              {renderCopyBtn(item.id, 'secretValue', 'Номер', `mobile-copy-pan-${item.id}`)}
+              {renderCopyBtn(item.id, 'secretValue', t('vault.panShort'), `mobile-copy-pan-${item.id}`)}
               {expiryDisplay
                 ? renderCopyBtn(item.id, 'expiry', expiryDisplay, `mobile-copy-expiry-${item.id}`)
                 : null}
@@ -996,12 +1000,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
     const KindIcon = itemKind === 'password' ? User : itemKind === 'note' ? Note : Key;
     const kindLabel =
       itemKind === 'password'
-        ? 'Пароль'
+        ? t('vault.kindPassword')
         : itemKind === 'api_key'
-          ? 'Ключ доступа'
+          ? t('vault.kindApiKey')
           : itemKind === 'seed'
-            ? 'Фраза восстановления'
-            : 'Секретная заметка';
+            ? t('vault.kindSeed')
+            : t('vault.kindNote');
     const comment = dec?.notes?.trim();
 
     return (
@@ -1009,7 +1013,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
         key={item.id}
         onLongPress={() => setActionSecret(item)}
         leftAction={{
-          label: itemKind === 'password' ? 'Пароль' : 'Копия',
+          label: itemKind === 'password' ? t('vault.kindPassword') : t('vault.copyWord'),
           icon: <Copy weight="bold" className="w-4 h-4" />,
           bgClass: 'bg-[var(--k-emerald)]',
           onTrigger: () =>
@@ -1017,11 +1021,11 @@ export const VaultView: React.FC<VaultViewProps> = ({
               null,
               item.id,
               'secretValue',
-              itemKind === 'password' ? 'Пароль' : 'Значение'
+              itemKind === 'password' ? t('vault.kindPassword') : t('vault.valueLabel')
             ),
         }}
         rightAction={{
-          label: 'Удалить',
+          label: t('common.delete'),
           icon: <Trash weight="fill" className="w-4 h-4" />,
           bgClass: 'bg-[var(--k-danger)]',
           onTrigger: () => {
@@ -1056,14 +1060,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
             <div className="flex items-center gap-1 shrink-0">
               {revealed && remaskSec > 0 ? (
                 <span className="k-mono text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]">
-                  {remaskSec} с
+                  {t('common.secondsShort', { count: remaskSec })}
                 </span>
               ) : null}
               <button
                 type="button"
                 data-testid={`mobile-secret-reveal-${item.id}`}
                 onClick={(e) => void handleToggleReveal(e, item.id)}
-                aria-label={revealed ? 'Скрыть' : 'Показать'}
+                aria-label={revealed ? t('vault.hideWord') : t('vault.showWord')}
                 className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]"
               >
                 {revealed ? <EyeSlash className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1075,7 +1079,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   mobileBridge.haptic('light');
                   setActionSecret(item);
                 }}
-                aria-label="Действия"
+                aria-label={t('vault.actionsWord')}
                 className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)]/70 text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]"
               >
                 <DotsThree weight="bold" className="w-4 h-4" />
@@ -1095,12 +1099,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
           <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-[var(--k-border-hairline)]">
             {dec?.login || meta?.loginHint
-              ? renderCopyBtn(item.id, 'login', 'Логин', `mobile-copy-login-${item.id}`)
+              ? renderCopyBtn(item.id, 'login', t('vault.loginLabel'), `mobile-copy-login-${item.id}`)
               : null}
             {renderCopyBtn(
               item.id,
               'secretValue',
-              itemKind === 'password' ? 'Пароль' : 'Копировать',
+              itemKind === 'password' ? t('vault.kindPassword') : t('vault.copyVerb'),
               `mobile-copy-val-${item.id}`
             )}
           </div>
@@ -1114,11 +1118,11 @@ export const VaultView: React.FC<VaultViewProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto k-no-scrollbar">
         {(
           [
-            { id: 'bank_card', label: 'Карта' },
-            { id: 'password', label: 'Пароль' },
-            { id: 'api_key', label: 'Ключ' },
-            { id: 'seed', label: 'Сид-фраза' },
-            { id: 'note', label: 'Заметка' },
+            { id: 'bank_card', labelKey: 'vault.formTabCard' },
+            { id: 'password', labelKey: 'vault.formTabPassword' },
+            { id: 'api_key', labelKey: 'vault.formTabKey' },
+            { id: 'seed', labelKey: 'vault.formTabSeed' },
+            { id: 'note', labelKey: 'vault.formTabNote' },
           ] as const
         ).map((k) => (
           <button
@@ -1131,7 +1135,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 : 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
             }`}
           >
-            {k.label}
+            {t(k.labelKey)}
           </button>
         ))}
       </div>
@@ -1143,7 +1147,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder={
-          kind === 'bank_card' ? 'Название карты (напр. Банковская карта)' : 'Название сервиса'
+          kind === 'bank_card' ? t('vault.formCardTitlePlaceholder') : t('vault.formServicePlaceholder')
         }
         className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)]"
       />
@@ -1156,7 +1160,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             required
             value={secretValue}
             onChange={(e) => setSecretValue(formatCardPanGroups(e.target.value))}
-            placeholder="Номер карты (0000 0000 0000 0000)"
+            placeholder={t('vault.formPanPlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[14.5px] text-[var(--k-ink-primary)]"
           />
 
@@ -1166,7 +1170,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               inputMode="numeric"
               value={expiry}
               onChange={(e) => setExpiry(formatCardExpiryDraft(e.target.value))}
-              placeholder="Срок (MM/YY)"
+              placeholder={t('vault.formExpiryPlaceholder')}
               className="h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none k-mono text-[14px] text-[var(--k-ink-primary)]"
             />
             <input
@@ -1184,7 +1188,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             type="text"
             value={login}
             onChange={(e) => setLogin(e.target.value)}
-            placeholder="Держатель карты (необязательно)"
+            placeholder={t('vault.formHolderPlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
           />
         </>
@@ -1196,7 +1200,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               value={login}
               onChange={(e) => setLogin(e.target.value)}
               placeholder={
-                kind === 'password' ? 'Логин или почта' : 'Идентификатор / аккаунт'
+                kind === 'password' ? t('vault.formLoginPlaceholder') : t('vault.formAccountPlaceholder')
               }
               className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
             />
@@ -1209,12 +1213,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
             onChange={(e) => setSecretValue(e.target.value)}
             placeholder={
               kind === 'password'
-                ? 'Пароль'
+                ? t('vault.kindPassword')
                 : kind === 'api_key'
-                  ? 'Секретный ключ или токен'
+                  ? t('vault.formApiKeyPlaceholder')
                   : kind === 'seed'
-                    ? 'Слова фразы восстановления'
-                    : 'Текст секретной заметки'
+                    ? t('vault.formSeedPlaceholder')
+                    : t('vault.formNotePlaceholder')
             }
             className="w-full p-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[13.5px] text-[var(--k-ink-primary)] resize-none"
           />
@@ -1228,19 +1232,20 @@ export const VaultView: React.FC<VaultViewProps> = ({
             data-testid="vault-secret-totp-input"
             value={totpUriOrSecret}
             onChange={(e) => setTotpUriOrSecret(e.target.value)}
-            placeholder="Ключ 2FA (необязательно)"
+            placeholder={t('vault.formTotpPlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[13px] text-[var(--k-ink-primary)]"
           />
           {totpFormPreview ? (
             totpFormPreview.error ? (
               <div className="text-[11.5px] text-[var(--k-danger)] px-1">
-                Не удалось распознать ключ 2FA
+                {t('vault.formTotpInvalid')}
               </div>
             ) : (
               <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-[var(--k-emerald-soft)] text-[12px] text-[var(--k-emerald)]">
-                <span>Код 2FA сейчас:</span>
+                <span>{t('vault.formTotpNow')}</span>
                 <span className="k-mono font-bold tracking-[0.12em]">
-                  {formatTotpCode(totpFormPreview.snap.code)} · {totpFormPreview.snap.remainingSec} с
+                  {formatTotpCode(totpFormPreview.snap.code)} ·{' '}
+                  {t('common.secondsShort', { count: totpFormPreview.snap.remainingSec })}
                 </span>
               </div>
             )
@@ -1255,8 +1260,8 @@ export const VaultView: React.FC<VaultViewProps> = ({
         onChange={(e) => setNotes(e.target.value)}
         placeholder={
           kind === 'bank_card'
-            ? 'Комментарий к карте (лимит, кэшбэк, ПИН-подсказка, для чего используется)…'
-            : 'Комментарий (шифруется вместе с записью)…'
+            ? t('vault.formCardNotesPlaceholder')
+            : t('vault.formNotesPlaceholder')
         }
         className="w-full p-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13.5px] text-[var(--k-ink-primary)] resize-none"
       />
@@ -1270,7 +1275,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               style={{ color: selectedFormOrbit?.color || 'var(--k-accent)' }}
             />
           }
-          label={selectedFormOrbit?.name || 'Без раздела'}
+          label={selectedFormOrbit?.name || t('common.noOrbit')}
           placeholder={!selectedFormOrbit}
           onClick={() => setOrbitPickerOpen(true)}
           className="w-full"
@@ -1283,7 +1288,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           disabled={saving}
           className="k-tap flex-1 h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold disabled:opacity-50"
         >
-          {editId ? 'Сохранить изменения' : 'Сохранить в Сейф'}
+          {editId ? t('common.saveChanges') : t('vault.saveToVaultBtn')}
         </button>
         {editId ? (
           <button
@@ -1293,7 +1298,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               setEditorMode('closed');
               onSelectSecret(null);
             }}
-            aria-label="Удалить"
+            aria-label={t('common.delete')}
             className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] text-[var(--k-danger)]"
           >
             <Trash className="w-4 h-4" />
@@ -1317,7 +1322,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <div className="text-[11px] uppercase tracking-wider text-[var(--k-accent)] font-semibold">
-                {isCard ? getCardBrandLabel(meta?.cardBrand) : 'Сейф'}
+                {isCard ? getCardBrandLabel(meta?.cardBrand, locale) : t('nav.vault')}
               </div>
               <h3 className="text-[17px] font-bold leading-snug text-[var(--k-ink-primary)] break-words">
                 {item.title}
@@ -1327,7 +1332,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectSecret(null)}
-                aria-label="Закрыть панель"
+                aria-label={t('common.closePanel')}
                 className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] shrink-0"
               >
                 <X className="w-4 h-4" />
@@ -1341,7 +1346,9 @@ export const VaultView: React.FC<VaultViewProps> = ({
               className="k-tap inline-flex items-center gap-1.5 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-primary)]"
             >
               {revealed ? <EyeSlash className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              <span>{revealed ? `Скрыть · ${remaskSec} с` : 'Показать'}</span>
+              <span>
+                {revealed ? t('vault.revealRemaskBtn', { sec: remaskSec }) : t('vault.showWord')}
+              </span>
             </button>
             <button
               type="button"
@@ -1349,7 +1356,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               className="k-tap inline-flex items-center gap-1.5 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-primary)]"
             >
               <PencilSimple className="w-3.5 h-3.5" />
-              Править
+              {t('common.edit')}
             </button>
           </div>
         </div>
@@ -1360,7 +1367,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               <div className="flex items-center gap-3 min-w-0">
                 <TotpRing remainingSec={totpSnap.remainingSec} period={totpSnap.period} size={32} />
                 <div className="min-w-0">
-                  <div className="text-[11px] text-[var(--k-ink-muted)]">2FA-код</div>
+                  <div className="text-[11px] text-[var(--k-ink-muted)]">{t('vault.totpBadge')}</div>
                   <div className="k-mono text-[19px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
                     {formatTotpCode(totpSnap.code)}
                   </div>
@@ -1368,11 +1375,11 @@ export const VaultView: React.FC<VaultViewProps> = ({
               </div>
               <button
                 type="button"
-                onClick={(e) => void handleCopy(e, item.id, 'totp', 'Код 2FA')}
+                onClick={(e) => void handleCopy(e, item.id, 'totp', t('vault.totpLabel'))}
                 className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold shrink-0"
               >
                 <Copy className="w-3.5 h-3.5" />
-                Копия
+                {t('vault.copyWord')}
               </button>
             </div>
           ) : null}
@@ -1380,11 +1387,11 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
             <div className="flex items-center justify-between gap-2 mb-1">
               <span className="text-[11px] text-[var(--k-ink-muted)]">
-                {isCard ? 'Номер карты' : 'Значение'}
+                {isCard ? t('vault.cardPanLabel') : t('vault.valueLabel')}
               </span>
               {revealed && remaskSec > 0 ? (
                 <span className="text-[10.5px] text-[var(--k-ink-muted)] k-mono">
-                  Скроется через {remaskSec} с
+                  {t('vault.willHideIn', { sec: remaskSec })}
                 </span>
               ) : null}
             </div>
@@ -1402,7 +1409,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           {isCard ? (
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
-                <div className="text-[11px] text-[var(--k-ink-muted)] mb-0.5">Срок</div>
+                <div className="text-[11px] text-[var(--k-ink-muted)] mb-0.5">{t('vault.expiryLabel')}</div>
                 <div className="k-mono text-[14px] text-[var(--k-ink-primary)]">
                   {dec?.expiry || meta?.expiry || '—'}
                 </div>
@@ -1418,7 +1425,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   <button
                     type="button"
                     onClick={(e) => void handleCopy(e, item.id, 'cvv', 'CVV')}
-                    aria-label="Скопировать CVV"
+                    aria-label={t('vault.copyCvvAria')}
                     className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)]"
                   >
                     <Copy className="w-3.5 h-3.5" />
@@ -1432,7 +1439,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[11px] text-[var(--k-ink-muted)] mb-0.5">
-                  {isCard ? 'Держатель' : 'Логин'}
+                  {isCard ? t('vault.holderLabel') : t('vault.loginLabel')}
                 </div>
                 <div className="text-[14px] text-[var(--k-ink-primary)] truncate k-selectable">
                   {dec?.cardHolder || dec?.login}
@@ -1441,9 +1448,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
               <button
                 type="button"
                 onClick={(e) =>
-                  void handleCopy(e, item.id, 'login', isCard ? 'Держатель' : 'Логин')
+                  void handleCopy(
+                    e,
+                    item.id,
+                    'login',
+                    isCard ? t('vault.holderLabel') : t('vault.loginLabel')
+                  )
                 }
-                aria-label="Скопировать логин"
+                aria-label={t('vault.copyLoginAria')}
                 className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] shrink-0"
               >
                 <Copy className="w-3.5 h-3.5" />
@@ -1454,21 +1466,21 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
             <div className="flex items-center justify-between gap-2 mb-1">
               <span className="text-[11px] text-[var(--k-ink-muted)]">
-                Зашифрованный комментарий
+                {t('vault.encryptedNotesLabel')}
               </span>
               {dec?.notes?.trim() ? (
                 <button
                   type="button"
-                  onClick={(e) => void handleCopy(e, item.id, 'notes', 'Комментарий')}
+                  onClick={(e) => void handleCopy(e, item.id, 'notes', t('vault.commentLabel'))}
                   className="k-tap inline-flex items-center gap-1 px-2 h-6 rounded-lg bg-[var(--k-bg-surface-1)] text-[11px] font-medium text-[var(--k-ink-secondary)]"
                 >
                   <Copy className="w-3 h-3" />
-                  Копия
+                  {t('vault.copyWord')}
                 </button>
               ) : null}
             </div>
             <div className="text-[13.5px] leading-relaxed text-[var(--k-ink-primary)] whitespace-pre-wrap k-selectable">
-              {dec?.notes?.trim() || 'Комментарий не добавлен'}
+              {dec?.notes?.trim() || t('vault.noComment')}
             </div>
           </div>
         </div>
@@ -1476,12 +1488,17 @@ export const VaultView: React.FC<VaultViewProps> = ({
         <button
           type="button"
           onClick={(e) =>
-            void handleCopy(e, item.id, 'secretValue', isCard ? 'Номер карты' : 'Значение')
+            void handleCopy(
+              e,
+              item.id,
+              'secretValue',
+              isCard ? t('vault.cardPanLabel') : t('vault.valueLabel')
+            )
           }
           className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13.5px] font-semibold inline-flex items-center justify-center gap-2"
         >
           <Copy className="w-4 h-4" />
-          Скопировать {isCard ? 'номер карты' : 'значение'}
+          {isCard ? t('vault.copyPanFullBtn') : t('vault.copyValueFullBtn')}
         </button>
       </div>
     );
@@ -1497,8 +1514,8 @@ export const VaultView: React.FC<VaultViewProps> = ({
               <ShieldCheck weight="duotone" className="w-4 h-4 shrink-0" />
               <span>
                 {isExpanded
-                  ? `Сейф открыт · автоочистка ${wipeSeconds} с`
-                  : `Сейф открыт · ${wipeSeconds} с`}
+                  ? t('vault.headerUnlockedFull', { sec: wipeSeconds })
+                  : t('vault.headerUnlockedCompact', { sec: wipeSeconds })}
               </span>
             </div>
 
@@ -1510,13 +1527,13 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-semibold"
               >
                 <Plus weight="bold" className="w-3.5 h-3.5" />
-                Добавить
+                {t('common.add')}
               </button>
               <button
                 type="button"
                 data-testid="vault-lock-btn"
                 onClick={onLockVault}
-                aria-label="Заблокировать Сейф"
+                aria-label={t('vault.lockVaultAria')}
                 className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
               >
                 <Lock className="w-4 h-4" />
@@ -1532,14 +1549,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
               data-testid="vault-local-search"
               value={localSearch}
               onChange={(e) => setLocalSearch(e.target.value)}
-              placeholder="Поиск по картам, паролям, заметкам…"
+              placeholder={t('vault.searchPlaceholder')}
               className="w-full h-9 pl-8 pr-8 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
             {localSearch ? (
               <button
                 type="button"
                 onClick={() => setLocalSearch('')}
-                aria-label="Очистить поиск в Сейфе"
+                aria-label={t('vault.clearSearchAria')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--k-ink-muted)]"
               >
                 <X className="w-3.5 h-3.5" />
@@ -1559,7 +1576,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                     : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                 }`}
               >
-                {f.label}
+                {t(f.labelKey)}
               </button>
             ))}
           </div>
@@ -1575,8 +1592,8 @@ export const VaultView: React.FC<VaultViewProps> = ({
               >
                 <div className="rounded-xl px-3 py-2 bg-[var(--k-emerald-soft)] border border-[var(--k-emerald)]/30 space-y-1.5">
                   <div className="flex items-center justify-between text-[11.5px] font-medium text-[var(--k-emerald)]">
-                    <span>{copyBadge.label} в буфере обмена</span>
-                    <span className="k-mono">Очистка: {copyBadge.remainingSec} с</span>
+                    <span>{t('vault.inClipboard', { label: copyBadge.label })}</span>
+                    <span className="k-mono">{t('vault.clipboardWipe', { sec: copyBadge.remainingSec })}</span>
                   </div>
                   <div className="w-full h-1 rounded-full bg-[var(--k-emerald)]/20 overflow-hidden">
                     <div
@@ -1599,12 +1616,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
             <div className="flex flex-col items-center justify-center text-center py-14 px-6">
               <ShieldCheck weight="duotone" className="w-10 h-10 text-[var(--k-ink-muted)] mb-2.5" />
               <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-                {effectiveQuery ? 'Ничего не найдено' : 'В Сейфе пока пусто'}
+                {effectiveQuery ? t('vault.emptySearchTitle') : t('vault.emptyTitle')}
               </div>
               <p className="text-[13px] text-[var(--k-ink-muted)] mt-1 max-w-xs">
                 {effectiveQuery
-                  ? 'Попробуй другой запрос или сбрось фильтр.'
-                  : 'Добавь банковскую карту с комментарием, пароль или ключ — они синхронизируются сквозным шифрованием.'}
+                  ? t('vault.emptySearchHint')
+                  : t('vault.emptyHint')}
               </p>
               {!effectiveQuery ? (
                 <button
@@ -1613,7 +1630,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   className="k-tap mt-4 inline-flex items-center gap-1.5 px-4 h-10 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold"
                 >
                   <Plus weight="bold" className="w-4 h-4" />
-                  Добавить карту или пароль
+                  {t('vault.emptyAddBtn')}
                 </button>
               ) : null}
             </div>
@@ -1644,7 +1661,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             <div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--k-border-hairline)]">
                 <h3 className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-                  {editorMode === 'edit' ? 'Редактировать запись' : 'Новая запись в Сейфе'}
+                  {editorMode === 'edit' ? t('vault.editSheetTitle') : t('vault.newSheetTitle')}
                 </h3>
                 <button
                   type="button"
@@ -1667,7 +1684,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
         <>
           <BottomSheet
             open={!vaultLocked && editorMode !== 'closed'}
-            title={editorMode === 'edit' ? 'Редактировать запись' : 'Новая запись в Сейфе'}
+            title={editorMode === 'edit' ? t('vault.editSheetTitle') : t('vault.newSheetTitle')}
             isExpanded={false}
             onClose={() => setEditorMode('closed')}
           >
@@ -1676,7 +1693,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
           <BottomSheet
             open={editorMode === 'closed' && Boolean(selectedSecret)}
-            title={selectedSecret?.title || 'Сейф'}
+            title={selectedSecret?.title || t('nav.vault')}
             isExpanded={false}
             onClose={() => onSelectSecret(null)}
           >
@@ -1687,7 +1704,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
       <ItemActionSheet
         open={Boolean(actionSecret)}
-        title={actionSecret?.title || 'Сейф'}
+        title={actionSecret?.title || t('nav.vault')}
         actions={actionSecret ? buildSecretActions(actionSecret) : []}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
@@ -1696,15 +1713,15 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
       <MobilePickerSheet
         open={orbitPickerOpen}
-        title="Раздел для записи"
+        title={t('vault.orbitTitle')}
         value={orbit}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,

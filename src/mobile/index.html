@@ -13,6 +13,20 @@
       (function () {
         try {
           var root = document.documentElement;
+          var qLang = new URLSearchParams(window.location.search).get('lang');
+          var sLang = localStorage.getItem('kapsula_mobile_locale');
+          var navLang = (navigator && navigator.language ? navigator.language : '').toLowerCase();
+          var lang =
+            qLang === 'ru' || qLang === 'en'
+              ? qLang
+              : sLang === 'ru' || sLang === 'en'
+                ? sLang
+                : navLang.indexOf('ru') === 0
+                  ? 'ru'
+                  : navLang
+                    ? 'en'
+                    : 'ru';
+          root.setAttribute('lang', lang);
           var t = localStorage.getItem('kapsula_mobile_theme');
           if (t === 'light' || t === 'dark') {
             root.setAttribute('data-theme', t);

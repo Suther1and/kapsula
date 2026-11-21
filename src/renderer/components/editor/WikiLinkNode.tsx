@@ -12,6 +12,7 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import { LinkSimple } from '@phosphor-icons/react';
+import { useI18n } from '@shared/i18n/react';
 
 export interface WikiLinkOptions {
   onNavigate?: (title: string, targetId?: string | null) => void;
@@ -34,6 +35,7 @@ function parseWikiInner(rawInner: string): { title: string; label: string | null
 }
 
 const WikiLinkView: React.FC<NodeViewProps> = ({ node, extension }) => {
+  const { t } = useI18n();
   const title = typeof node.attrs.title === 'string' ? node.attrs.title : '';
   const label = typeof node.attrs.label === 'string' && node.attrs.label ? node.attrs.label : title;
   const targetId = typeof node.attrs.targetId === 'string' ? node.attrs.targetId : null;
@@ -45,7 +47,7 @@ const WikiLinkView: React.FC<NodeViewProps> = ({ node, extension }) => {
         type="button"
         data-wiki-link=""
         data-wiki-title={title}
-        title={`Открыть заметку «${title}»`}
+        title={t('editor.wikiOpenTitle', { title })}
         onMouseDown={(e) => {
           e.preventDefault();
           e.stopPropagation();

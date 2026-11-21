@@ -25,7 +25,13 @@ import {
   Trash,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
+import { translate } from '@shared/i18n';
+import { useI18n } from '@shared/i18n/react';
 import { friendlyErrorMessage, getMediaUrl } from '../../lib/format';
+
+function getDomLocale() {
+  return typeof document !== 'undefined' && document.documentElement?.lang === 'en' ? 'en' : 'ru';
+}
 
 export interface KapsulaImageLightboxInfo {
   src: string;
@@ -113,7 +119,7 @@ async function fileToBase64Payload(file: File): Promise<{
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(new Error('Не удалось прочитать изображение'));
+    reader.onerror = () => reject(new Error(translate(getDomLocale(), 'error.readImageFailed')));
     reader.readAsDataURL(file);
   });
   const commaIdx = dataUrl.indexOf(',');
@@ -180,7 +186,8 @@ export async function saveAndInsertImageFiles(
     }
     return insertedNodes.length;
   } catch (err) {
-    toast.error(friendlyErrorMessage(err, 'Не удалось вставить фото в заметку'));
+    const domLocale = getDomLocale();
+    toast.error(friendlyErrorMessage(err, translate(domLocale, 'error.insertImageFailed'), domLocale));
     return insertedNodes.length;
   } finally {
     opts?.onAfterSave?.();
@@ -196,6 +203,7 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
   deleteNode,
   extension,
 }) => {
+  const { t } = useI18n();
   const src = typeof node.attrs.src === 'string' ? node.attrs.src : '';
   const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : '';
   const options = extension.options as KapsulaImageOptions;
@@ -247,7 +255,7 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
         const ok = await window.kapsula.copyImage(localFilename);
         if (ok) {
           setCopied(true);
-          toast.success('Фото скопировано');
+          toast.success(t('editor.photoCopied'));
           window.setTimeout(() => setCopied(false), 1600);
           return;
         }
@@ -255,11 +263,11 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
       if (src) {
         await window.kapsula.copyText(src);
         setCopied(true);
-        toast.success('Ссылка на фото скопирована');
+        toast.success(t('editor.photoLinkCopied'));
         window.setTimeout(() => setCopied(false), 1600);
       }
     } catch {
-      toast.error('Не удалось скопировать фото');
+      toast.error(t('error.copyImageFailed'));
     }
   };
 
@@ -301,7 +309,7 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
           {!loaded && !errored ? (
             <span className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)] animate-pulse">
               <ImageSquare className="w-5 h-5 opacity-60" />
-              <span className="text-[12px]">Загружаю фото…</span>
+              <span className="text-[12px]">{t('editor.loadingPhoto')}</span>
             </span>
           ) : null}
 
@@ -309,7 +317,7 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
             <span className="flex flex-col items-center justify-center gap-2 py-7 px-4 text-center text-[var(--k-ink-muted)]">
               <ImageBroken weight="duotone" className="w-7 h-7 opacity-70" />
               <span className="text-[12.5px] font-medium text-[var(--k-ink-secondary)]">
-                Изображение недоступно
+                {t('editor.imageUnavailable')}
               </span>
               <button
                 type="button"
@@ -318,13 +326,13 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
                 className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
               >
                 <Trash className="w-3.5 h-3.5" />
-                Удалить блок
+                {t('editor.deleteBlock')}
               </button>
             </span>
           ) : (
             <img
               src={src}
-              alt={alt || 'Изображение в заметке'}
+              alt={alt || t('editor.imageAltFallback')}
               draggable={false}
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -351,19 +359,19 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
               {options.onOpenLightbox ? (
                 <button
                   type="button"
-                  title="Открыть крупно"
-                  aria-label="Открыть крупно"
+                  title={t('editor.openLarge')}
+                  aria-label={t('editor.openLarge')}
                   onClick={handleOpenLightbox}
                   className="k-inline-image-btn"
                 >
                   <ArrowsOutSimple weight="bold" className="w-3.5 h-3.5" />
-                  {!options.compact ? <span>Крупно</span> : null}
+                  {!options.compact ? <span>{t('editor.largeShort')}</span> : null}
                 </button>
               ) : null}
               <button
                 type="button"
-                title="Копировать фото"
-                aria-label="Копировать фото"
+                title={t('cards.copyPhoto')}
+                aria-label={t('cards.copyPhoto')}
                 onClick={(e) => void handleCopy(e)}
                 className="k-inline-image-btn"
               >
@@ -372,13 +380,13 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
                 )}
-                {!options.compact ? <span>{copied ? 'Готово' : 'Копировать'}</span> : null}
+                {!options.compact ? <span>{copied ? t('common.done') : t('common.copy')}</span> : null}
               </button>
               {!options.compact ? (
                 <button
                   type="button"
-                  title="Изменить подпись"
-                  aria-label="Изменить подпись"
+                  title={t('editor.editCaption')}
+                  aria-label={t('editor.editCaption')}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -391,8 +399,8 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
               ) : null}
               <button
                 type="button"
-                title="Удалить фото"
-                aria-label="Удалить фото"
+                title={t('editor.deletePhoto')}
+                aria-label={t('editor.deletePhoto')}
                 data-danger="true"
                 onClick={handleDelete}
                 className="k-inline-image-btn"
@@ -430,11 +438,11 @@ const KapsulaImageView: React.FC<NodeViewProps> = ({
                     setEditingCaption(false);
                   }
                 }}
-                placeholder="Подпись к фото…"
+                placeholder={t('editor.captionPlaceholder')}
                 className="k-inline-image-caption-input"
               />
             ) : (
-              <span className="truncate cursor-text flex-1" title="Нажми, чтобы изменить подпись">
+              <span className="truncate cursor-text flex-1" title={t('editor.captionClickHint')}>
                 {alt}
               </span>
             )}

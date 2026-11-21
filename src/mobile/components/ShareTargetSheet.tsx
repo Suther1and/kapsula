@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FolderSimple, Globe, Paperclip, ShareNetwork, Swatches } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef } from '@shared/types';
-import { formatFileSize } from '@renderer/lib/format';
 import { extractFirstUrlFromText } from '../lib/mobile-helpers';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge, type SharedIntentPayload } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
 import { MobilePickerSheet, PickerTriggerChip } from './MobilePickerSheet';
@@ -40,6 +40,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
   onCreateBoard,
   onConfirmSave,
 }) => {
+  const { t, formatFileSize } = useMobileI18n();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [url, setUrl] = useState<string | null>(null);
@@ -62,17 +63,17 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
             try {
               return new URL(detectedUrl).hostname.replace(/^www\./i, '');
             } catch {
-              return 'Ссылка из другого приложения';
+              return t('share.linkFallbackTitle');
             }
           })()
-        : cleanedBody.split('\n')[0]?.slice(0, 80) || 'Сохранено через «Поделиться»');
+        : cleanedBody.split('\n')[0]?.slice(0, 80) || t('share.bodyFallbackTitle'));
 
     setTitle(fallbackTitle);
     setBody(cleanedBody);
     setUrl(detectedUrl);
     setOrbit('');
     setBoardId('');
-  }, [share]);
+  }, [share, t]);
 
   const selectedOrbit = useMemo(() => orbits.find((o) => o.id === orbit) ?? null, [orbits, orbit]);
   const selectedBoard = useMemo(
@@ -87,18 +88,14 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
     try {
       await onConfirmSave({
         share,
-        title: title.trim() || 'Сохранено в Kapsula',
+        title: title.trim() || t('capture.savedToast'),
         body: body.trim(),
         url,
         orbit,
         focusBoardId: boardId || null,
       });
       mobileBridge.haptic('success');
-      toast.success(
-        isCloudConnected
-          ? 'Сохранено в Kapsula и отправлено в облако'
-          : 'Сохранено в Kapsula на устройстве'
-      );
+      toast.success(isCloudConnected ? t('share.savedCloud') : t('share.savedLocal'));
       onClose();
     } finally {
       setSaving(false);
@@ -111,8 +108,8 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
     <>
       <BottomSheet
         open={Boolean(share)}
-        title="Сохранить в Kapsula"
-        subtitle="Получено через системное меню «Поделиться»"
+        title={t('capture.saveToKapsula')}
+        subtitle={t('share.subtitle')}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         onClose={onClose}
@@ -164,7 +161,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Заголовок"
+            placeholder={t('share.titlePlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] font-medium text-[var(--k-ink-primary)]"
           />
 
@@ -172,7 +169,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
             rows={4}
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="Текст или комментарий…"
+            placeholder={t('share.bodyPlaceholder')}
             className="w-full p-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)] resize-none"
           />
 
@@ -185,7 +182,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
                   style={{ color: selectedOrbit?.color || 'var(--k-accent)' }}
                 />
               }
-              label={selectedOrbit?.name || 'Без раздела'}
+              label={selectedOrbit?.name || t('common.noOrbit')}
               placeholder={!selectedOrbit}
               onClick={() => setOrbitPickerOpen(true)}
             />
@@ -197,7 +194,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
                   style={{ color: selectedBoard?.color || 'var(--k-emerald)' }}
                 />
               }
-              label={selectedBoard?.name || 'Без холста'}
+              label={selectedBoard?.name || t('common.noBoard')}
               placeholder={!selectedBoard}
               onClick={() => setBoardPickerOpen(true)}
             />
@@ -210,22 +207,22 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
             className="k-tap w-full h-12 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
           >
             <ShareNetwork weight="bold" className="w-4 h-4" />
-            Сохранить в Kapsula
+            {t('capture.saveToKapsula')}
           </button>
         </form>
       </BottomSheet>
 
       <MobilePickerSheet
         open={orbitPickerOpen}
-        title="Выбрать раздел"
+        title={t('common.pickOrbit')}
         value={orbit}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateOrbit)}
-        createPlaceholder="Название раздела…"
+        createPlaceholder={t('common.orbitNamePlaceholder')}
         onCreateNew={onCreateOrbit}
         options={[
-          { value: '', label: 'Без раздела' },
+          { value: '', label: t('common.noOrbit') },
           ...orbits.map((o) => ({
             value: o.id,
             label: o.name,
@@ -239,15 +236,15 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
 
       <MobilePickerSheet
         open={boardPickerOpen}
-        title="Выбрать холст"
+        title={t('common.pickBoard')}
         value={boardId}
         isExpanded={isExpanded}
         hingeRightOffsetPx={hingeRightOffsetPx}
         allowCreate={Boolean(onCreateBoard)}
-        createPlaceholder="Название холста…"
+        createPlaceholder={t('common.boardNamePlaceholder')}
         onCreateNew={onCreateBoard}
         options={[
-          { value: '', label: 'Без холста' },
+          { value: '', label: t('common.noBoard') },
           ...boards.map((b) => ({
             value: b.id,
             label: b.name,

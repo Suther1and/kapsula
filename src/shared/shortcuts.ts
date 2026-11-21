@@ -184,13 +184,16 @@ export function isMacPlatform(platform?: string | null): boolean {
   return platform === 'darwin';
 }
 
+import type { AppLocale } from './types';
+
 export function formatShortcutDisplay(
   accelerator: string | null | undefined,
-  platform?: string | null
+  platform?: string | null,
+  locale: AppLocale = 'ru'
 ): string {
   const norm = normalizeShortcutAccelerator(accelerator, platform);
   const raw = norm || accelerator || '';
-  if (!raw) return 'Не назначено';
+  if (!raw) return locale === 'en' ? 'Not set' : 'Не назначено';
   const mac = isMacPlatform(platform);
   return raw
     .split('+')
@@ -201,7 +204,7 @@ export function formatShortcutDisplay(
       if (part === 'Shift') return mac ? '⇧' : 'Shift';
       if (part === 'Super') return mac ? '⌘' : 'Super';
       if (part === 'Return') return 'Enter';
-      if (part === 'Space') return 'Пробел';
+      if (part === 'Space') return locale === 'en' ? 'Space' : 'Пробел';
       return part;
     })
     .join(' + ');
@@ -209,7 +212,8 @@ export function formatShortcutDisplay(
 
 export function formatShortcutCompact(
   accelerator: string | null | undefined,
-  platform?: string | null
+  platform?: string | null,
+  locale: AppLocale = 'ru'
 ): string {
   const norm = normalizeShortcutAccelerator(accelerator, platform);
   const raw = norm || accelerator || '';
@@ -224,7 +228,7 @@ export function formatShortcutCompact(
       if (part === 'Shift') return mac ? '⇧' : 'Shift';
       if (part === 'Super') return mac ? '⌘' : 'Super';
       if (part === 'Return') return 'Enter';
-      if (part === 'Space') return 'Пробел';
+      if (part === 'Space') return locale === 'en' ? 'Space' : 'Пробел';
       return part;
     })
     .join('+');

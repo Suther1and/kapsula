@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Check, FileText, ListChecks, Sparkle, Table } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { OrbitDef, SynthesizeMode, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { friendlyErrorMessage } from '../../lib/format';
 import { ModalDialog } from '../ui/ModalDialog';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -18,14 +19,6 @@ interface SynthesizeNotesModalProps {
   onCreated: (created: VaultItem, archiveSources: boolean) => void;
 }
 
-function pluralizeNotesRu(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} запись`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} записи`;
-  return `${n} записей`;
-}
-
 export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
   open,
   onOpenChange,
@@ -35,6 +28,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
   activeFocusBoardId,
   onCreated,
 }) => {
+  const { t, locale, pluralNoun } = useI18n();
   const [mode, setMode] = useState<SynthesizeMode>('spec');
   const [instruction, setInstruction] = useState('');
   const [targetOrbit, setTargetOrbit] = useState('');
@@ -65,7 +59,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
         setTargetOrbit(res.preview.orbit);
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось собрать сводку.'));
+      toast.error(friendlyErrorMessage(err, t('synth.errGenerate'), locale));
     } finally {
       setGenerating(false);
     }
@@ -99,12 +93,12 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
         onOpenChange(false);
         toast.success(
           archiveSources
-            ? `Создана сводка из ${validItems.length} записей, исходники в архиве`
-            : `Создана сводная заметка из ${validItems.length} записей`,
+            ? t('synth.toastSavedArchived', { count: validItems.length })
+            : t('synth.toastSaved', { count: validItems.length })
         );
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, 'Не удалось сохранить итоговую заметку.'));
+      toast.error(friendlyErrorMessage(err, t('synth.errSave'), locale));
     } finally {
       setSaving(false);
     }
@@ -115,8 +109,11 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
       open={open}
       onOpenChange={onOpenChange}
       topAligned
-      title="Свести в одну заметку"
-      subtitle={`Объединяем без потери чисел, параметров и деталей (${pluralizeNotesRu(validItems.length)})`}
+      title={t('synth.title')}
+      subtitle={t('synth.subtitle', {
+        count: validItems.length,
+        word: pluralNoun(validItems.length, 'item').replace(/^\d+\s+/, ''),
+      })}
       maxWidthClass="max-w-[720px]"
     >
       <div className="p-5 flex flex-col gap-3.5 max-h-[78vh] overflow-y-auto k-scroll-stable">
@@ -129,9 +126,9 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
             }}
             size="sm"
             options={[
-              { value: 'spec', label: 'Структура', icon: <FileText className="w-3.5 h-3.5" /> },
-              { value: 'tasks', label: 'Чек-лист', icon: <ListChecks className="w-3.5 h-3.5" /> },
-              { value: 'table', label: 'Таблица', icon: <Table className="w-3.5 h-3.5" /> },
+              { value: 'spec', label: t('synth.mode.spec'), icon: <FileText className="w-3.5 h-3.5" /> },
+              { value: 'tasks', label: t('synth.mode.tasks'), icon: <ListChecks className="w-3.5 h-3.5" /> },
+              { value: 'table', label: t('synth.mode.table'), icon: <Table className="w-3.5 h-3.5" /> },
             ]}
           />
 
@@ -140,7 +137,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
             value={targetOrbit}
             onChange={setTargetOrbit}
             options={[
-              { value: '', label: 'Без раздела' },
+              { value: '', label: t('nav.noSection') },
               ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
             ]}
           />
@@ -158,7 +155,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
                   void runPreview(mode, instruction);
                 }
               }}
-              placeholder="Пожелание: например «Собери таблицу параметров с цифрами»…"
+              placeholder={t('synth.instructionPlaceholder')}
               className="flex-1 h-9 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3 text-[12.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none focus:border-[var(--k-border-focus)]"
             />
             <button
@@ -168,12 +165,12 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
               className="k-interactive inline-flex items-center gap-1.5 h-9 px-3 rounded-xl border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[12px] font-medium cursor-pointer disabled:border-[var(--k-border-hairline)] disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
             >
               <Sparkle weight="fill" className="w-3.5 h-3.5" />
-              <span>{generating ? 'Собираю…' : 'Пересобрать'}</span>
+              <span>{generating ? t('synth.generating') : t('synth.rebuild')}</span>
             </button>
           </div>
           {!usedCloud && instruction.trim() ? (
             <div className="text-[11px] text-[var(--k-ink-muted)] px-1">
-              Сейчас активна локальная сборка — произвольные пожелания применяются после подключения ИИ в Настройках.
+              {t('synth.localHint')}
             </div>
           ) : null}
         </div>
@@ -184,11 +181,11 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
             <input
               value={draftTitle}
               onChange={(e) => setDraftTitle(e.target.value)}
-              placeholder="Заголовок итоговой заметки…"
+              placeholder={t('synth.titlePlaceholder')}
               className="flex-1 bg-transparent border-none outline-none text-[15px] font-semibold text-[var(--k-ink-primary)]"
             />
             <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">
-              {usedCloud ? 'Собрано с ИИ без потерь' : 'Локальная сборка без потерь'}
+              {usedCloud ? t('synth.badgeCloud') : t('synth.badgeLocal')}
             </span>
           </div>
           <textarea
@@ -202,7 +199,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <label className="inline-flex items-center gap-2.5 text-[12.5px] text-[var(--k-ink-secondary)] cursor-pointer select-none">
             <SwitchToggle checked={archiveSources} onCheckedChange={setArchiveSources} />
-            <span>Убрать исходные записи в архив после объединения</span>
+            <span>{t('synth.archiveOriginals')}</span>
           </label>
 
           <div className="flex items-center gap-2">
@@ -211,7 +208,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
               onClick={() => onOpenChange(false)}
               className="k-interactive h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[13px] cursor-pointer"
             >
-              Отмена
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -221,7 +218,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
               className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
             >
               <Check weight="bold" className="w-4 h-4" />
-              <span>{saving ? 'Сохраняю…' : 'Создать заметку'}</span>
+              <span>{saving ? t('common.saving') : t('synth.createBtn')}</span>
             </button>
           </div>
         </div>

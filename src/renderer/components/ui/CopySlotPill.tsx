@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Check, Copy } from '@phosphor-icons/react';
 import { TooltipHint } from './TooltipHint';
 import { playTactileSound } from '../../lib/tactileSound';
+import { useI18n } from '@shared/i18n/react';
 
 interface CopySlotPillProps {
   label: string;
@@ -19,7 +20,7 @@ interface CopySlotPillProps {
 
 export const CopySlotPill: React.FC<CopySlotPillProps> = ({
   label,
-  copiedLabel = 'Готово',
+  copiedLabel,
   onCopy,
   widthPx = 112,
   heightPx = 30,
@@ -28,9 +29,11 @@ export const CopySlotPill: React.FC<CopySlotPillProps> = ({
   className = '',
   'data-testid': testId,
 }) => {
+  const { t } = useI18n();
   const [remaining, setRemaining] = useState<number>(0);
   const [copiedJustNow, setCopiedJustNow] = useState(false);
   const prefersReduced = useReducedMotion();
+  const resolvedCopiedLabel = copiedLabel ?? t('common.done');
 
   useEffect(() => {
     if (remaining <= 0) return;
@@ -66,7 +69,8 @@ export const CopySlotPill: React.FC<CopySlotPillProps> = ({
   };
 
   const isCopied = copiedJustNow || remaining > 0;
-  const activeText = remaining > 0 ? `${copiedLabel} ${remaining} с` : copiedLabel;
+  const activeText =
+    remaining > 0 ? `${resolvedCopiedLabel} ${remaining} ${t('common.secUnit')}` : resolvedCopiedLabel;
 
   const toneClasses = isCopied
     ? 'bg-[var(--k-emerald-soft)] border-[var(--k-emerald)]/40 text-[var(--k-emerald)]'
@@ -119,8 +123,8 @@ export const CopySlotPill: React.FC<CopySlotPillProps> = ({
       disabled={remaining <= 0}
       label={
         remaining > 0
-          ? `Буфер обмена автоматически очистится через ${remaining} с для защиты данных`
-          : 'Буфер обмена будет очищен после копирования'
+          ? t('ui.clipboardWipeBanner', { seconds: remaining })
+          : t('ui.clipboardWipeBannerIdle')
       }
     >
       {buttonEl}

@@ -17,8 +17,9 @@ import {
   X,
 } from '@phosphor-icons/react';
 import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
-import { countChecklistStats, isAnyTextNote, isDedicatedNote } from '@shared/item-helpers';
+import { countChecklistStats, isAnyTextNote, isDedicatedNote, isUntitledPlaceholderTitle } from '@shared/item-helpers';
 import {
   formatRelativeDate,
   stripLeadingTitle,
@@ -124,6 +125,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   onOpenExternalItem,
   onOpenShotLightbox,
 }) => {
+  const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [scope, setScope] = useState<NoteScope>('dedicated');
   const [localFilter, setLocalFilter] = useState('');
@@ -160,11 +162,11 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
     copy.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
       if (sortBy === 'created_desc') return b.createdAt - a.createdAt;
-      if (sortBy === 'title_asc') return (a.title || '').localeCompare(b.title || '', 'ru');
+      if (sortBy === 'title_asc') return (a.title || '').localeCompare(b.title || '', dateLocale);
       return (b.contentUpdatedAt || b.updatedAt) - (a.contentUpdatedAt || a.updatedAt);
     });
     return copy;
-  }, [scope, dedicatedNotes, allTextNotes, localFilter, globalSearchQuery, serverSearchIds, sortBy]);
+  }, [scope, dedicatedNotes, allTextNotes, localFilter, globalSearchQuery, serverSearchIds, sortBy, dateLocale]);
 
   const pinnedNotes = useMemo(() => filteredNotes.filter((n) => n.isPinned), [filteredNotes]);
   const regularNotes = useMemo(() => filteredNotes.filter((n) => !n.isPinned), [filteredNotes]);
@@ -206,7 +208,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       {
         type: 'item',
         id: 'pin',
-        label: note.isPinned ? 'Открепить' : 'Закрепить сверху',
+        label: note.isPinned ? t('ui.quickLook.unpin') : t('cards.ctx.pinTop'),
         icon: <PushPin weight={note.isPinned ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
         onSelect: () => onTogglePin(note),
       },
@@ -216,7 +218,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       entries.push({
         type: 'submenu',
         id: 'move-orbit',
-        label: 'Переместить в раздел',
+        label: t('cards.ctx.moveToSection'),
         icon: <FolderSimple className="w-3.5 h-3.5" />,
         items: orbits.map((o) => ({
           type: 'item',
@@ -233,13 +235,13 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       entries.push({
         type: 'submenu',
         id: 'move-board',
-        label: 'Добавить на холст',
+        label: t('cards.ctx.addToBoard'),
         icon: <Swatches className="w-3.5 h-3.5" />,
         items: [
           {
             type: 'item',
             id: 'board-none',
-            label: 'Убрать с холста',
+            label: t('cards.ctx.removeFromBoard'),
             active: !note.focusBoardId,
             onSelect: () => onMoveToBoard(note.id, null),
           },
@@ -260,14 +262,14 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       {
         type: 'item',
         id: 'duplicate',
-        label: 'Дублировать',
+        label: t('cards.ctx.duplicate'),
         icon: <Copy className="w-3.5 h-3.5" />,
         onSelect: () => onDuplicateItem(note.id),
       },
       {
         type: 'item',
         id: 'export',
-        label: 'Экспорт в Markdown',
+        label: t('cards.ctx.exportMd'),
         icon: <FileText className="w-3.5 h-3.5" />,
         onSelect: () => onExportMarkdown(note.id),
       },
@@ -275,7 +277,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       {
         type: 'item',
         id: 'delete',
-        label: 'Переместить в корзину',
+        label: t('workspace.moveToTrash'),
         icon: <Trash className="w-3.5 h-3.5" />,
         danger: true,
         onSelect: () => {
@@ -293,7 +295,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
     const orbit = note.orbit ? orbitMap.get(note.orbit) : undefined;
     const rawPreview = stripMarkdownPreview(note.body || note.summary);
     const preview = stripLeadingTitle(rawPreview, note.title);
-    const trulyEmpty = !rawPreview.trim() && (!note.title.trim() || note.title.trim() === 'Новая заметка');
+    const trulyEmpty = !rawPreview.trim() && isUntitledPlaceholderTitle(note.title);
     const checklist = countChecklistStats(note.body);
 
     return (
@@ -334,7 +336,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                   isActive ? 'font-semibold text-[var(--k-ink-primary)]' : 'font-medium text-[var(--k-ink-primary)]'
                 }`}
               >
-                {note.title || 'Без названия'}
+                {note.title || t('common.noTitle')}
               </span>
             </div>
 
@@ -343,7 +345,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 {preview}
               </div>
             ) : trulyEmpty ? (
-              <div className="text-[11.5px] text-[var(--k-ink-muted)] italic">Пустая заметка</div>
+              <div className="text-[11.5px] text-[var(--k-ink-muted)] italic">{t('notes.hub.emptyNote')}</div>
             ) : null}
 
             <div className="flex items-center justify-between gap-2 pt-0.5 text-[10.5px] text-[var(--k-ink-muted)]">
@@ -369,7 +371,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
               </div>
 
               <span className="shrink-0 k-tabular">
-                {formatRelativeDate(note.contentUpdatedAt || note.updatedAt)}
+                {formatRelativeDate(note.contentUpdatedAt || note.createdAt, locale)}
               </span>
             </div>
           </div>
@@ -408,7 +410,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-[12.5px] font-semibold text-[var(--k-ink-secondary)] truncate">
-                  Документы
+                  {t('notes.hub.title')}
                 </span>
                 <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-[var(--k-bg-surface-2)] text-[11px] font-medium text-[var(--k-ink-muted)] k-tabular">
                   <NumberFlow value={filteredNotes.length} />
@@ -422,7 +424,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 className="k-interactive k-focus-ring inline-flex items-center gap-1 h-7.5 px-2.5 rounded-[9px] bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0"
               >
                 <Plus weight="bold" className="w-3.5 h-3.5" />
-                <span>Новая</span>
+                <span>{t('notes.hub.newBtn')}</span>
               </button>
             </div>
 
@@ -436,8 +438,8 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 setDraftItem(null);
               }}
               options={[
-                { value: 'dedicated', label: `Мои (${dedicatedNotes.length})` },
-                { value: 'all_text', label: `Все тексты (${allTextNotes.length})` },
+                { value: 'dedicated', label: t('notes.hub.tabMy', { count: dedicatedNotes.length }) },
+                { value: 'all_text', label: t('notes.hub.tabAllText', { count: allTextNotes.length }) },
               ]}
             />
 
@@ -450,13 +452,13 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                   data-testid="notes-list-search"
                   value={localFilter}
                   onChange={(e) => setLocalFilter(e.target.value)}
-                  placeholder="Фильтр заметок…"
+                  placeholder={t('notes.hub.filterPlaceholder')}
                   className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
                 />
                 {localFilter ? (
                   <button
                     type="button"
-                    aria-label="Очистить фильтр"
+                    aria-label={t('common.clearFilter')}
                     onClick={() => setLocalFilter('')}
                     className="text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                   >
@@ -472,9 +474,9 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 onChange={(v) => setSortBy(v as NoteSortMode)}
                 className="w-[108px] shrink-0"
                 options={[
-                  { value: 'updated_desc', label: 'Недавние' },
-                  { value: 'created_desc', label: 'Новые' },
-                  { value: 'title_asc', label: 'От А до Я' },
+                  { value: 'updated_desc', label: t('notes.hub.sortRecent') },
+                  { value: 'created_desc', label: t('notes.hub.sortNew') },
+                  { value: 'title_asc', label: t('notes.hub.sortAlpha') },
                 ]}
               />
             </div>
@@ -489,12 +491,12 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13px] font-semibold text-[var(--k-accent)] truncate">
-                    Новая заметка…
+                    {t('notes.hub.draftTitle')}
                   </span>
-                  <span className="text-[10.5px] text-[var(--k-accent)]/80 shrink-0">Черновик</span>
+                  <span className="text-[10.5px] text-[var(--k-accent)]/80 shrink-0">{t('notes.hub.draftBadge')}</span>
                 </div>
                 <div className="text-[11px] text-[var(--k-ink-secondary)] mt-0.5">
-                  Начни писать справа — сохранится автоматически
+                  {t('notes.hub.draftHint')}
                 </div>
               </div>
             ) : null}
@@ -506,15 +508,15 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 </div>
                 <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)]">
                   {localFilter.trim() || globalSearchQuery.trim()
-                    ? 'По этому запросу заметок нет'
+                    ? t('notes.hub.emptySearch')
                     : scope === 'dedicated'
-                      ? 'Своих заметок пока нет'
-                      : 'Текстовых записей пока нет'}
+                      ? t('notes.hub.emptyMy')
+                      : t('notes.hub.emptyAll')}
                 </div>
                 <p className="m-0 text-[11.5px] leading-relaxed text-[var(--k-ink-muted)]">
                   {scope === 'dedicated' && allTextNotes.length > 0 && !localFilter.trim()
-                    ? 'Короткие записи и импортированные тексты собраны во вкладке «Все тексты».'
-                    : 'Создай заметку кнопкой «Новая» или надиктуй мысль голосом.'}
+                    ? t('notes.hub.emptyHintMy')
+                    : t('notes.hub.emptyHintAll')}
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-1.5 pt-0.5">
                   <button
@@ -523,7 +525,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                     className="k-interactive inline-flex items-center justify-center gap-1 h-7.5 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11.5px] font-medium cursor-pointer"
                   >
                     <Plus weight="bold" className="w-3 h-3" />
-                    <span>Создать заметку</span>
+                    <span>{t('workspace.createNote')}</span>
                   </button>
                   {scope === 'dedicated' && allTextNotes.length > 0 && !localFilter.trim() ? (
                     <button
@@ -532,7 +534,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                       onClick={() => setScope('all_text')}
                       className="k-interactive inline-flex items-center justify-center h-7.5 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                     >
-                      Все тексты ({allTextNotes.length})
+                      {t('notes.hub.allTextHeading', { count: allTextNotes.length })}
                     </button>
                   ) : null}
                 </div>
@@ -542,7 +544,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 {pinnedNotes.length > 0 ? (
                   <div className="space-y-1">
                     <div className="px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      Закреплённые
+                      {t('notes.hub.pinnedGroup')}
                     </div>
                     {pinnedNotes.map(renderNoteRow)}
                   </div>
@@ -552,7 +554,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                   <div className="space-y-1">
                     {pinnedNotes.length > 0 ? (
                       <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                        Остальные
+                        {t('notes.hub.otherGroup')}
                       </div>
                     ) : null}
                     {regularNotes.map(renderNoteRow)}
@@ -576,12 +578,12 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
             soundEnabled={soundEnabled}
             layoutMode={listVisible ? 'center' : 'full'}
             leadingBarSlot={
-              <TooltipHint label={listVisible ? 'Скрыть список заметок' : 'Показать список заметок'}>
+              <TooltipHint label={listVisible ? t('notes.hub.hideList') : t('notes.hub.showList')}>
                 <button
                   type="button"
                   data-testid="notes-toggle-list-btn"
                   onClick={() => setListVisible((v) => !v)}
-                  aria-label={listVisible ? 'Скрыть список заметок' : 'Показать список заметок'}
+                  aria-label={listVisible ? t('notes.hub.hideList') : t('notes.hub.showList')}
                   className={`k-interactive inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg border cursor-pointer shrink-0 ${
                     listVisible
                       ? 'border-transparent text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
@@ -622,10 +624,10 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
               <NotePencil weight="duotone" className="w-7 h-7" />
             </div>
             <h2 className="m-0 text-[17px] font-semibold tracking-[-0.015em] text-[var(--k-ink-primary)]">
-              Пространство для заметок
+              {t('notes.hub.stageTitle')}
             </h2>
             <p className="mt-1.5 mb-5 text-[13px] text-[var(--k-ink-secondary)] max-w-[380px] leading-relaxed">
-              Пиши структурированные документы, надиктовывай мысли голосом с расшифровкой, добавляй чек-листы и оформляй текст кнопкой «Украсить».
+              {t('notes.hub.stageDesc')}
             </p>
             <div className="flex flex-wrap items-center justify-center gap-2">
               <button
@@ -635,7 +637,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 className="k-interactive k-focus-ring inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer"
               >
                 <Plus weight="bold" className="w-4 h-4" />
-                <span>Создать заметку</span>
+                <span>{t('workspace.createNote')}</span>
               </button>
               {scope === 'dedicated' && allTextNotes.length > 0 ? (
                 <button
@@ -643,7 +645,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                   onClick={() => setScope('all_text')}
                   className="k-interactive inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[13px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer"
                 >
-                  <span>Открыть импорт ({allTextNotes.length})</span>
+                  <span>{t('notes.hub.openImports', { count: allTextNotes.length })}</span>
                 </button>
               ) : null}
             </div>

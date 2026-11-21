@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowSquareOut, ArrowsOutSimple, ImageSquare } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { getMediaUrl } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
@@ -17,14 +18,15 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = ({
   compactList = false,
   onZoom,
 }) => {
+  const { t } = useI18n();
   const imgSrc = getMediaUrl(item.thumbPath || item.imagePath);
   const isVideoRef = item.subKind === 'video_ref' && Boolean(item.mediaPath);
   const cleanTitle = cleanBrokenTextArtifacts(
-    item.title || (isVideoRef ? 'Видеореференс' : 'Изображение'),
+    item.title || (isVideoRef ? t('dna.videoRef') : t('dna.image')),
     true
   );
   const cleanSummary =
-    item.summary && item.summary !== item.title && !/^Скриншот\s/i.test(item.summary)
+    item.summary && item.summary !== item.title && !/^(?:Скриншот|Screenshot)\s/i.test(item.summary)
       ? cleanBrokenTextArtifacts(item.summary, true)
       : '';
   const urlActions = (item.extractedActions ?? []).filter((a) => a.type === 'url').slice(0, 3);
@@ -81,8 +83,8 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = ({
           <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover/shot:opacity-100 transition-opacity duration-150 pointer-events-none" />
           <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 pointer-events-none group-hover/shot:opacity-100 group-hover/shot:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
             <CopySlotPill
-              label="Фото"
-              copiedLabel="Готово"
+              label={t('cards.photoLabel')}
+              copiedLabel={t('common.done')}
               widthPx={84}
               heightPx={26}
               tone="secret"
@@ -90,7 +92,7 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = ({
             />
             <button
               type="button"
-              aria-label="Увеличить"
+              aria-label={t('cards.zoomAria')}
               onClick={(e) => {
                 e.stopPropagation();
                 onZoom(item);

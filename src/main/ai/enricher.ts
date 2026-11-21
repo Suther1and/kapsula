@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { cleanBrokenTextArtifacts, cleanInstagramText, decodeHtmlEntities } from '@shared/html-entities';
 import type {
   AiProvider,
+  AppLocale,
   AskVaultCitation,
   AskVaultResult,
   ChatTurn,
@@ -55,10 +56,10 @@ export interface AiEnrichmentOutcome {
   budgetBlocked: boolean;
 }
 
-function formatLocalIsoNow(nowMs = Date.now()): string {
+function formatLocalIsoNow(nowMs = Date.now(), locale: AppLocale = 'ru'): string {
   const d = new Date(nowMs);
   const pad = (n: number) => String(n).padStart(2, '0');
-  const dow = d.toLocaleDateString('ru-RU', { weekday: 'long' });
+  const dow = d.toLocaleDateString(locale === 'en' ? 'en-US' : 'ru-RU', { weekday: 'long' });
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())} (${dow})`;
 }
 
@@ -74,7 +75,7 @@ function parseIsoTimestampLocal(raw: unknown): number | null {
   return Number.isFinite(dt.getTime()) ? dt.getTime() : null;
 }
 
-function parseAiCalendarEvent(raw: unknown): ParsedAiCalendarEvent | null {
+function parseAiCalendarEvent(raw: unknown, locale: AppLocale = 'ru'): ParsedAiCalendarEvent | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   const startAt = parseIsoTimestampLocal(obj.startIso);
@@ -87,7 +88,12 @@ function parseAiCalendarEvent(raw: unknown): ParsedAiCalendarEvent | null {
     : hasEndTime
       ? parsedEnd!
       : startAt + 3_600_000;
-  const title = typeof obj.title === 'string' && obj.title.trim() ? obj.title.trim().slice(0, 96) : 'Событие';
+  const title =
+    typeof obj.title === 'string' && obj.title.trim()
+      ? obj.title.trim().slice(0, 96)
+      : locale === 'en'
+        ? 'Event'
+        : 'Событие';
   const location = typeof obj.location === 'string' ? obj.location.trim().slice(0, 100) : '';
   const notes = typeof obj.notes === 'string' ? obj.notes.trim().slice(0, 280) : '';
   return { title, startAt, endAt, allDay, hasEndTime, location, notes };
@@ -462,6 +468,8 @@ export async function runAiPipeline(params: {
   };
 
   // 5. Tier 2: Conditional Micro-Enrichment
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const updatedBudget =
     route.mode === 'personal'
       ? params.repo.getMonthBudgetSummary(route.provider, capUsd, true)
@@ -470,27 +478,44 @@ export async function runAiPipeline(params: {
     const orbitList =
       params.orbits.length > 0
         ? params.orbits.map((o) => `${o.id} (${o.name}): ${o.description}`).join('\n')
-        : '(у пользователя пока нет разделов)';
+        : isEn
+          ? '(user has no sections yet)'
+          : '(у пользователя пока нет разделов)';
     const topTags = params.repo.getExistingTagUniverse().slice(0, 35).join(', ');
-    const systemPrompt = [
-      'Ты — умный помощник личного хранилища Kapsula.',
-      'Верни СТРОГО JSON без лишнего текста: {"title":"...", "summary":"...", "orbit":"id или unsorted", "suggestedNewSection": "Короткое русское название раздела 1-2 слова или null", "dna":"link|shot|snippet|note|voice|doc", "tags":["..."], "calendarEvent": null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}.',
-      'Правила:',
-      '1) title на естественном русском (или оригинальное имя сервиса/проекта + короткая суть) до 64 символов — без кавычек, HTML-мусора и пунктов меню сайта. Если это скриншот с шумным текстом экрана — опиши суть скриншота в 3-6 словах.',
-      '2) summary — 1-2 ёмких предложения до 160 символов на живом русском: что это за ресурс, статья или заметка и зачем она полезна. Не дублируй заголовок, НИКОГДА не перечисляй пункты навигации, фильтры, промо-баннеры, cookie-уведомления или сырые пути (/academy-plan и т.п.). Для коротких личных заметок оставь "" (пустую строку).',
-      '3) Выбирай orbit из списка ТОЛЬКО при высокой уверенности. Если ни один раздел не подходит или раздела ещё нет, укажи orbit="unsorted" и при явной теме заполни suggestedNewSection (например: "Финансы", "Контакты", "Код", "Дизайн", "Документы", "Покупки", "Поездки", "Чтение").',
-      '4) Для случайных коротких фраз, цифр или теста ("Привет", "123123", "фывфыв") ставь orbit="unsorted" и suggestedNewSection=null.',
-      `5) Сейчас у пользователя локальное время: ${formatLocalIsoNow()}. Если в тексте есть личная встреча, созвон, запись к врачу/мастеру, билет, доставка или напоминание с датой — заполни calendarEvent (startIso в локальном ISO без Z, endIso=null если конец не назван, location если указан адрес/ссылка). Для новостей, статей и обычных мыслей без личного события всегда ставь calendarEvent=null.`,
-      `Разделы пользователя:\n${orbitList}`,
-      topTags ? `Существующие теги: ${topTags}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const systemPrompt = isEn
+      ? [
+          'You are a smart personal vault assistant in Kapsula.',
+          'Return STRICT JSON with no extra text: {"title":"...", "summary":"...", "orbit":"id or unsorted", "suggestedNewSection": "Short 1-2 word English section name or null", "dna":"link|shot|snippet|note|voice|doc", "tags":["..."], "calendarEvent": null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}.',
+          'Rules:',
+          '1) title in natural English (or original service/project name + short gist) up to 64 chars — no quotes, HTML clutter, or site nav items. If screenshot has noisy text, describe the core gist in 3-6 words.',
+          '2) summary — 1-2 crisp sentences up to 160 chars in natural English: what this resource/article/note is and why it helps. Never duplicate title, NEVER list nav links, filters, promo banners, cookie notices, or raw paths (/academy-plan). For short personal notes leave "".',
+          '3) Pick an orbit from the list ONLY with high confidence. If none fits or no sections exist, set orbit="unsorted" and fill suggestedNewSection when topic is clear (e.g. "Finance", "Contacts", "Code", "Design", "Documents", "Shopping", "Travel", "Reading").',
+          '4) For random short phrases, digits, or test text ("hello", "123123", "asdf") set orbit="unsorted" and suggestedNewSection=null.',
+          `5) User local time is: ${formatLocalIsoNow(Date.now(), 'en')}. If the text mentions a personal meeting, call, appointment, ticket, delivery, or dated reminder — fill calendarEvent (startIso in local ISO without Z, endIso=null if end omitted, location if address/link given). For news, articles, or thoughts without a personal event always set calendarEvent=null.`,
+          `User sections:\n${orbitList}`,
+          topTags ? `Existing tags: ${topTags}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : [
+          'Ты — умный помощник личного хранилища Kapsula.',
+          'Верни СТРОГО JSON без лишнего текста: {"title":"...", "summary":"...", "orbit":"id или unsorted", "suggestedNewSection": "Короткое русское название раздела 1-2 слова или null", "dna":"link|shot|snippet|note|voice|doc", "tags":["..."], "calendarEvent": null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}.',
+          'Правила:',
+          '1) title на естественном русском (или оригинальное имя сервиса/проекта + короткая суть) до 64 символов — без кавычек, HTML-мусора и пунктов меню сайта. Если это скриншот с шумным текстом экрана — опиши суть скриншота в 3-6 словах.',
+          '2) summary — 1-2 ёмких предложения до 160 символов на живом русском: что это за ресурс, статья или заметка и зачем она полезна. Не дублируй заголовок, НИКОГДА не перечисляй пункты навигации, фильтры, промо-баннеры, cookie-уведомления или сырые пути (/academy-plan и т.п.). Для коротких личных заметок оставь "" (пустую строку).',
+          '3) Выбирай orbit из списка ТОЛЬКО при высокой уверенности. Если ни один раздел не подходит или раздела ещё нет, укажи orbit="unsorted" и при явной теме заполни suggestedNewSection (например: "Финансы", "Контакты", "Код", "Дизайн", "Документы", "Покупки", "Поездки", "Чтение").',
+          '4) Для случайных коротких фраз, цифр или теста ("Привет", "123123", "фывфыв") ставь orbit="unsorted" и suggestedNewSection=null.',
+          `5) Сейчас у пользователя локальное время: ${formatLocalIsoNow(Date.now(), 'ru')}. Если в тексте есть личная встреча, созвон, запись к врачу/мастеру, билет, доставка или напоминание с датой — заполни calendarEvent (startIso в локальном ISO без Z, endIso=null если конец не назван, location если указан адрес/ссылка). Для новостей, статей и обычных мыслей без личного события всегда ставь calendarEvent=null.`,
+          `Разделы пользователя:\n${orbitList}`,
+          topTags ? `Существующие теги: ${topTags}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
 
     const userPrompt = [
-      params.domain ? `Домен: ${params.domain}` : '',
-      params.hasImage ? 'Тип: изображение или скриншот' : '',
-      `Текст:\n${sanitizedText}`,
+      params.domain ? `${isEn ? 'Domain' : 'Домен'}: ${params.domain}` : '',
+      params.hasImage ? (isEn ? 'Type: image or screenshot' : 'Тип: изображение или скриншот') : '',
+      `${isEn ? 'Text' : 'Текст'}:\n${sanitizedText}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -544,7 +569,7 @@ export async function runAiPipeline(params: {
           ? p.tags.filter((t): t is string => typeof t === 'string').slice(0, 4)
           : finalOutcome.tags;
 
-        const calendarEvent = parseAiCalendarEvent(p.calendarEvent);
+        const calendarEvent = parseAiCalendarEvent(p.calendarEvent, locale);
 
         finalOutcome = {
           orbit: validOrbit,
@@ -585,16 +610,18 @@ export async function askVaultWithAi(params: {
   vaultLocked?: boolean;
   fetchFn?: FetchLike;
 }): Promise<AskVaultResult> {
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const vaultLocked = Boolean(params.vaultLocked);
   const inventory = params.repo.getVaultInventorySummary(Date.now(), vaultLocked);
   const candidates = params.repo.searchNonSecretForAsk(params.question, 10);
 
   if (vaultLocked && LOCKED_SECRET_QUERY_RE.test(params.question)) {
-    return answerVaultLocally(params.question, candidates, inventory, true);
+    return answerVaultLocally(params.question, candidates, inventory, true, locale);
   }
 
   const isInventoryQuestion =
-    /(?:карт|виза|visa|mastercard|мир\b|банк|сколько|всего|сейф|парол|ключ|статистик|сводк|напомин|раздел)/i.test(
+    /(?:карт|виза|visa|mastercard|мир\b|банк|сколько|всего|сейф|парол|ключ|статистик|сводк|напомин|раздел|card|bank|how\s+many|total|vault|password|key|stat|summary|remind|section|folder)/i.test(
       params.question
     );
 
@@ -608,13 +635,14 @@ export async function askVaultWithAi(params: {
 
   // Never hallucinate or stuff 25 random unrelated notes when nothing matches FTS
   if (route.mode === 'local' || route.provider === 'local') {
-    return answerVaultLocally(params.question, candidates, inventory, vaultLocked);
+    return answerVaultLocally(params.question, candidates, inventory, vaultLocked, locale);
   }
 
   if (candidates.length === 0 && !isInventoryQuestion && (!params.history || params.history.length === 0)) {
     return {
-      answer:
-        'Я не нашёл точных совпадений в твоих записях по этому вопросу. Уточни ключевое слово или спроси о сводке хранилища и сохранённых картах.',
+      answer: isEn
+        ? 'I found no exact matches in your notes for that question. Try another keyword or ask about your vault summary or saved cards.'
+        : 'Я не нашёл точных совпадений в твоих записях по этому вопросу. Уточни ключевое слово или спроси о сводке хранилища и сохранённых картах.',
       citations: [],
       usedProvider: route.provider,
       costUsd: 0,
@@ -628,7 +656,7 @@ export async function askVaultWithAi(params: {
       true
     );
     if (budget.limitReached) {
-      return answerVaultLocally(params.question, candidates, inventory, vaultLocked);
+      return answerVaultLocally(params.question, candidates, inventory, vaultLocked, locale);
     }
   }
 
@@ -651,10 +679,10 @@ export async function askVaultWithAi(params: {
     return `[#${idx + 1} id=${item.id} dna=${item.dna} orbit=${item.orbit || 'unsorted'}] ${snippet}`;
   });
 
-  const asksFinanceOrCards = /(?:карт|виза|visa|mastercard|мир\b|банк|финанс)/i.test(
+  const asksFinanceOrCards = /(?:карт|виза|visa|mastercard|мир\b|банк|финанс|card|bank|finance)/i.test(
     params.question
   );
-  const asksVaultInventory = /(?:сейф|парол|ключ|токен|сколько|всего|статистик|сводк)/i.test(
+  const asksVaultInventory = /(?:сейф|парол|ключ|токен|сколько|всего|статистик|сводк|vault|password|key|token|how\s+many|total|stat|summary)/i.test(
     params.question
   );
 
@@ -679,26 +707,48 @@ export async function askVaultWithAi(params: {
 
   const historyLines = (params.history ?? [])
     .slice(-6)
-    .map((h) => `${h.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${redactSecrets(h.content).slice(0, 260)}`);
+    .map(
+      (h) =>
+        `${h.role === 'user' ? (isEn ? 'User' : 'Пользователь') : isEn ? 'Assistant' : 'Ассистент'}: ${redactSecrets(h.content).slice(0, 260)}`
+    );
 
-  const systemPrompt = [
-    'Ты — ассистент личной памяти Kapsula. Отвечай на живом, понятном русском, кратко и на «ты».',
-    'КРИТИЧЕСКИ ВАЖНО:',
-    '- Используй ТОЛЬКО факты из сводки хранилища и приведённых записей. Ничего не выдумывай.',
-    '- Если записи не найдены, прямо скажи об этом без домыслов.',
-    '- Банковские карты и пароли НИКОГДА не раскрывай полностью — показывай только название, бренд и маску •••• 1234.',
-    '- Никакого технического жаргона, системных метрик и ссылок в квадратных скобках вроде [#1]. Все ссылки указывай только в cited_ids.',
-    'Верни строго JSON: {"answer":"...", "cited_ids":["id1","id2"]}.',
-  ].join('\n');
+  const systemPrompt = isEn
+    ? [
+        'You are the personal memory assistant in Kapsula. Answer in clear, concise, natural English.',
+        'CRITICAL RULES:',
+        '- Use ONLY facts from the vault summary and retrieved records. Never invent or guess.',
+        '- If no matching records are found, say so plainly.',
+        '- NEVER reveal full bank card numbers or passwords — show only the title, brand, and masked •••• 1234.',
+        '- No technical jargon, system metrics, or bracketed citation tags like [#1]. Put references only in cited_ids.',
+        'Return strict JSON: {"answer":"...", "cited_ids":["id1","id2"]}.',
+      ].join('\n')
+    : [
+        'Ты — ассистент личной памяти Kapsula. Отвечай на живом, понятном русском, кратко и на «ты».',
+        'КРИТИЧЕСКИ ВАЖНО:',
+        '- Используй ТОЛЬКО факты из сводки хранилища и приведённых записей. Ничего не выдумывай.',
+        '- Если записи не найдены, прямо скажи об этом без домыслов.',
+        '- Банковские карты и пароли НИКОГДА не раскрывай полностью — показывай только название, бренд и маску •••• 1234.',
+        '- Никакого технического жаргона, системных метрик и ссылок в квадратных скобках вроде [#1]. Все ссылки указывай только в cited_ids.',
+        'Верни строго JSON: {"answer":"...", "cited_ids":["id1","id2"]}.',
+      ].join('\n');
 
-  const userPrompt = [
-    `Сводка хранилища (безопасные метаданные):\n${safeInventoryBlock}`,
-    historyLines.length > 0 ? `Контекст диалога:\n${historyLines.join('\n')}` : '',
-    `Вопрос пользователя: ${redactSecrets(params.question)}`,
-    contextRows.length > 0 ? `Найденные записи:\n${contextRows.join('\n')}` : 'Найденные записи: (совпадений по поиску нет)',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+  const userPrompt = isEn
+    ? [
+        `Vault summary (safe metadata):\n${safeInventoryBlock}`,
+        historyLines.length > 0 ? `Conversation context:\n${historyLines.join('\n')}` : '',
+        `User question: ${redactSecrets(params.question)}`,
+        contextRows.length > 0 ? `Matched records:\n${contextRows.join('\n')}` : 'Matched records: (no search matches)',
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+    : [
+        `Сводка хранилища (безопасные метаданные):\n${safeInventoryBlock}`,
+        historyLines.length > 0 ? `Контекст диалога:\n${historyLines.join('\n')}` : '',
+        `Вопрос пользователя: ${redactSecrets(params.question)}`,
+        contextRows.length > 0 ? `Найденные записи:\n${contextRows.join('\n')}` : 'Найденные записи: (совпадений по поиску нет)',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
 
   try {
     const res = await callFlashLiteJson({
@@ -826,24 +876,44 @@ export async function analyzeImageWithVision(params: {
     if (budget.limitReached) return null;
   }
 
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const orbitLines =
     params.orbits.length > 0
       ? params.orbits.map((o) => `${o.id} (${o.name}): ${o.description}`).join('\n')
-      : '(пока нет разделов)';
+      : isEn
+        ? '(no sections yet)'
+        : '(пока нет разделов)';
 
-  const prompt = [
-    'Ты — визуальный аналитик личной базы знаний Kapsula.',
-    'Рассмотри изображение целиком (сайты, UI-библиотеки, скрины приложений, графики, заметки, код, референсы, рецепты, мемы, интерфейсы, билеты, записи ко врачу/мастеру, приглашения).',
-    'Верни СТРОГО JSON без markdown-обёртки:',
-    '{"title":"ёмкий заголовок на русском 3-7 слов","summary":"1-2 предложения сути что изображено","bodyMarkdown":"подробный полезный разбор в Markdown: список инструментов/сайтов с их официальными URL и кратким описанием, либо код/суть со скрина","links":[{"label":"Название","url":"https://...","description":"Зачем нужен / что делает"}],"tags":["тег1","тег2"],"orbit":"id раздела или unsorted","suggestedNewSection":"короткое название или null","calendarEvent":null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}',
-    'ПРАВИЛА:',
-    '- НИКОГДА не ставь title="image" и не копируй мусорный сырой OCR.',
-    '- Если на изображении показаны сайты, сервисы, приложения или полезные инструменты — укажи их точные официальные URL (только если уверен в домене) и по 1 полезному предложению про каждый прямо в bodyMarkdown и в массиве links!',
-    `- Сейчас у пользователя локальное время: ${formatLocalIsoNow()}. Если на скрине есть личная запись к врачу/мастеру, билет, бронь, встреча или созвон с датой/временем — заполни calendarEvent (startIso в локальном ISO без Z, endIso=null если окончание не указано, location если есть адрес/ссылка). Для обычных скриншотов и новостей оставляй calendarEvent=null.`,
-    `Доступные разделы:\n${orbitLines}`,
-    params.captionHint ? `Подпись пользователя: ${redactSecrets(params.captionHint).slice(0, 400)}` : '',
-    params.ocrHint ? `Подсказка распознанного текста: ${redactSecrets(params.ocrHint).slice(0, 600)}` : '',
-  ]
+  const prompt = (
+    isEn
+      ? [
+          'You are a visual analyst in the personal knowledge base Kapsula.',
+          'Examine the entire image (websites, UI libraries, app screenshots, charts, notes, code, references, recipes, memes, interfaces, tickets, appointments, invitations).',
+          'Return STRICT JSON without markdown fences:',
+          '{"title":"concise English title 3-7 words","summary":"1-2 sentences capturing what is shown","bodyMarkdown":"useful Markdown breakdown: list tools/sites with official URLs and short descriptions, or key points/code from the screenshot","links":[{"label":"Name","url":"https://...","description":"What it does / why useful"}],"tags":["tag1","tag2"],"orbit":"section id or unsorted","suggestedNewSection":"short name or null","calendarEvent":null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}',
+          'RULES:',
+          '- NEVER output title="image" or copy noisy raw OCR text.',
+          '- If the image shows websites, services, apps, or useful tools — include their exact official URLs (only if confident in the domain) and 1 helpful sentence for each in both bodyMarkdown and links!',
+          `- User local time is: ${formatLocalIsoNow(Date.now(), 'en')}. If the screenshot shows a personal appointment, ticket, reservation, meeting, or call with date/time — fill calendarEvent (startIso in local ISO without Z, endIso=null if end omitted, location if address/link shown). For ordinary screenshots and news keep calendarEvent=null.`,
+          `Available sections:\n${orbitLines}`,
+          params.captionHint ? `User caption: ${redactSecrets(params.captionHint).slice(0, 400)}` : '',
+          params.ocrHint ? `OCR hint: ${redactSecrets(params.ocrHint).slice(0, 600)}` : '',
+        ]
+      : [
+          'Ты — визуальный аналитик личной базы знаний Kapsula.',
+          'Рассмотри изображение целиком (сайты, UI-библиотеки, скрины приложений, графики, заметки, код, референсы, рецепты, мемы, интерфейсы, билеты, записи ко врачу/мастеру, приглашения).',
+          'Верни СТРОГО JSON без markdown-обёртки:',
+          '{"title":"ёмкий заголовок на русском 3-7 слов","summary":"1-2 предложения сути что изображено","bodyMarkdown":"подробный полезный разбор в Markdown: список инструментов/сайтов с их официальными URL и кратким описанием, либо код/суть со скрина","links":[{"label":"Название","url":"https://...","description":"Зачем нужен / что делает"}],"tags":["тег1","тег2"],"orbit":"id раздела или unsorted","suggestedNewSection":"короткое название или null","calendarEvent":null | {"title":"...","startIso":"YYYY-MM-DDTHH:mm","endIso":null,"allDay":false,"location":"","notes":""}}',
+          'ПРАВИЛА:',
+          '- НИКОГДА не ставь title="image" и не копируй мусорный сырой OCR.',
+          '- Если на изображении показаны сайты, сервисы, приложения или полезные инструменты — укажи их точные официальные URL (только если уверен в домене) и по 1 полезному предложению про каждый прямо в bodyMarkdown и в массиве links!',
+          `- Сейчас у пользователя локальное время: ${formatLocalIsoNow(Date.now(), 'ru')}. Если на скрине есть личная запись к врачу/мастеру, билет, бронь, встреча или созвон с датой/временем — заполни calendarEvent (startIso в локальном ISO без Z, endIso=null если окончание не указано, location если есть адрес/ссылка). Для обычных скриншотов и новостей оставляй calendarEvent=null.`,
+          `Доступные разделы:\n${orbitLines}`,
+          params.captionHint ? `Подпись пользователя: ${redactSecrets(params.captionHint).slice(0, 400)}` : '',
+          params.ocrHint ? `Подсказка распознанного текста: ${redactSecrets(params.ocrHint).slice(0, 600)}` : '',
+        ]
+  )
     .filter(Boolean)
     .join('\n');
 
@@ -1005,7 +1075,7 @@ export async function analyzeImageWithVision(params: {
         : [],
       suggestedOrbitId,
       suggestedNewSection,
-      calendarEvent: parseAiCalendarEvent(parsed.calendarEvent),
+      calendarEvent: parseAiCalendarEvent(parsed.calendarEvent, locale),
       usedCloud: true,
       costUsd,
     };
@@ -1030,6 +1100,8 @@ export async function synthesizeNotesWithAi(params: {
   capUsd?: number;
   fetchFn?: FetchLike;
 }): Promise<SynthesizeNotesResult> {
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const safeItems = params.items.filter((i) => i.dna !== 'secret');
   const buildLocalFallback = (): SynthesizeNotesResult => {
     const firstOrbit = safeItems.find((i) => i.orbit)?.orbit || '';
@@ -1037,7 +1109,7 @@ export async function synthesizeNotesWithAi(params: {
     const title =
       safeItems.length <= 2
         ? safeItems.map((i) => i.title).join(' + ').slice(0, 68)
-        : `Сводка: ${safeItems[0]?.title.slice(0, 38)} (+${safeItems.length - 1})`;
+        : `${isEn ? 'Summary' : 'Сводка'}: ${safeItems[0]?.title.slice(0, 38)} (+${safeItems.length - 1})`;
 
     let body = '';
     if (params.mode === 'tasks') {
@@ -1045,20 +1117,22 @@ export async function synthesizeNotesWithAi(params: {
         const detail = decodeHtmlEntities(i.body || i.summary || '').trim();
         return `- [ ] **${decodeHtmlEntities(i.title)}**${detail && detail !== i.title ? ` — ${detail}` : ''}`;
       });
-      body = `## Сводный план действий\n\n${taskLines.join('\n')}`;
+      body = `## ${isEn ? 'Combined Action Plan' : 'Сводный план действий'}\n\n${taskLines.join('\n')}`;
     } else if (params.mode === 'table') {
       const rows = safeItems.map((i) => {
         const cleanBody = decodeHtmlEntities(i.body || i.summary || i.url || '—').replace(/\s+/g, ' ').replace(/\|/g, '/');
         const tagsStr = i.tags.map((t) => `#${t}`).join(' ') || '—';
         return `| ${decodeHtmlEntities(i.title).replace(/\|/g, '/')} | ${cleanBody} | ${tagsStr} |`;
       });
-      body = `| Тема | Детали и параметры | Теги |\n|---|---|---|\n${rows.join('\n')}`;
+      body = isEn
+        ? `| Topic | Details & Parameters | Tags |\n|---|---|---|\n${rows.join('\n')}`
+        : `| Тема | Детали и параметры | Теги |\n|---|---|---|\n${rows.join('\n')}`;
     } else {
       body = safeItems
         .map((i) => {
           const content = decodeHtmlEntities(i.body || i.summary || i.mediaMeta?.transcript || '').trim();
-          const urlLine = i.url ? `\n\nСсылка: ${i.url}` : '';
-          return `## ${decodeHtmlEntities(i.title)}\n\n${content || 'Без дополнительного текста'}${urlLine}`;
+          const urlLine = i.url ? `\n\n${isEn ? 'Source' : 'Ссылка'}: ${i.url}` : '';
+          return `## ${decodeHtmlEntities(i.title)}\n\n${content || (isEn ? 'No additional text' : 'Без дополнительного текста')}${urlLine}`;
         })
         .join('\n\n---\n\n');
     }
@@ -1066,7 +1140,9 @@ export async function synthesizeNotesWithAi(params: {
     return {
       title,
       body,
-      summary: `Объединено записей: ${safeItems.length}. Все исходные числа и детали сохранены.`,
+      summary: isEn
+        ? `Combined ${safeItems.length} notes. All original numbers and details preserved.`
+        : `Объединено записей: ${safeItems.length}. Все исходные числа и детали сохранены.`,
       tags: mergedTags,
       orbit: firstOrbit,
       usedCloud: false,
@@ -1076,7 +1152,7 @@ export async function synthesizeNotesWithAi(params: {
 
   if (safeItems.length === 0) {
     return {
-      title: 'Новая сводная заметка',
+      title: isEn ? 'New synthesized note' : 'Новая сводная заметка',
       body: '',
       summary: '',
       tags: [],
@@ -1107,20 +1183,26 @@ export async function synthesizeNotesWithAi(params: {
     if (budget.limitReached) return buildLocalFallback();
   }
 
-  const modeRules: Record<SynthesizeMode, string> = {
-    spec: 'Собери единую логичную спецификацию / структурированную заметку с подзаголовками `## ...` и списками.',
-    tasks: 'Преврати все пункты в единый структурированный чек-лист задач `- [ ] ...` с короткими пояснениями параметров.',
-    table: 'Оформи сравнительную или сводную Markdown-таблицу (`| Поле | Значение | ... |`) с выжимкой сверху.',
-  };
+  const modeRules: Record<SynthesizeMode, string> = isEn
+    ? {
+        spec: 'Build a single coherent specification / structured note with `## ...` subheadings and lists.',
+        tasks: 'Turn every point into a structured task checklist `- [ ] ...` with brief parameter details.',
+        table: 'Format a comparative or summary Markdown table (`| Field | Value | ... |`) with a brief takeaway above.',
+      }
+    : {
+        spec: 'Собери единую логичную спецификацию / структурированную заметку с подзаголовками `## ...` и списками.',
+        tasks: 'Преврати все пункты в единый структурированный чек-лист задач `- [ ] ...` с короткими пояснениями параметров.',
+        table: 'Оформи сравнительную или сводную Markdown-таблицу (`| Поле | Значение | ... |`) с выжимкой сверху.',
+      };
 
   const sourceDump = safeItems
     .map((item, idx) =>
       redactSecrets(
         [
-          `--- Источник #${idx + 1} (id=${item.id}) ---`,
-          `Заголовок: ${decodeHtmlEntities(item.title)}`,
+          `--- ${isEn ? 'Source' : 'Источник'} #${idx + 1} (id=${item.id}) ---`,
+          `${isEn ? 'Title' : 'Заголовок'}: ${decodeHtmlEntities(item.title)}`,
           item.url ? `URL: ${item.url}` : '',
-          `Текст:\n${decodeHtmlEntities(item.body || item.summary || item.mediaMeta?.transcript || '')}`,
+          `${isEn ? 'Text' : 'Текст'}:\n${decodeHtmlEntities(item.body || item.summary || item.mediaMeta?.transcript || '')}`,
         ]
           .filter(Boolean)
           .join('\n')
@@ -1129,19 +1211,31 @@ export async function synthesizeNotesWithAi(params: {
     .join('\n\n')
     .slice(0, 14_000);
 
-  const systemPrompt = [
-    'Ты — редактор знаний в приложении Kapsula.',
-    modeRules[params.mode],
-    'АБСОЛЮТНОЕ ПРАВИЛО БЕЗ ПОТЕРЬ (LOSSLESS):',
-    '- Сохрани 100% ВСЕХ точных чисел, сумм, дат, порогов, процентов, параметров, имён, ссылок и формулировок из каждого источника. НЕ округляй, НЕ обобщай в воду и НЕ выбрасывай детали!',
-    '- Склей дубли только в структуре, сохранив каждую уникальную деталь.',
-    'Верни строго JSON без markdown-обёртки:',
-    '{"title":"ёмкий заголовок на русском","summary":"1-2 фразы сути","body":"готовый структурированный Markdown","tags":["тег1","тег2"]}',
-  ].join('\n');
+  const systemPrompt = (
+    isEn
+      ? [
+          'You are a knowledge editor in Kapsula.',
+          modeRules[params.mode],
+          'ABSOLUTE LOSSLESS RULE:',
+          '- Preserve 100% of ALL exact numbers, amounts, dates, thresholds, percentages, parameters, names, links, and wording from every source. DO NOT round, water down, or drop any details!',
+          '- Merge duplicates only structurally while retaining every unique detail.',
+          'Return strict JSON without markdown fences:',
+          '{"title":"concise English title","summary":"1-2 sentence gist","body":"structured Markdown output","tags":["tag1","tag2"]}',
+        ]
+      : [
+          'Ты — редактор знаний в приложении Kapsula.',
+          modeRules[params.mode],
+          'АБСОЛЮТНОЕ ПРАВИЛО БЕЗ ПОТЕРЬ (LOSSLESS):',
+          '- Сохрани 100% ВСЕХ точных чисел, сумм, дат, порогов, процентов, параметров, имён, ссылок и формулировок из каждого источника. НЕ округляй, НЕ обобщай в воду и НЕ выбрасывай детали!',
+          '- Склей дубли только в структуре, сохранив каждую уникальную деталь.',
+          'Верни строго JSON без markdown-обёртки:',
+          '{"title":"ёмкий заголовок на русском","summary":"1-2 фразы сути","body":"готовый структурированный Markdown","tags":["тег1","тег2"]}',
+        ]
+  ).join('\n');
 
   const userPrompt = [
-    params.instruction ? `Пожелание пользователя: ${redactSecrets(params.instruction)}` : '',
-    `Исходные записи (${safeItems.length}):\n\n${sourceDump}`,
+    params.instruction ? `${isEn ? 'User instruction' : 'Пожелание пользователя'}: ${redactSecrets(params.instruction)}` : '',
+    `${isEn ? `Source notes (${safeItems.length})` : `Исходные записи (${safeItems.length})`}:\n\n${sourceDump}`,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -1177,7 +1271,9 @@ export async function synthesizeNotesWithAi(params: {
       summary:
         typeof p.summary === 'string' && p.summary.trim()
           ? p.summary.trim().slice(0, 220)
-          : `Сведено из ${safeItems.length} записей`,
+          : isEn
+            ? `Synthesized from ${safeItems.length} notes`
+            : `Сведено из ${safeItems.length} записей`,
       tags: mergedTags,
       orbit: firstOrbit,
       usedCloud: true,
@@ -1203,6 +1299,8 @@ export async function previewSmartTriageWithAi(params: {
   capUsd?: number;
   fetchFn?: FetchLike;
 }): Promise<TriagePreviewResult> {
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const route = await resolveAiRoute({
     provider: params.provider,
     apiKey: params.apiKey,
@@ -1215,8 +1313,9 @@ export async function previewSmartTriageWithAi(params: {
     return {
       configured: false,
       usedCloud: false,
-      message:
-        'Для умного разбора войди в аккаунт во вкладке «Синхронизация» (встроенный ИИ) или добавь свой ключ в Настройках → ИИ — без ИИ Капсула не раскладывает записи наугад.',
+      message: isEn
+        ? 'Sign in under Sync (built-in AI) or add your own key in Settings → AI for smart triage — Kapsula never sorts notes blindly without AI.'
+        : 'Для умного разбора войди в аккаунт во вкладке «Синхронизация» (встроенный ИИ) или добавь свой ключ в Настройках → ИИ — без ИИ Капсула не раскладывает записи наугад.',
       suggestions: [],
       newOrbits: [],
       mergeGroups: [],
@@ -1233,7 +1332,9 @@ export async function previewSmartTriageWithAi(params: {
       return {
         configured: true,
         usedCloud: false,
-        message: 'Достигнут месячный лимит расходов на ИИ. Измени лимит в Настройках, чтобы продолжить разбор.',
+        message: isEn
+          ? 'Monthly AI spend cap reached. Update your limit in Settings to continue organizing.'
+          : 'Достигнут месячный лимит расходов на ИИ. Измени лимит в Настройках, чтобы продолжить разбор.',
         suggestions: [],
         newOrbits: [],
         mergeGroups: [],
@@ -1248,7 +1349,12 @@ export async function previewSmartTriageWithAi(params: {
   const eligible = params.items.filter((i) => !i.isArchived && i.dna !== 'secret');
   const unsortedOrBuffer = eligible.filter((i) => !i.orbit || i.aiStatus === 'raw_buffer');
   const docsOrbitIds = new Set(
-    params.orbits.filter((o) => o.name.toLowerCase().includes('документ')).map((o) => o.id)
+    params.orbits
+      .filter((o) => {
+        const n = o.name.toLowerCase();
+        return n.includes('документ') || n.includes('document');
+      })
+      .map((o) => o.id)
   );
   const secondaryPool = eligible.filter(
     (i) =>
@@ -1274,7 +1380,9 @@ export async function previewSmartTriageWithAi(params: {
     return {
       configured: true,
       usedCloud: false,
-      message: 'Во «Всех записях» сейчас нет неразобранных записей — везде уже порядок.',
+      message: isEn
+        ? 'No unsorted items left in All Notes — everything is already organized.'
+        : 'Во «Всех записях» сейчас нет неразобранных записей — везде уже порядок.',
       suggestions: [],
       newOrbits: [],
       mergeGroups: [],
@@ -1293,7 +1401,9 @@ export async function previewSmartTriageWithAi(params: {
           : '';
         return `"${safeTitle}"${safeSummary ? ` (${safeSummary})` : ''}`;
       });
-    return `- Раздел id="${o.id}" | имя="${redactSecrets(o.name)}" | описание="${redactSecrets(o.description)}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
+    return isEn
+      ? `- Section id="${o.id}" | name="${redactSecrets(o.name)}" | description="${redactSecrets(o.description)}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
+      : `- Раздел id="${o.id}" | имя="${redactSecrets(o.name)}" | описание="${redactSecrets(o.description)}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
   });
 
   const boardExamples = params.boards.map((b) => {
@@ -1307,7 +1417,9 @@ export async function previewSmartTriageWithAi(params: {
           : '';
         return `"${safeTitle}"${safeBody ? ` (${safeBody})` : ''}`;
       });
-    return `- Подборка id="${b.id}" | имя="${redactSecrets(b.name)}" | описание="${redactSecrets(b.description || '')}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
+    return isEn
+      ? `- Collection id="${b.id}" | name="${redactSecrets(b.name)}" | description="${redactSecrets(b.description || '')}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
+      : `- Подборка id="${b.id}" | имя="${redactSecrets(b.name)}" | описание="${redactSecrets(b.description || '')}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
   });
 
   const orbitNameLookup = new Map(params.orbits.map((o) => [o.id, o.name]));
@@ -1326,19 +1438,35 @@ export async function previewSmartTriageWithAi(params: {
     )
   );
 
-  const systemPrompt = [
-    'Ты — умный куратор базы знаний Kapsula. Разбери записи пользователя, опираясь НЕ только на названия разделов и подборок (например: «Работа», «Личное», «Идеи», «Обучение», «Проекты»), но и на ЖИВЫЕ ПРИМЕРЫ заметок, которые уже лежат внутри каждого раздела и подборки!',
-    'Верни СТРОГО JSON:',
-    '{"suggestions":[{"itemId":"...","targetOrbit":"id раздела или null","targetBoardId":"id подборки или null","suggestedTags":["тег"],"archive":false,"reason":"короткая причина по-русски","confidence":0.85}],"newOrbits":[{"name":"Название","description":"Зачем","color":"#E86A33","icon":"Folder","itemIds":["..."]}],"mergeGroups":[{"title":"Объединённый заголовок","itemIds":["id1","id2"],"reason":"Почему стоит свести в одну заметку"}]}',
-    'ПРАВИЛА:',
-    '- Проверяй текущее расположение (currentOrbitName / currentBoardId): если авто-сортировка ошиблась по смыслу (например, заметка по рабочему проекту попала в «Личное» или пост из соцсети лежит в «Документы») — ПЕРЕНЕСИ в правильный раздел и подходящую подборку.',
-    '- НИКОГДА не предлагай пустые переносы без изменений (если targetOrbit совпадает с currentOrbitId И targetBoardId совпадает с currentBoardId И archive=false — пропусти запись).',
-    '- Если уверенность < 0.72, НЕ угадывай наугад — оставь targetOrbit=null и не включай сомнительные ходы.',
-    '- Если видишь 2 и более коротких заметок об одной теме, проекте или задаче, обязательно предложи объединить их в mergeGroups!',
-    '- Предлагай archive=true только для явного разового тестового мусора.',
-    `СУЩЕСТВУЮЩИЕ РАЗДЕЛЫ:\n${orbitExamples.join('\n') || '(нет)'}`,
-    `СУЩЕСТВУЮЩИЕ ПОДБОРКИ:\n${boardExamples.join('\n') || '(нет)'}`,
-  ].join('\n');
+  const systemPrompt = (
+    isEn
+      ? [
+          'You are an intelligent curator of the Kapsula knowledge base. Organize the user’s items using NOT only section/collection names (e.g. "Work", "Personal", "Ideas", "Learning", "Projects"), but also the LIVE EXAMPLES already inside each section and collection!',
+          'Return STRICT JSON:',
+          '{"suggestions":[{"itemId":"...","targetOrbit":"section id or null","targetBoardId":"collection id or null","suggestedTags":["tag"],"archive":false,"reason":"short reason in English","confidence":0.85}],"newOrbits":[{"name":"Name","description":"Purpose","color":"#E86A33","icon":"Folder","itemIds":["..."]}],"mergeGroups":[{"title":"Combined title","itemIds":["id1","id2"],"reason":"Why merging into one note makes sense"}]}',
+          'RULES:',
+          '- Audit current placement (currentOrbitName / currentBoardId): if auto-sorting guessed wrong by meaning (e.g., a work project note landed in Personal or a social post landed in Documents) — MOVE it to the right section and collection.',
+          '- NEVER emit no-op moves (if targetOrbit matches currentOrbitId AND targetBoardId matches currentBoardId AND archive=false — skip the item).',
+          '- If confidence < 0.72, DO NOT guess — leave targetOrbit=null and omit uncertain moves.',
+          '- When you spot 2+ short notes about the same topic, project, or task, propose combining them in mergeGroups!',
+          '- Only suggest archive=true for obvious disposable test junk.',
+          `EXISTING SECTIONS:\n${orbitExamples.join('\n') || '(none)'}`,
+          `EXISTING COLLECTIONS:\n${boardExamples.join('\n') || '(none)'}`,
+        ]
+      : [
+          'Ты — умный куратор базы знаний Kapsula. Разбери записи пользователя, опираясь НЕ только на названия разделов и подборок (например: «Работа», «Личное», «Идеи», «Обучение», «Проекты»), но и на ЖИВЫЕ ПРИМЕРЫ заметок, которые уже лежат внутри каждого раздела и подборки!',
+          'Верни СТРОГО JSON:',
+          '{"suggestions":[{"itemId":"...","targetOrbit":"id раздела или null","targetBoardId":"id подборки или null","suggestedTags":["тег"],"archive":false,"reason":"короткая причина по-русски","confidence":0.85}],"newOrbits":[{"name":"Название","description":"Зачем","color":"#E86A33","icon":"Folder","itemIds":["..."]}],"mergeGroups":[{"title":"Объединённый заголовок","itemIds":["id1","id2"],"reason":"Почему стоит свести в одну заметку"}]}',
+          'ПРАВИЛА:',
+          '- Проверяй текущее расположение (currentOrbitName / currentBoardId): если авто-сортировка ошиблась по смыслу (например, заметка по рабочему проекту попала в «Личное» или пост из соцсети лежит в «Документы») — ПЕРЕНЕСИ в правильный раздел и подходящую подборку.',
+          '- НИКОГДА не предлагай пустые переносы без изменений (если targetOrbit совпадает с currentOrbitId И targetBoardId совпадает с currentBoardId И archive=false — пропусти запись).',
+          '- Если уверенность < 0.72, НЕ угадывай наугад — оставь targetOrbit=null и не включай сомнительные ходы.',
+          '- Если видишь 2 и более коротких заметок об одной теме, проекте или задаче, обязательно предложи объединить их в mergeGroups!',
+          '- Предлагай archive=true только для явного разового тестового мусора.',
+          `СУЩЕСТВУЮЩИЕ РАЗДЕЛЫ:\n${orbitExamples.join('\n') || '(нет)'}`,
+          `СУЩЕСТВУЮЩИЕ ПОДБОРКИ:\n${boardExamples.join('\n') || '(нет)'}`,
+        ]
+  ).join('\n');
 
   try {
     const res = await callFlashLiteJson({
@@ -1347,7 +1475,9 @@ export async function previewSmartTriageWithAi(params: {
       cloudProxy: route.proxy,
       accessToken: route.accessToken,
       systemPrompt,
-      userPrompt: `Записи для проверки (${targetPool.length}):\n${inboxDump.join('\n')}`,
+      userPrompt: isEn
+        ? `Items to review (${targetPool.length}):\n${inboxDump.join('\n')}`
+        : `Записи для проверки (${targetPool.length}):\n${inboxDump.join('\n')}`,
       maxTokens: 4096,
       timeoutMs: 40_000,
       fetchFn: params.fetchFn,
@@ -1359,7 +1489,9 @@ export async function previewSmartTriageWithAi(params: {
       return {
         configured: true,
         usedCloud: true,
-        message: 'Не удалось получить корректный разбор от модели. Попробуй ещё раз.',
+        message: isEn
+          ? 'Could not parse a valid organization plan from the model. Please try again.'
+          : 'Не удалось получить корректный разбор от модели. Попробуй ещё раз.',
         suggestions: [],
         newOrbits: [],
         mergeGroups: [],
@@ -1389,7 +1521,7 @@ export async function previewSmartTriageWithAi(params: {
         const effectiveOrbitId = rawOrb ?? (item.orbit || null);
         suggestions.push({
           itemId,
-          itemTitle: cleanBrokenTextArtifacts(item.title || 'Без названия', true),
+          itemTitle: cleanBrokenTextArtifacts(item.title || (isEn ? 'Untitled' : 'Без названия'), true),
           currentOrbit: item.orbit,
           targetOrbit: effectiveOrbitId,
           targetOrbitName: effectiveOrbitId ? orbitMap.get(effectiveOrbitId)?.name ?? null : null,
@@ -1399,7 +1531,12 @@ export async function previewSmartTriageWithAi(params: {
             ? obj.suggestedTags.filter((t): t is string => typeof t === 'string').slice(0, 4)
             : [],
           archive,
-          reason: typeof obj.reason === 'string' ? obj.reason.trim().slice(0, 120) : 'Подходит по смыслу',
+          reason:
+            typeof obj.reason === 'string'
+              ? obj.reason.trim().slice(0, 120)
+              : isEn
+                ? 'Matches topic'
+                : 'Подходит по смыслу',
           confidence: conf,
         });
       }
@@ -1441,7 +1578,12 @@ export async function previewSmartTriageWithAi(params: {
         mergeGroups.push({
           title,
           itemIds: ids,
-          reason: typeof obj.reason === 'string' ? obj.reason.trim().slice(0, 140) : 'Записи об одной теме',
+          reason:
+            typeof obj.reason === 'string'
+              ? obj.reason.trim().slice(0, 140)
+              : isEn
+                ? 'Notes about the same topic'
+                : 'Записи об одной теме',
         });
       }
     }
@@ -1452,16 +1594,22 @@ export async function previewSmartTriageWithAi(params: {
       usedCloud: true,
       message: hasAnyAction
         ? remainingCount > 0
-          ? `В эту партию взяты 18 приоритетных записей — оставшиеся (${remainingCount}) можно разобрать следующим шагом.`
+          ? isEn
+            ? `Reviewed 18 priority notes in this batch — ${remainingCount} remaining can be organized in the next step.`
+            : `В эту партию взяты 18 приоритетных записей — оставшиеся (${remainingCount}) можно разобрать следующим шагом.`
           : undefined
-        : 'Все проверенные записи уже лежат в подходящих разделах.',
+        : isEn
+          ? 'All reviewed notes are already in the right sections.'
+          : 'Все проверенные записи уже лежат в подходящих разделах.',
       remainingCount,
       suggestions,
       newOrbits,
       mergeGroups,
     };
   } catch (err) {
-    let message = 'Не удалось связаться с сервером ИИ — проверь интернет и настройки ИИ.';
+    let message = isEn
+      ? 'Could not reach the AI server — check your internet connection and AI settings.'
+      : 'Не удалось связаться с сервером ИИ — проверь интернет и настройки ИИ.';
     if (err instanceof AiHttpError) {
       if (err.status === 429 && err.isQuotaMessage) {
         message = err.message;
@@ -1469,17 +1617,25 @@ export async function previewSmartTriageWithAi(params: {
         message =
           route.mode === 'cloud_proxy'
             ? err.message
-            : 'Ключ ИИ не принят провайдером — проверь его в Настройках → ИИ.';
+            : isEn
+              ? 'AI key rejected by provider — check it in Settings → AI.'
+              : 'Ключ ИИ не принят провайдером — проверь его в Настройках → ИИ.';
       } else if (err.status === 429) {
-        message = 'Провайдер временно ограничил число запросов — подожди минуту и повтори.';
+        message = isEn
+          ? 'Provider temporarily rate-limited requests — wait a minute and try again.'
+          : 'Провайдер временно ограничил число запросов — подожди минуту и повтори.';
       } else {
-        message = 'Модель ИИ временно недоступна. Попробуй повторить через несколько секунд.';
+        message = isEn
+          ? 'AI model is temporarily unavailable. Try again in a few seconds.'
+          : 'Модель ИИ временно недоступна. Попробуй повторить через несколько секунд.';
       }
     } else if (
       err instanceof Error &&
       /timeout|abort/i.test(`${err.name} ${err.message}`)
     ) {
-      message = 'Модель отвечает слишком долго. Попробуй ещё раз — записей разобрать можно за два захода.';
+      message = isEn
+        ? 'Model response timed out. Try again — large batches can be organized in two passes.'
+        : 'Модель отвечает слишком долго. Попробуй ещё раз — записей разобрать можно за два захода.';
     }
     return {
       configured: true,
@@ -1496,14 +1652,24 @@ export async function testAiProviderConnection(params: {
   provider: AiProvider;
   apiKey: string | null;
   cloudProxy?: CloudAiProxyConfig | null;
+  locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<{ ok: boolean; message: string }> {
+  const isEn = params.locale === 'en';
   if (params.provider === 'local') {
-    return { ok: true, message: 'Локальный режим активен и не требует ключа.' };
+    return {
+      ok: true,
+      message: isEn
+        ? 'Local mode is active and does not require a key.'
+        : 'Локальный режим активен и не требует ключа.',
+    };
   }
   const cleanKey = params.apiKey?.trim() || null;
   if (!cleanKey && !params.cloudProxy) {
-    return { ok: false, message: 'Сначала вставь и сохрани ключ доступа.' };
+    return {
+      ok: false,
+      message: isEn ? 'Paste and save an access key first.' : 'Сначала вставь и сохрани ключ доступа.',
+    };
   }
   try {
     const res = await callFlashLiteJson({
@@ -1519,21 +1685,39 @@ export async function testAiProviderConnection(params: {
       ? {
           ok: true,
           message: cleanKey
-            ? 'Подключение работает — личный ключ проверен.'
-            : 'Встроенный ИИ Kapsula работает.',
+            ? isEn
+              ? 'Connection verified — personal key works.'
+              : 'Подключение работает — личный ключ проверен.'
+            : isEn
+              ? 'Kapsula built-in AI is working.'
+              : 'Встроенный ИИ Kapsula работает.',
         }
-      : { ok: false, message: 'Провайдер вернул пустой ответ.' };
+      : {
+          ok: false,
+          message: isEn ? 'Provider returned an empty response.' : 'Провайдер вернул пустой ответ.',
+        };
   } catch (err) {
     if (err instanceof AiHttpError && err.status === 429 && err.isQuotaMessage) {
       return { ok: false, message: err.message };
     }
     const raw = err instanceof Error ? err.message : '';
     if (raw.includes('401') || raw.includes('403')) {
-      return { ok: false, message: 'Ключ отклонён — проверь, что скопировал его полностью.' };
+      return {
+        ok: false,
+        message: isEn
+          ? 'Key rejected — verify that you copied the full key.'
+          : 'Ключ отклонён — проверь, что скопировал его полностью.',
+      };
     }
     if (raw.includes('429')) {
-      return { ok: false, message: 'Лимит запросов исчерпан — попробуй чуть позже.' };
+      return {
+        ok: false,
+        message: isEn ? 'Rate limit reached — try again shortly.' : 'Лимит запросов исчерпан — попробуй чуть позже.',
+      };
     }
-    return { ok: false, message: 'Не удалось связаться с сервером модели.' };
+    return {
+      ok: false,
+      message: isEn ? 'Could not reach the model server.' : 'Не удалось связаться с сервером модели.',
+    };
   }
 }

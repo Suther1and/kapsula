@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { CaretDown, Check, MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import { SECTION_COLOR_PALETTE } from '@shared/constants';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { BottomSheet } from './BottomSheet';
 
 export interface MobilePickerOption {
@@ -38,11 +39,12 @@ export const MobilePickerSheet: React.FC<MobilePickerSheetProps> = ({
   isExpanded,
   hingeRightOffsetPx = 0,
   allowCreate = false,
-  createPlaceholder = 'Название…',
+  createPlaceholder,
   onCreateNew,
   onSelect,
   onClose,
 }) => {
+  const { t } = useMobileI18n();
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -99,7 +101,7 @@ export const MobilePickerSheet: React.FC<MobilePickerSheetProps> = ({
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Найти…"
+              placeholder={t('common.findPlaceholder')}
               className="w-full h-10 pl-9 pr-3 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
             />
           </div>
@@ -171,7 +173,7 @@ export const MobilePickerSheet: React.FC<MobilePickerSheetProps> = ({
                   autoFocus
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder={createPlaceholder}
+                  placeholder={createPlaceholder ?? t('common.namePlaceholder')}
                   className="flex-1 h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-focus)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
                 />
                 <button
@@ -179,7 +181,7 @@ export const MobilePickerSheet: React.FC<MobilePickerSheetProps> = ({
                   disabled={!newName.trim() || busy}
                   className="k-tap px-3.5 h-10 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold disabled:opacity-40"
                 >
-                  Создать
+                  {t('common.create')}
                 </button>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -207,7 +209,7 @@ export const MobilePickerSheet: React.FC<MobilePickerSheetProps> = ({
               className="k-tap w-full h-11 rounded-2xl border border-dashed border-[var(--k-border-strong)] text-[13.5px] font-medium text-[var(--k-accent)] inline-flex items-center justify-center gap-1.5"
             >
               <Plus weight="bold" className="w-4 h-4" />
-              Создать новый
+              {t('common.createNew')}
             </button>
           )
         ) : null}

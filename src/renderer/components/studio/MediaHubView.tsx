@@ -21,6 +21,7 @@ import {
   UploadSimple,
 } from '@phosphor-icons/react';
 import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { getMediaCategory, isMediaItem, type MediaCategory } from '@shared/item-helpers';
@@ -60,7 +61,7 @@ interface MediaHubViewProps {
   onUpdateCanvasPosition: (itemId: string, x: number, y: number) => void;
 }
 
-function fileToBase64(file: File): Promise<string> {
+function fileToBase64(file: File, readErrorMsg: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -68,7 +69,7 @@ function fileToBase64(file: File): Promise<string> {
       const commaIdx = result.indexOf(',');
       resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
     };
-    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    reader.onerror = () => reject(new Error(readErrorMsg));
     reader.readAsDataURL(file);
   });
 }
@@ -90,6 +91,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
   onDelete,
   onUpdateCanvasPosition,
 }) => {
+  const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const [filter, setFilter] = useState<MediaFilter>('all');
   const [viewMode, setViewMode] = useState<MediaViewMode>('gallery');
@@ -108,13 +110,13 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       const res = await transcribeItemWithWavFallback(item);
       if (res.ok && (res.item || res.transcript)) {
         playTactileTick(soundEnabled, 'success');
-        toast.success('Голосовая заметка расшифрована');
+        toast.success(t('cards.transcribed'));
       } else {
-        toast.error(res.error || 'Не удалось расшифровать запись. Проверь настройки ИИ.');
+        toast.error(res.error || t('cards.transcribeFailed'));
       }
     } catch (err) {
       toast.error(
-        friendlyErrorMessage(err, 'Не удалось расшифровать запись. Проверь настройки ИИ.')
+        friendlyErrorMessage(err, t('cards.transcribeFailed'), locale)
       );
     } finally {
       setTranscribingIds((prev) => {
@@ -211,7 +213,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
         try {
           const nativePath = window.kapsula.getPathForFile(file);
           if (file.type.startsWith('image/')) {
-            const b64 = await fileToBase64(file);
+            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
               imageBase64: b64,
               ...(nativePath ? { imageFilePath: nativePath } : {}),
@@ -220,7 +222,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             });
             addedCount += 1;
           } else if (file.type.startsWith('audio/')) {
-            const b64 = await fileToBase64(file);
+            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
               audioBase64: b64,
               audioMime: file.type,
@@ -229,7 +231,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             });
             addedCount += 1;
           } else {
-            const b64 = await fileToBase64(file);
+            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
               ...(nativePath ? { filePath: nativePath } : {}),
               fileBase64: b64,
@@ -240,12 +242,14 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             addedCount += 1;
           }
         } catch (err) {
-          toast.error(friendlyErrorMessage(err, `Не удалось загрузить ${file.name}`));
+          toast.error(friendlyErrorMessage(err, t('error.uploadFileFailed', { name: file.name }), locale));
         }
       }
       if (addedCount > 0) {
         playTactileTick(soundEnabled, 'success');
-        toast.success(addedCount === 1 ? 'Медиафайл добавлен' : `Добавлено файлов: ${addedCount}`);
+        toast.success(
+          addedCount === 1 ? t('media.addedOne') : t('media.addedMany', { count: addedCount })
+        );
       }
     } finally {
       setUploading(false);
@@ -258,7 +262,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       entries.push({
         type: 'item',
         id: 'lightbox',
-        label: 'Открыть на весь экран',
+        label: t('media.ctx.openFullscreen'),
         icon: <ArrowsOutSimple className="w-3.5 h-3.5" />,
         onSelect: () => onOpenLightbox(item),
       });
@@ -266,7 +270,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       entries.push({
         type: 'item',
         id: 'open-video',
-        label: 'Открыть видеофайл',
+        label: t('media.ctx.openVideo'),
         icon: <FilmStrip className="w-3.5 h-3.5" />,
         onSelect: () => void window.kapsula.openMediaFile(item.mediaPath!),
       });
@@ -276,14 +280,14 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       {
         type: 'item',
         id: 'open-note',
-        label: 'Открыть описание и заметку',
+        label: t('media.ctx.openDetails'),
         icon: <PencilSimple className="w-3.5 h-3.5" />,
         onSelect: () => onOpenStudio(item),
       },
       {
         type: 'item',
         id: 'pin',
-        label: item.isPinned ? 'Открепить' : 'Закрепить сверху',
+        label: item.isPinned ? t('ui.quickLook.unpin') : t('cards.ctx.pinTop'),
         icon: <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
         onSelect: () => onTogglePin(item),
       }
@@ -293,7 +297,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       entries.push({
         type: 'item',
         id: 'open-url',
-        label: 'Открыть оригинал в браузере',
+        label: t('media.ctx.openBrowser'),
         icon: <ArrowSquareOut className="w-3.5 h-3.5" />,
         onSelect: () => void window.kapsula.openExternal(item.url!),
       });
@@ -303,7 +307,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       entries.push({
         type: 'submenu',
         id: 'orbit',
-        label: 'Переместить в раздел',
+        label: t('cards.ctx.moveToSection'),
         icon: <FolderSimple className="w-3.5 h-3.5" />,
         items: orbits.map((o) => ({
           type: 'item',
@@ -320,13 +324,13 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       entries.push({
         type: 'submenu',
         id: 'board',
-        label: 'Добавить на холст',
+        label: t('cards.ctx.addToBoard'),
         icon: <Swatches className="w-3.5 h-3.5" />,
         items: [
           {
             type: 'item',
             id: 'board-none',
-            label: 'Убрать с холста',
+            label: t('cards.ctx.removeFromBoard'),
             active: !item.focusBoardId,
             onSelect: () => onMoveToBoard(item.id, null),
           },
@@ -347,7 +351,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
       {
         type: 'item',
         id: 'delete',
-        label: 'В корзину',
+        label: t('workspace.toTrashShort'),
         icon: <Trash className="w-3.5 h-3.5" />,
         danger: true,
         onSelect: () => onDelete(item.id),
@@ -358,11 +362,11 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
   };
 
   const tabs: Array<{ id: MediaFilter; label: string; count: number; icon: React.ReactNode }> = [
-    { id: 'all', label: 'Все медиа', count: categoryCounts.all, icon: <SquaresFour className="w-3.5 h-3.5" /> },
-    { id: 'photo', label: 'Фото и скрины', count: categoryCounts.photo, icon: <ImageIcon className="w-3.5 h-3.5" /> },
-    { id: 'video', label: 'Видео', count: categoryCounts.video, icon: <FilmStrip className="w-3.5 h-3.5" /> },
-    { id: 'audio', label: 'Аудио и голос', count: categoryCounts.audio, icon: <Microphone className="w-3.5 h-3.5" /> },
-    { id: 'link_visual', label: 'Из ссылок', count: categoryCounts.link_visual, icon: <GlobeSimple className="w-3.5 h-3.5" /> },
+    { id: 'all', label: t('media.cat.all'), count: categoryCounts.all, icon: <SquaresFour className="w-3.5 h-3.5" /> },
+    { id: 'photo', label: t('media.cat.photo'), count: categoryCounts.photo, icon: <ImageIcon className="w-3.5 h-3.5" /> },
+    { id: 'video', label: t('media.cat.video'), count: categoryCounts.video, icon: <FilmStrip className="w-3.5 h-3.5" /> },
+    { id: 'audio', label: t('media.cat.audio'), count: categoryCounts.audio, icon: <Microphone className="w-3.5 h-3.5" /> },
+    { id: 'link_visual', label: t('media.cat.linkVisual'), count: categoryCounts.link_visual, icon: <GlobeSimple className="w-3.5 h-3.5" /> },
   ];
 
   const gridColumnsClass =
@@ -399,10 +403,10 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
           <div className="rounded-2xl border-2 border-dashed border-[var(--k-accent)] bg-[var(--k-bg-elevated)] px-8 py-6 text-center shadow-[var(--k-shadow-modal)]">
             <UploadSimple className="w-8 h-8 text-[var(--k-accent)] mx-auto mb-2" />
             <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
-              Отпусти файлы, чтобы добавить в Галерею
+              {t('media.dropTitle')}
             </div>
             <div className="text-[12px] text-[var(--k-ink-muted)] mt-1">
-              Фото, скриншоты, видео и аудиофайлы
+              {t('media.dropDesc')}
             </div>
           </div>
         </div>
@@ -457,8 +461,8 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
               value={density}
               onChange={setDensity}
               options={[
-                { value: 'comfortable', label: 'Крупно' },
-                { value: 'compact', label: 'Плотно' },
+                { value: 'comfortable', label: t('media.density.comfortable') },
+                { value: 'compact', label: t('media.density.compact') },
               ]}
             />
           ) : null}
@@ -468,8 +472,8 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             value={viewMode}
             onChange={setViewMode}
             options={[
-              { value: 'gallery', label: 'Галерея', icon: <SquaresFour className="w-3.5 h-3.5" /> },
-              { value: 'board', label: 'Холст', icon: <Swatches className="w-3.5 h-3.5" /> },
+              { value: 'gallery', label: t('media.mode.gallery'), icon: <SquaresFour className="w-3.5 h-3.5" /> },
+              { value: 'board', label: t('workspace.view.board'), icon: <Swatches className="w-3.5 h-3.5" /> },
             ]}
           />
 
@@ -481,7 +485,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             className="k-interactive k-focus-ring inline-flex items-center gap-1.5 h-8 px-3 rounded-[9px] bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:opacity-55"
           >
             <UploadSimple weight="bold" className="w-3.5 h-3.5" />
-            <span>{uploading ? 'Загрузка…' : 'Добавить'}</span>
+            <span>{uploading ? t('common.uploading') : t('common.add')}</span>
           </button>
           <input
             ref={fileInputRef}
@@ -524,13 +528,13 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
           </div>
           <div className="text-[15px] font-semibold text-[var(--k-ink-primary)]">
             {searchQuery.trim()
-              ? 'По этому запросу медиа не нашлось'
+              ? t('media.emptySearch')
               : filter === 'all'
-                ? 'Галерея пока пуста'
-                : 'В этой категории пока нет файлов'}
+                ? t('media.emptyAll')
+                : t('media.emptyCategory')}
           </div>
           <p className="m-0 text-[12.5px] text-[var(--k-ink-secondary)] max-w-[420px] mx-auto">
-            Перетащи сюда фото, скриншоты, видео или голосовые записи — они соберутся в удобную галерею с быстрым просмотром и палитрой цветов.
+            {t('media.emptyDesc')}
           </p>
           <button
             type="button"
@@ -538,7 +542,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
             className="k-interactive inline-flex items-center gap-1.5 h-8.5 px-3.5 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer"
           >
             <UploadSimple weight="bold" className="w-3.5 h-3.5" />
-            <span>Выбрать файлы</span>
+            <span>{t('media.pickFiles')}</span>
           </button>
         </div>
       ) : (
@@ -556,7 +560,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                 const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
                 const cleanTitle = cleanBrokenTextArtifacts(
                   item.title ||
-                    (cat === 'video' ? 'Видеореференс' : cat === 'link_visual' ? item.domain || 'Ссылка' : 'Изображение'),
+                    (cat === 'video' ? t('dna.videoRef') : cat === 'link_visual' ? item.domain || t('dna.link') : t('dna.image')),
                   true
                 );
                 const swatches = (item.colorPalette ?? []).slice(0, 4);
@@ -648,11 +652,11 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                                 <button
                                   key={hex}
                                   type="button"
-                                  title={`Скопировать цвет ${hex}`}
+                                  title={t('ui.quickLook.copyColor', { hex })}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void window.kapsula.copyText(hex);
-                                    toast.success(`Цвет ${hex} скопирован`);
+                                    toast.success(t('ui.quickLook.colorCopied', { hex }));
                                   }}
                                   className="k-interactive w-4 h-4 rounded-full border border-white/50 shadow-xs cursor-pointer"
                                   style={{ backgroundColor: hex }}
@@ -663,8 +667,8 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                             <div className="flex items-center gap-1">
                               {localImg ? (
                                 <CopySlotPill
-                                  label="Фото"
-                                  copiedLabel="Готово"
+                                  label={t('cards.photoLabel')}
+                                  copiedLabel={t('common.done')}
                                   widthPx={84}
                                   heightPx={26}
                                   tone="secret"
@@ -675,8 +679,8 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                               ) : null}
                               <button
                                 type="button"
-                                aria-label="Открыть заметку"
-                                title="Открыть заметку"
+                                aria-label={t('cards.openNote')}
+                                title={t('cards.openNote')}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onOpenStudio(item);
@@ -687,8 +691,8 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                               </button>
                               <button
                                 type="button"
-                                aria-label="Увеличить"
-                                title="На весь экран"
+                                aria-label={t('cards.zoomAria')}
+                                title={t('cards.fullscreenTitle')}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onOpenLightbox(item);
@@ -722,7 +726,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                               </span>
                             ) : null}
                             <span className="k-tabular shrink-0">
-                              {formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
+                              {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
                             </span>
                           </div>
                         </div>
@@ -740,7 +744,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
               {filter === 'all' ? (
                 <div className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                   <Microphone className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                  <span>Аудио и голосовые записи ({audioItems.length})</span>
+                  <span>{t('media.audioHeader', { count: audioItems.length })}</span>
                 </div>
               ) : null}
 
@@ -767,11 +771,11 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                               <Microphone weight="duotone" className="w-4 h-4" />
                             </span>
                             <span className="text-[13.5px] font-semibold text-[var(--k-ink-primary)] truncate">
-                              {item.title || 'Голосовая заметка'}
+                              {item.title || t('dna.voiceMemo')}
                             </span>
                           </div>
                           <span className="text-[11px] text-[var(--k-ink-muted)] k-tabular shrink-0">
-                            {formatRelativeDate(item.contentUpdatedAt || item.createdAt)}
+                            {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
                           </span>
                         </div>
 
@@ -803,7 +807,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                               ) : (
                                 <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
                               )}
-                              <span>{isTranscribing ? 'Расшифровываю…' : 'Расшифровать через ИИ'}</span>
+                              <span>{isTranscribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
                             </button>
                           </div>
                         ) : null}

@@ -222,7 +222,9 @@ describe('Kapsula v7 macOS Platform Support (.dmg + E2EE Sync)', () => {
     expect(workflow).toContain('node-version: 24');
     expect(workflow).toContain('scripts/pack-mac.mjs');
     expect(workflow).toContain('actions/upload-artifact@v4');
-    expect(workflow).toContain('(cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt)');
+    expect(workflow).toContain('ls release/*-arm64.dmg');
+    expect(workflow).toContain('ls release/*-x64.dmg');
+    expect(workflow).not.toContain('SHA256SUMS-');
   });
 
   it('survives macOS Keychain denial in SyncEngine without crashing DEK caching or session storage', () => {

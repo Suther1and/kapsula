@@ -1,5 +1,5 @@
 import { truncateAtWordBoundary } from './html-entities';
-import type { ParsedRussianEvent } from './types';
+import type { AppLocale, ParsedRussianEvent } from './types';
 
 export function normalizeCardExpiry(raw?: string | null): string | undefined {
   if (!raw) return undefined;
@@ -72,6 +72,18 @@ const MONTH_STEMS: Array<{ stem: RegExp; month: number }> = [
   { stem: /октябр\p{L}*/iu, month: 9 },
   { stem: /ноябр\p{L}*/iu, month: 10 },
   { stem: /декабр\p{L}*/iu, month: 11 },
+  { stem: /^jan/i, month: 0 },
+  { stem: /^feb/i, month: 1 },
+  { stem: /^mar/i, month: 2 },
+  { stem: /^apr/i, month: 3 },
+  { stem: /^may$/i, month: 4 },
+  { stem: /^jun/i, month: 5 },
+  { stem: /^jul/i, month: 6 },
+  { stem: /^aug/i, month: 7 },
+  { stem: /^sep/i, month: 8 },
+  { stem: /^oct/i, month: 9 },
+  { stem: /^nov/i, month: 10 },
+  { stem: /^dec/i, month: 11 },
 ];
 
 const SHORT_MONTH_MAP: Record<string, number> = {
@@ -89,6 +101,19 @@ const SHORT_MONTH_MAP: Record<string, number> = {
   ноя: 10,
   нояб: 10,
   дек: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  sept: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
 };
 
 const WEEKDAY_SPECS: Array<{ re: RegExp; dow: number }> = [
@@ -101,15 +126,40 @@ const WEEKDAY_SPECS: Array<{ re: RegExp; dow: number }> = [
   { re: /(?:в\s+(?:эт[уот]\s+|следующ[уюийе]+\s+)?|во\s+|на\s+|ближайш[уюийе]+\s+)?воскресенье(?=$|[^\p{L}])/iu, dow: 0 },
   { re: /(?:в|во|на)\s+(пн|вт|ср|чт|пт|сб|вс)(?=$|[^\p{L}])/iu, dow: -1 },
   { re: /(?:^|[\s,(])(пн|вт|ср|чт|пт|сб|вс)(?=[\s,.)]|$)/iu, dow: -1 },
+  { re: /(?:(?:on|next|this)\s+)?\bmonday\b/i, dow: 1 },
+  { re: /(?:(?:on|next|this)\s+)?\btuesday\b/i, dow: 2 },
+  { re: /(?:(?:on|next|this)\s+)?\bwednesday\b/i, dow: 3 },
+  { re: /(?:(?:on|next|this)\s+)?\bthursday\b/i, dow: 4 },
+  { re: /(?:(?:on|next|this)\s+)?\bfriday\b/i, dow: 5 },
+  { re: /(?:(?:on|next|this)\s+)?\bsaturday\b/i, dow: 6 },
+  { re: /(?:(?:on|next|this)\s+)?\bsunday\b/i, dow: 0 },
+  { re: /(?:(?:on|next|this)\s+)?\b(mon|tue|tues|wed|thu|thurs|fri|sat|sun)\b/i, dow: -1 },
 ];
 
-const SHORT_DOW: Record<string, number> = { пн: 1, вт: 2, ср: 3, чт: 4, пт: 5, сб: 6, вс: 0 };
+const SHORT_DOW: Record<string, number> = {
+  пн: 1,
+  вт: 2,
+  ср: 3,
+  чт: 4,
+  пт: 5,
+  сб: 6,
+  вс: 0,
+  mon: 1,
+  tue: 2,
+  tues: 2,
+  wed: 3,
+  thu: 4,
+  thurs: 4,
+  fri: 5,
+  sat: 6,
+  sun: 0,
+};
 
 const ACTION_EVENT_CUE_RE =
-  /(?:^|[^\p{L}])(?:напомн\p{L}*|не\s+забыть|запис\p{L}*|при[её]м\p{L}*|созвон\p{L}*|звонок\p{L}*|позвонить|встреч\p{L}*|митинг\p{L}*|дедлайн\p{L}*|релиз\p{L}*|вылет\p{L}*|поезд\p{L}*|рейс\p{L}*|врач\p{L}*|стоматолог\p{L}*|чистк\p{L}*|парикмахер\p{L}*|тренировк\p{L}*|стрим\p{L}*|концерт\p{L}*|экзамен\p{L}*|бронь|доставк\p{L}*|оплатить|отправить|сдать)(?=$|[^\p{L}])/iu;
+  /(?:^|[^\p{L}])(?:напомн\p{L}*|не\s+забыть|запис\p{L}*|при[её]м\p{L}*|созвон\p{L}*|звонок\p{L}*|позвонить|встреч\p{L}*|митинг\p{L}*|дедлайн\p{L}*|релиз\p{L}*|вылет\p{L}*|поезд\p{L}*|рейс\p{L}*|врач\p{L}*|стоматолог\p{L}*|чистк\p{L}*|парикмахер\p{L}*|тренировк\p{L}*|стрим\p{L}*|концерт\p{L}*|экзамен\p{L}*|бронь|доставк\p{L}*|оплатить|отправить|сдать|remind|call|sync|meeting|standup|deadline|release|flight|doctor|dentist|delivery|submit)(?=$|[^\p{L}])/iu;
 
 const SHORT_DURATION_CUE_RE =
-  /(?:чистк|врач|стоматолог|доктор|клиник|при[её]м|звонок|созвон|позвонить|дейли|стендап|стрижк|маникюр)/iu;
+  /(?:чистк|врач|стоматолог|доктор|клиник|при[её]м|звонок|созвон|позвонить|дейли|стендап|стрижк|маникюр|call|sync|standup|daily|dentist)/iu;
 
 function removeSpan(src: string, match: RegExpMatchArray | null): string {
   if (!match || match.index === undefined) return src;
@@ -123,12 +173,12 @@ function cleanExtractedTitle(raw: string): string {
     .find(Boolean) || '';
   s = s
     .replace(/^[-*•]\s*(?:\[[ xX]\]\s*)?/, '')
-    .replace(/^(?:привет|добрый\s+(?:день|вечер)|здравствуйте)[,!.\s]*/iu, '')
-    .replace(/^(?:напомина(?:ю|ем)[,\s]*(?:что\s+)?|вы\s+записан[аы]?\s+на\s+|записан[аы]?\s+на\s+)/iu, '')
-    .replace(/^(?:напомни(?:ть)?(?:\s+мне)?|не\s+забыть|запиши|событие)\s*[:—-]?\s*/iu, '')
+    .replace(/^(?:привет|добрый\s+(?:день|вечер)|здравствуйте|hi|hello|hey)[,!.\s]*/iu, '')
+    .replace(/^(?:напомина(?:ю|ем)[,\s]*(?:что\s+)?|вы\s+записан[аы]?\s+на\s+|записан[аы]?\s+на\s+|reminder[:\s]*)/iu, '')
+    .replace(/^(?:напомни(?:ть)?(?:\s+мне)?|не\s+забыть|запиши|событие|remind\s+me(?:\s+to)?|schedule|event)\s*[:—-]?\s*/iu, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,—:.\-]+/, '')
-    .replace(/[\s,—:;\-]+(?:в|во|на|с|по|к|около)$/iu, '')
+    .replace(/[\s,—:;\-]+(?:в|во|на|с|по|к|около|at|on|for|around)$/iu, '')
     .replace(/[\s,—:;\-]+$/, '')
     .trim();
   if (!s || s.length < 2) return '';
@@ -138,7 +188,8 @@ function cleanExtractedTitle(raw: string): string {
 export function parseRussianEvent(
   rawText: string,
   nowMs = Date.now(),
-  fallbackDayMs?: number
+  fallbackDayMs?: number,
+  locale: AppLocale = 'ru'
 ): ParsedRussianEvent | null {
   const input = (rawText || '').trim();
   if (!input || input.length < 3) return null;
@@ -185,7 +236,7 @@ export function parseRussianEvent(
     remaining = removeSpan(remaining, rangeMatch);
   } else {
     const colonTime = remaining.match(
-      /(?:^|[^\d])(?:в\s*)?([01]?\d|2[0-3]):([0-5]\d)(?:\s*(утра|дня|вечера|ночи))?(?!\d)/iu
+      /(?:^|[^\d])(?:(?:в|at|around)\s*)?([01]?\d|2[0-3]):([0-5]\d)(?:\s*(утра|дня|вечера|ночи|am|pm))?(?!\d)/iu
     );
     const dotPrefixedTime = !colonTime
       ? remaining.match(/(?:^|[^\d])(?:в|к|около)\s+([01]?\d|2[0-3])\.([0-5]\d)(?!\d)/iu)
@@ -193,7 +244,7 @@ export function parseRussianEvent(
     const wordPrefixedTime =
       !colonTime && !dotPrefixedTime
         ? remaining.match(
-            /(?:^|[^\p{L}\d])в\s+(?:(\d{1,2})\s*(утра|дня|вечера|ночи|час\p{L}*)?|полдень)(?=$|[^\p{L}\d])/iu
+            /(?:^|[^\p{L}\d])(?:(?:в|at|around)\s+(?:(\d{1,2})\s*(утра|дня|вечера|ночи|час\p{L}*|am|pm)?|полдень|noon)|(\d{1,2})\s*(am|pm))(?=$|[^\p{L}\d])/iu
           )
         : null;
 
@@ -201,7 +252,8 @@ export function parseRussianEvent(
       hour = Number(colonTime[1]);
       minute = Number(colonTime[2]);
       const mod = colonTime[3]?.toLowerCase();
-      if ((mod === 'дня' || mod === 'вечера') && hour >= 1 && hour <= 11) hour += 12;
+      if ((mod === 'дня' || mod === 'вечера' || mod === 'pm') && hour >= 1 && hour <= 11) hour += 12;
+      if (mod === 'am' && hour === 12) hour = 0;
       hasExplicitTime = true;
       remaining = removeSpan(remaining, colonTime);
     } else if (dotPrefixedTime) {
@@ -210,66 +262,78 @@ export function parseRussianEvent(
       hasExplicitTime = true;
       remaining = removeSpan(remaining, dotPrefixedTime);
     } else if (wordPrefixedTime) {
-      if (/полдень/i.test(wordPrefixedTime[0])) {
+      if (/полдень|noon/i.test(wordPrefixedTime[0])) {
         hour = 12;
         minute = 0;
         hasExplicitTime = true;
         remaining = removeSpan(remaining, wordPrefixedTime);
-      } else if (wordPrefixedTime[1]) {
-        const candidateH = Number(wordPrefixedTime[1]);
-        const afterMatch = remaining.slice((wordPrefixedTime.index ?? 0) + wordPrefixedTime[0].length);
-        const followedByCountUnit =
-          /^\s*(?:клик|этап|шаг|раз|пункт|раздел|уровн|режим|ряд|сло[йев]|человек|дн|недел|мес|год|лет|процент)/iu.test(
-            afterMatch
-          );
-        if (candidateH >= 0 && candidateH <= 23 && (Boolean(wordPrefixedTime[2]) || !followedByCountUnit)) {
-          hour = candidateH;
-          minute = 0;
-          const mod = wordPrefixedTime[2]?.toLowerCase() ?? '';
-          if ((mod === 'дня' || mod === 'вечера') && hour >= 1 && hour <= 11) hour += 12;
-          hasExplicitTime = true;
-          remaining = removeSpan(remaining, wordPrefixedTime);
+      } else {
+        const rawHourStr = wordPrefixedTime[1] || wordPrefixedTime[3];
+        const rawModStr = wordPrefixedTime[2] || wordPrefixedTime[4];
+        if (rawHourStr) {
+          const candidateH = Number(rawHourStr);
+          const afterMatch = remaining.slice((wordPrefixedTime.index ?? 0) + wordPrefixedTime[0].length);
+          const followedByCountUnit =
+            /^\s*(?:клик|этап|шаг|раз|пункт|раздел|уровн|режим|ряд|сло[йев]|человек|дн|недел|мес|год|лет|процент|click|step|item|day|week|month|year|percent)/iu.test(
+              afterMatch
+            );
+          if (candidateH >= 0 && candidateH <= 23 && (Boolean(rawModStr) || !followedByCountUnit)) {
+            hour = candidateH;
+            minute = 0;
+            const mod = rawModStr?.toLowerCase() ?? '';
+            if ((mod === 'дня' || mod === 'вечера' || mod === 'pm') && hour >= 1 && hour <= 11) hour += 12;
+            if (mod === 'am' && hour === 12) hour = 0;
+            hasExplicitTime = true;
+            remaining = removeSpan(remaining, wordPrefixedTime);
+          }
         }
       }
     }
   }
 
-  // 3. Explicit duration (`на 30 минут`, `на 1.5 часа`, `на полчаса`)
-  const halfHourDur = remaining.match(/(?:^|[^\p{L}])на\s+полчаса(?=$|[^\p{L}])/iu);
+  // 3. Explicit duration (`на 30 минут`, `на 1.5 часа`, `на полчаса`, `for 30 min`, `for 1.5 hours`)
+  const halfHourDur = remaining.match(/(?:^|[^\p{L}])(?:на\s+полчаса|for\s+half\s+an\s+hour)(?=$|[^\p{L}])/iu);
   if (halfHourDur) {
     explicitDurationMin = 30;
     hasEndTime = true;
     remaining = removeSpan(remaining, halfHourDur);
   } else {
     const durMatch = remaining.match(
-      /(?:^|[^\p{L}])на\s+(\d+(?:[.,]\d+)?)\s*(мин\p{L}*|час\p{L}*|[мч](?=$|[^\p{L}\d]))/iu
+      /(?:^|[^\p{L}])(?:на|for)\s+(\d+(?:[.,]\d+)?)\s*(мин\p{L}*|час\p{L}*|minutes?|mins?|hours?|hrs?|[мчmh](?=$|[^\p{L}\d]))/iu
     );
     if (durMatch?.[1] && durMatch[2]) {
       const val = Number(durMatch[1].replace(',', '.'));
       if (Number.isFinite(val) && val > 0 && val <= 720) {
-        explicitDurationMin = /^м/i.test(durMatch[2]) ? Math.round(val) : Math.round(val * 60);
+        explicitDurationMin = /^[мm]/i.test(durMatch[2]) ? Math.round(val) : Math.round(val * 60);
         hasEndTime = true;
         remaining = removeSpan(remaining, durMatch);
       }
     }
   }
 
-  // 4. Relative offsets (`через 2 часа`, `через 30 минут`, `через 3 дня`, `через неделю`)
+  // 4. Relative offsets (`через 2 часа`, `in 2 hours`, `in 30 min`, `in a week`)
   const relMatch = remaining.match(
-    /(?:^|[^\p{L}])через\s+(\d+|пол(?:часа)?|одн[уо]?|пару)?\s*(минут[уы]?|мин|час(?:а|ов)?|ч(?=$|[^\p{L}])|д(?:ень|ня|ней)|недел[юи])(?=$|[^\p{L}])/iu
+    /(?:^|[^\p{L}])(?:через|in)\s+(\d+|пол(?:часа)?|одн[уо]?|пару|an?|half\s+an?)?\s*(минут[уы]?|мин|час(?:а|ов)?|ч(?=$|[^\p{L}])|д(?:ень|ня|ней)|недел[юи]|minutes?|mins?|hours?|hrs?|days?|weeks?)(?=$|[^\p{L}])/iu
   );
   if (relMatch) {
     isRelativeOffset = true;
     const rawQty = (relMatch[1] || '1').toLowerCase();
-    const qty = rawQty.startsWith('пол') ? 0.5 : rawQty.startsWith('пар') ? 2 : rawQty.startsWith('одн') ? 1 : Number(rawQty) || 1;
+    const qty =
+      rawQty.startsWith('пол') || rawQty.startsWith('half')
+        ? 0.5
+        : rawQty.startsWith('пар')
+          ? 2
+          : rawQty.startsWith('одн') || rawQty === 'a' || rawQty === 'an'
+            ? 1
+            : Number(rawQty) || 1;
     const unit = (relMatch[2] || '').toLowerCase();
-    if (unit.startsWith('мин')) {
+    if (unit.startsWith('мин') || unit.startsWith('min')) {
       const target = new Date(nowMs + Math.round(qty * 60_000));
       resolvedDate = target;
       hour = target.getHours();
       minute = target.getMinutes();
       hasExplicitTime = true;
-    } else if (unit.startsWith('ч')) {
+    } else if (unit.startsWith('ч') || unit.startsWith('h')) {
       const target = new Date(nowMs + Math.round(qty * 3_600_000));
       resolvedDate = target;
       if (!hasExplicitTime) {
@@ -277,29 +341,30 @@ export function parseRussianEvent(
         minute = target.getMinutes();
         hasExplicitTime = true;
       }
-    } else if (unit.startsWith('д')) {
+    } else if (unit.startsWith('д') || unit.startsWith('d')) {
       resolvedDate = new Date(base.getFullYear(), base.getMonth(), base.getDate() + Math.round(qty), hour, minute, 0, 0);
-    } else if (unit.startsWith('нед')) {
+    } else if (unit.startsWith('нед') || unit.startsWith('w')) {
       resolvedDate = new Date(base.getFullYear(), base.getMonth(), base.getDate() + Math.round(qty * 7), hour, minute, 0, 0);
     }
     remaining = removeSpan(remaining, relMatch);
   }
 
-  // 5. Named days (`сегодня`, `завтра`, `послезавтра`)
+  // 5. Named days (`сегодня`, `завтра`, `послезавтра`, `today`, `tomorrow`)
   if (!resolvedDate) {
     const namedDay = remaining.match(
-      /(?:^|[^\p{L}\d])(послезавтра|завтра|сегодня)(?=$|[^\p{L}\d])/iu
+      /(?:^|[^\p{L}\d])(послезавтра|завтра|сегодня|day\s+after\s+tomorrow|tomorrow|today)(?=$|[^\p{L}\d])/iu
     );
     if (namedDay?.[1]) {
-      const tok = namedDay[1].toLowerCase();
-      const addDays = tok === 'послезавтра' ? 2 : tok === 'завтра' ? 1 : 0;
+      const tok = namedDay[1].toLowerCase().replace(/\s+/g, ' ');
+      const addDays =
+        tok === 'послезавтра' || tok === 'day after tomorrow' ? 2 : tok === 'завтра' || tok === 'tomorrow' ? 1 : 0;
       isNamedDay = true;
       resolvedDate = new Date(base.getFullYear(), base.getMonth(), base.getDate() + addDays, hour, minute, 0, 0);
       remaining = removeSpan(remaining, namedDay);
     }
   }
 
-  // 6. Weekdays (`Пятница 15:00`, `в среду`, `на следующей неделе в пн`, bare `пятница`)
+  // 6. Weekdays (`Пятница 15:00`, `в среду`, `next Friday`)
   if (!resolvedDate) {
     for (const spec of WEEKDAY_SPECS) {
       const m = remaining.match(spec.re);
@@ -311,7 +376,7 @@ export function parseRussianEvent(
       if (dow >= 0) {
         const currentDow = base.getDay();
         let delta = (dow - currentDow + 7) % 7;
-        const explicitNext = /следующ/iu.test(m[0]);
+        const explicitNext = /следующ|next/iu.test(m[0]);
         if (delta === 0) {
           if (explicitNext || (hasExplicitTime && hour * 60 + minute <= base.getHours() * 60 + base.getMinutes())) {
             delta = 7;
@@ -326,27 +391,33 @@ export function parseRussianEvent(
     }
   }
 
-  // 7. Month names (`19 ноября`, `19 нояб.`, `3 дек 2026`)
+  // 7. Month names (`19 ноября`, `19 нояб.`, `3 дек 2026`, `Nov 19`, `19 Nov 2026`)
   if (!resolvedDate) {
-    const monthMatch = remaining.match(
-      /(?:^|[^\d])([12]?\d|3[01])\s+([а-яё]{3,10})\.?(?:\s*(20\d{2}))?(?=$|[^\p{L}\d])/iu
-    );
-    if (monthMatch?.[1] && monthMatch[2]) {
-      const mText = monthMatch[2].toLowerCase();
-      let foundMonth: number | null = SHORT_MONTH_MAP[mText] ?? null;
-      if (foundMonth === null) {
-        for (const ms of MONTH_STEMS) {
-          if (ms.stem.test(mText)) {
-            foundMonth = ms.month;
-            break;
+    const monthMatch =
+      remaining.match(/(?:^|[^\d])([12]?\d|3[01])\s+([а-яёa-z]{3,10})\.?(?:\s*(20\d{2}))?(?=$|[^\p{L}\d])/iu) ||
+      remaining.match(/\b([a-z]{3,9})\.?\s+([12]?\d|3[01])(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?(?=$|[^\p{L}\d])/iu);
+    if (monthMatch) {
+      const isMonthFirst = /^[a-z]+$/i.test(monthMatch[1] || '');
+      const rawDay = isMonthFirst ? monthMatch[2] : monthMatch[1];
+      const rawMonth = isMonthFirst ? monthMatch[1] : monthMatch[2];
+      const rawYear = monthMatch[3];
+      if (rawDay && rawMonth) {
+        const mText = rawMonth.toLowerCase();
+        let foundMonth: number | null = SHORT_MONTH_MAP[mText] ?? null;
+        if (foundMonth === null) {
+          for (const ms of MONTH_STEMS) {
+            if (ms.stem.test(mText)) {
+              foundMonth = ms.month;
+              break;
+            }
           }
         }
-      }
-      if (foundMonth !== null) {
-        explicitDay = Number(monthMatch[1]);
-        explicitMonth = foundMonth;
-        explicitYear = monthMatch[3] ? Number(monthMatch[3]) : null;
-        remaining = removeSpan(remaining, monthMatch);
+        if (foundMonth !== null) {
+          explicitDay = Number(rawDay);
+          explicitMonth = foundMonth;
+          explicitYear = rawYear ? Number(rawYear) : null;
+          remaining = removeSpan(remaining, monthMatch);
+        }
       }
     }
   }
@@ -380,7 +451,7 @@ export function parseRussianEvent(
   // 9. Extract venue/address AFTER times, durations and dates are already stripped so greedy spans never swallow time/date
   if (!location) {
     const addrMatch = remaining.match(
-      /(?:^|[\s,;(])(?:по\s+адресу|адрес|место|локация|клиника|офис|каб\.?)\s*[:—-]?\s*([^\n;,]+)/iu
+      /(?:^|[\s,;(])(?:по\s+адресу|адрес|место|локация|клиника|офис|каб\.?|location|venue|address|room|clinic|office)\s*[:—-]?\s*([^\n;,]+)/iu
     );
     if (addrMatch?.[1]) {
       location = addrMatch[1].replace(/[.,]+$/, '').trim().slice(0, 100);
@@ -446,7 +517,7 @@ export function parseRussianEvent(
     endAt = startAt + durationMin * 60_000;
   }
 
-  const title = cleanExtractedTitle(remaining) || 'Событие';
+  const title = cleanExtractedTitle(remaining) || (locale === 'en' ? 'Event' : 'Событие');
   const hasActionCue = ACTION_EVENT_CUE_RE.test(input);
   const looksLikeNewsOrArticle =
     input.length > 420 ||
@@ -459,9 +530,13 @@ export function parseRussianEvent(
       fallbackDayMs !== undefined ||
       (input.length <= 240 && (isNamedDay || hasExplicitTime || hasActionCue)));
 
-  const datePart = startDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const datePart = startDate.toLocaleDateString(locale === 'en' ? 'en-US' : 'ru-RU', {
+    day: 'numeric',
+    month: 'short',
+  });
   const timePart = `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`;
-  const label = allDay ? `${datePart} (весь день)` : `${datePart}, ${timePart}`;
+  const allDaySuffix = locale === 'en' ? ' (all day)' : ' (весь день)';
+  const label = allDay ? `${datePart}${allDaySuffix}` : `${datePart}, ${timePart}`;
 
   return {
     title,

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckSquare, Pause, Play, Sparkle, SpinnerGap, Waveform } from '@phosphor-icons/react';
 import { formatDurationMmSs } from '@renderer/lib/format';
+import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 
 interface MobileAudioPlayerProps {
@@ -35,6 +36,7 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
   onTranscribe,
   onExtractTasks,
 }) => {
+  const { t } = useMobileI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(externalSrc ?? null);
   const [loading, setLoading] = useState(false);
@@ -151,7 +153,7 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
           type="button"
           disabled={!canPlay || loading}
           onClick={(e) => void togglePlay(e)}
-          aria-label={playing ? 'Пауза' : 'Воспроизвести'}
+          aria-label={playing ? t('audio.pause') : t('audio.play')}
           className={`k-tap inline-flex items-center justify-center rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] disabled:opacity-40 shrink-0 ${
             compact ? 'w-7 h-7' : 'w-9 h-9'
           }`}
@@ -166,7 +168,7 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
         <div
           onClick={handleSeek}
           role="slider"
-          aria-label="Позиция воспроизведения"
+          aria-label={t('audio.seekAria')}
           aria-valuemin={0}
           aria-valuemax={Math.round(duration || durationSec || 0)}
           aria-valuenow={Math.round(currentTime)}
@@ -224,12 +226,12 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
               )}
               <span className="truncate">
                 {transcribing
-                  ? 'Расшифровываю…'
+                  ? t('audio.transcribing')
                   : hasTranscript
-                    ? 'Перерасшифровать'
+                    ? t('audio.retranscribe')
                     : compact
-                      ? 'Расшифровать ИИ'
-                      : 'Расшифровать через ИИ'}
+                      ? t('audio.transcribeShort')
+                      : t('audio.transcribeFull')}
               </span>
             </button>
           ) : null}
@@ -251,7 +253,7 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
               ) : (
                 <CheckSquare className="w-3.5 h-3.5 text-[var(--k-emerald)] shrink-0" />
               )}
-              <span>{extractingTasks ? 'Ищу задачи…' : 'Выделить задачи'}</span>
+              <span>{extractingTasks ? t('audio.extractingTasks') : t('audio.extractTasks')}</span>
             </button>
           ) : null}
         </div>

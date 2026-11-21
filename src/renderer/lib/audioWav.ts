@@ -1,3 +1,5 @@
+import { translate } from '@shared/i18n';
+
 export interface RecordedWavResult {
   wavBase64: string;
   mime: 'audio/wav';
@@ -156,7 +158,8 @@ export async function startLiveVoiceRecording(): Promise<LiveVoiceSession> {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    throw new Error('Микрофон не найден или доступ закрыт в настройках системы.');
+    const isEn = typeof document !== 'undefined' && document.documentElement?.lang === 'en';
+    throw new Error(translate(isEn ? 'en' : 'ru', 'error.microphoneAccess'));
   }
 
   const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
   AiProvider,
+  AppLocale,
   CaptureInput,
   CaptureMode,
   ContentDna,
@@ -233,24 +234,32 @@ export class CapturePipeline {
       }
       const cleaned = input.base64.replace(/^data:image\/[^;]+;base64,/i, '').trim();
       const approxMaxBase64Chars = Math.ceil((MAX_NOTE_IMAGE_BYTES * 4) / 3) + 64;
+      const isEn = this.deps.repo.getLocale() === 'en';
       if (cleaned.length > approxMaxBase64Chars) {
-        throw new Error('Изображение слишком большое (максимум 25 МБ)');
+        throw new Error(
+          isEn ? 'Image is too large (max 25 MB)' : 'Изображение слишком большое (максимум 25 МБ)'
+        );
       }
       buf = Buffer.from(cleaned, 'base64');
       if (buf.length > MAX_NOTE_IMAGE_BYTES) {
-        throw new Error('Изображение слишком большое (максимум 25 МБ)');
+        throw new Error(
+          isEn ? 'Image is too large (max 25 MB)' : 'Изображение слишком большое (максимум 25 МБ)'
+        );
       }
     } else if (input.filePath && fs.existsSync(input.filePath)) {
+      const isEn = this.deps.repo.getLocale() === 'en';
       const stat = fs.statSync(input.filePath);
       if (!stat.isFile()) {
-        throw new Error('Изображение пустое или не найдено');
+        throw new Error(isEn ? 'Image is empty or not found' : 'Изображение пустое или не найдено');
       }
       if (stat.size > MAX_NOTE_IMAGE_BYTES) {
-        throw new Error('Изображение слишком большое (максимум 25 МБ)');
+        throw new Error(
+          isEn ? 'Image is too large (max 25 MB)' : 'Изображение слишком большое (максимум 25 МБ)'
+        );
       }
       const parsedExt = path.extname(input.filePath).toLowerCase();
       if (parsedExt && !ALLOWED_IMAGE_EXTS.has(parsedExt)) {
-        throw new Error('Неподдерживаемый формат изображения');
+        throw new Error(isEn ? 'Unsupported image format' : 'Неподдерживаемый формат изображения');
       }
       buf = fs.readFileSync(input.filePath);
       if (ALLOWED_IMAGE_EXTS.has(parsedExt)) {
@@ -265,13 +274,16 @@ export class CapturePipeline {
       }
     }
 
+    const isEn = this.deps.repo.getLocale() === 'en';
     if (!buf || buf.length === 0) {
-      throw new Error('Изображение пустое или не найдено');
+      throw new Error(isEn ? 'Image is empty or not found' : 'Изображение пустое или не найдено');
     }
 
     const magicExt = detectImageExtFromMagic(buf);
     if (!magicExt) {
-      throw new Error('Файл не является поддерживаемым изображением');
+      throw new Error(
+        isEn ? 'File is not a supported image' : 'Файл не является поддерживаемым изображением'
+      );
     }
     ext = magicExt;
 
@@ -396,6 +408,8 @@ export class CapturePipeline {
 
   private async captureAudioInternal(input: CaptureInput): Promise<VaultItem> {
     const config = this.deps.getConfig();
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const mode: CaptureMode = input.mode ?? config.activeMode;
     const source = input.source ?? 'vault_ui';
 
@@ -411,7 +425,7 @@ export class CapturePipeline {
     } else if (input.filePath && fs.existsSync(input.filePath)) {
       buf = fs.readFileSync(input.filePath);
     } else {
-      throw new Error('Аудиоданные не найдены');
+      throw new Error(isEn ? 'Audio data not found' : 'Аудиоданные не найдены');
     }
 
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
@@ -422,9 +436,10 @@ export class CapturePipeline {
         : null;
     const caption = (input.text ?? '').trim();
     const hasExplicitTitle = Boolean(input.title?.trim());
+    const baseVoiceTitle = isEn ? 'Voice note' : 'Голосовая заметка';
     const initialTitle =
       input.title?.trim() ||
-      (durLabel ? `Голосовая заметка · ${durLabel}` : 'Голосовая заметка');
+      (durLabel ? `${baseVoiceTitle} · ${durLabel}` : baseVoiceTitle);
 
     const orbits = this.deps.repo.listOrbits();
     const explicitOrbit =
@@ -453,11 +468,17 @@ export class CapturePipeline {
         ? caption.slice(0, 200)
         : skipAudioAi
           ? durLabel
-            ? `Голосовая заметка · ${durLabel}`
-            : 'Голосовая заметка сохранена.'
+            ? `${baseVoiceTitle} · ${durLabel}`
+            : isEn
+              ? 'Voice note saved.'
+              : 'Голосовая заметка сохранена.'
           : durLabel
-            ? `Длительность ${durLabel}. Расшифровка готовится…`
-            : 'Голосовая заметка сохранена.',
+            ? isEn
+              ? `Duration ${durLabel}. Transcribing…`
+              : `Длительность ${durLabel}. Расшифровка готовится…`
+            : isEn
+              ? 'Voice note saved.'
+              : 'Голосовая заметка сохранена.',
       mediaPath: saved.filename,
       mediaType: saved.mime,
       mediaDurationSec: input.audioDurationSec ?? null,
@@ -466,8 +487,8 @@ export class CapturePipeline {
         fileName: input.fileName,
         fileSize: saved.byteLength,
       },
-      extractedActions: extractActionsFromText(caption),
-      tags: [...new Set(['голос', ...(input.tags ?? [])])].slice(0, 4),
+      extractedActions: extractActionsFromText(caption, locale),
+      tags: [...new Set([isEn ? 'voice' : 'голос', ...(input.tags ?? [])])].slice(0, 4),
       source,
       externalId: input.externalId ?? null,
       contentHash: sha,
@@ -512,6 +533,7 @@ export class CapturePipeline {
           openRouterKey,
           cloudProxy: cfg.cloudProxy,
           budgetReached: budget.limitReached,
+          locale: this.deps.repo.getLocale(),
           onSpendUsd: (usd) => {
             if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'audio-intelligence', 600, 180, usd);
           },
@@ -578,6 +600,8 @@ export class CapturePipeline {
 
   private async captureDocumentInternal(input: CaptureInput): Promise<VaultItem> {
     const config = this.deps.getConfig();
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const mode: CaptureMode = input.mode ?? config.activeMode;
     const source = input.source ?? 'vault_ui';
 
@@ -597,7 +621,7 @@ export class CapturePipeline {
     } else if (input.filePath && fs.existsSync(input.filePath)) {
       buf = fs.readFileSync(input.filePath);
     } else {
-      throw new Error('Файл документа не найден');
+      throw new Error(isEn ? 'Document file not found' : 'Файл документа не найден');
     }
 
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
@@ -606,7 +630,7 @@ export class CapturePipeline {
     const rawFileTitle =
       input.title?.trim() ||
       saved.safeOriginalName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
-      'Документ';
+      (isEn ? 'Document' : 'Документ');
     const cleanFileTitle = hasExplicitTitle
       ? rawFileTitle
       : rawFileTitle.charAt(0).toUpperCase() + rawFileTitle.slice(1);
@@ -631,7 +655,9 @@ export class CapturePipeline {
       focusBoardId,
       title: cleanFileTitle,
       body: (input.text ?? '').trim(),
-      summary: `Файл ${saved.ext.toUpperCase()} сохранён — извлекаем текст и тезисы…`,
+      summary: isEn
+        ? `${saved.ext.toUpperCase()} file saved — extracting text and key points…`
+        : `Файл ${saved.ext.toUpperCase()} сохранён — извлекаем текст и тезисы…`,
       mediaPath: saved.storedFileName,
       mediaType: saved.mime,
       mediaMeta: {
@@ -639,7 +665,7 @@ export class CapturePipeline {
         fileName: saved.safeOriginalName,
         fileSize: saved.byteLength,
       },
-      tags: [...new Set([saved.ext, 'файл', ...(input.tags ?? [])])].slice(0, 4),
+      tags: [...new Set([saved.ext, isEn ? 'file' : 'файл', ...(input.tags ?? [])])].slice(0, 4),
       source,
       externalId: input.externalId ?? null,
       contentHash: sha,
@@ -674,6 +700,7 @@ export class CapturePipeline {
           openRouterKey,
           cloudProxy: cfg.cloudProxy,
           budgetReached: budget.limitReached,
+          locale: this.deps.repo.getLocale(),
           onSpendUsd: (usd) => {
             if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'doc-summary', 500, 120, usd);
           },
@@ -729,6 +756,8 @@ export class CapturePipeline {
 
   private async captureVideoInternal(input: CaptureInput): Promise<VaultItem> {
     const config = this.deps.getConfig();
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const mode: CaptureMode = input.mode ?? config.activeMode;
     const source = input.source ?? 'vault_ui';
 
@@ -746,7 +775,7 @@ export class CapturePipeline {
     } else if (input.videoPath && fs.existsSync(input.videoPath)) {
       buf = fs.readFileSync(input.videoPath);
     } else {
-      throw new Error('Видеофайл не найден');
+      throw new Error(isEn ? 'Video file not found' : 'Видеофайл не найден');
     }
 
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
@@ -763,7 +792,7 @@ export class CapturePipeline {
     const cleanTitle =
       input.title?.trim() ||
       rawName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
-      'Видеореференс';
+      (isEn ? 'Video reference' : 'Видеореференс');
 
     const orbits = this.deps.repo.listOrbits();
     const explicitOrbit =
@@ -785,7 +814,7 @@ export class CapturePipeline {
       focusBoardId,
       title: cleanTitle,
       body: (input.text ?? '').trim(),
-      summary: `Видеореференс · ${rawName}`,
+      summary: `${isEn ? 'Video reference' : 'Видеореференс'} · ${rawName}`,
       mediaPath: filename,
       mediaType: videoMime,
       mediaDurationSec: input.videoDurationSec ?? null,
@@ -794,7 +823,9 @@ export class CapturePipeline {
         fileName: rawName,
         fileSize: buf.length,
       },
-      tags: [...new Set(['видео', 'референс', ...(input.tags ?? [])])].slice(0, 4),
+      tags: [
+        ...new Set([isEn ? 'video' : 'видео', isEn ? 'reference' : 'референс', ...(input.tags ?? [])]),
+      ].slice(0, 4),
       source,
       externalId: input.externalId ?? null,
       contentHash: sha,
@@ -811,6 +842,8 @@ export class CapturePipeline {
 
   private async captureEmailInternal(input: CaptureInput): Promise<VaultItem> {
     const config = this.deps.getConfig();
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const mode: CaptureMode = input.mode ?? config.activeMode;
     const source = input.source ?? 'email_import';
 
@@ -824,11 +857,11 @@ export class CapturePipeline {
     } else if (input.filePath && fs.existsSync(input.filePath)) {
       buf = fs.readFileSync(input.filePath);
     } else {
-      throw new Error('Файл письма (.eml) не найден');
+      throw new Error(isEn ? 'Email file (.eml) not found' : 'Файл письма (.eml) не найден');
     }
 
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
-    const parsed = parseEmlBuffer(buf);
+    const parsed = parseEmlBuffer(buf, locale);
     const externalId =
       input.externalId ??
       (parsed.messageId ? `eml:${parsed.messageId}` : `eml:sha:${sha.slice(0, 24)}`);
@@ -857,12 +890,16 @@ export class CapturePipeline {
       }
     }
 
-    const noteBody = formatEmailAsNoteMarkdown(parsed, savedImages);
+    const noteBody = formatEmailAsNoteMarkdown(parsed, savedImages, locale);
     const fallbackFileTitle =
-      fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || 'Письмо';
+      fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || (isEn ? 'Email' : 'Письмо');
     const finalTitle =
       input.title?.trim() ||
-      (parsed.subject && parsed.subject !== 'Письмо без темы' ? parsed.subject : fallbackFileTitle);
+      (parsed.subject &&
+      parsed.subject !== 'Письмо без темы' &&
+      parsed.subject !== 'Untitled email'
+        ? parsed.subject
+        : fallbackFileTitle);
     const firstSummaryLine =
       parsed.bodyText
         .split(/\r?\n/)
@@ -906,8 +943,8 @@ export class CapturePipeline {
         forwardAuthor: parsed.fromName || parsed.from || undefined,
         publishedAt: parsed.date ? new Date(parsed.date).toISOString() : undefined,
       },
-      extractedActions: extractActionsFromText(noteBody),
-      tags: [...new Set(['письмо', ...(input.tags ?? [])])].slice(0, 4),
+      extractedActions: extractActionsFromText(noteBody, locale),
+      tags: [...new Set([isEn ? 'email' : 'письмо', ...(input.tags ?? [])])].slice(0, 4),
       source,
       externalId,
       contentHash: sha,
@@ -972,19 +1009,24 @@ export class CapturePipeline {
       : null;
 
     // 1. Pre-cloud Secret Shield check (always local & encrypted — never sent to AI)
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const secretScanText = [safeExplicitTitle, rawText, input.url].filter(Boolean).join('\n');
     const secretCheck = analyzeForSecret(secretScanText, {
       forceSecret: mode === 'ghost' || input.forceSecret,
       service: input.secretOverride?.service,
       login: input.secretOverride?.login,
       notes: input.secretOverride?.notes,
+      locale,
     });
 
     if (secretCheck.isSecret && secretCheck.payload && secretCheck.meta) {
       // Fail closed cleanly before storing or unlinking any media when Vault is PIN-locked
       if (this.deps.cryptoVault.isLocked()) {
         throw new Error(
-          'Сейф заблокирован мастер-кодом — разблокируй Сейф, чтобы безопасно сохранить секрет'
+          isEn
+            ? 'Vault is locked by master PIN — unlock Vault to safely save a secret'
+            : 'Сейф заблокирован мастер-кодом — разблокируй Сейф, чтобы безопасно сохранить секрет'
         );
       }
 
@@ -1000,7 +1042,8 @@ export class CapturePipeline {
           ocrSecretText = ocr.text;
         }
         if (!payloadToEncrypt.secretValue) {
-          payloadToEncrypt.secretValue = ocrSecretText || '[Скриншот в Сейфе]';
+          payloadToEncrypt.secretValue =
+            ocrSecretText || (isEn ? '[Screenshot in Vault]' : '[Скриншот в Сейфе]');
         } else if (ocrSecretText) {
           payloadToEncrypt.notes = [payloadToEncrypt.notes, ocrSecretText].filter(Boolean).join('\n\n');
         }
@@ -1010,14 +1053,20 @@ export class CapturePipeline {
       const isBankCard = secretCheck.meta.kind === 'bank_card';
       const defaultSecretTitle = isBankCard
         ? secretCheck.meta.service
-        : `${secretCheck.meta.service} · Доступ`;
+        : `${secretCheck.meta.service} · ${isEn ? 'Access' : 'Доступ'}`;
 
       const targetSecretOrbit = this.resolveSecretOrbitId(secretCheck.meta.kind, explicitOrbit);
       const humanSummary = isBankCard
-        ? 'Банковская карта · скрыта в Сейфе'
+        ? isEn
+          ? 'Bank card · hidden in Vault'
+          : 'Банковская карта · скрыта в Сейфе'
         : secretCheck.meta.kind === 'api_key'
-          ? 'Ключ доступа · скрыт в Сейфе'
-          : 'Скрыто в Сейфе';
+          ? isEn
+            ? 'Access key · hidden in Vault'
+            : 'Ключ доступа · скрыт в Сейфе'
+          : isEn
+            ? 'Hidden in Vault'
+            : 'Скрыто в Сейфе';
 
       const created = this.deps.repo.createItem({
         dna: 'secret',
@@ -1029,7 +1078,12 @@ export class CapturePipeline {
         summary: humanSummary,
         encryptedPayload: encrypted,
         secretMeta: secretCheck.meta,
-        tags: [...new Set([...(input.tags ?? []), isBankCard ? 'карта' : 'сейф'])].slice(0, 4),
+        tags: [
+          ...new Set([
+            ...(input.tags ?? []),
+            isBankCard ? (isEn ? 'card' : 'карта') : isEn ? 'vault' : 'сейф',
+          ]),
+        ].slice(0, 4),
         source,
         externalId: input.externalId ?? null,
         // Never store unsalted SHA-256 of raw plaintext secret in SQLite
@@ -1072,13 +1126,15 @@ export class CapturePipeline {
         ocrPreScanned = true;
         preScannedOcrText = preOcr.text || '';
         if (preScannedOcrText) {
-          const ocrSecret = analyzeForSecret(preScannedOcrText);
+          const ocrSecret = analyzeForSecret(preScannedOcrText, { locale });
           if (ocrSecret.isSecret && ocrSecret.payload && ocrSecret.meta) {
             if (this.deps.cryptoVault.isLocked()) {
               // Fail closed: remove our temporary copy inside media/ without persisting plaintext secret
               this.cleanupUnreferencedMedia([imgAsset.filename]);
               throw new Error(
-                'Сейф заблокирован мастер-кодом — на скриншоте найдены конфиденциальные данные. Разблокируй Сейф и повтори сохранение'
+                isEn
+                  ? 'Vault is locked by master PIN — sensitive data detected in screenshot. Unlock Vault and try saving again'
+                  : 'Сейф заблокирован мастер-кодом — на скриншоте найдены конфиденциальные данные. Разблокируй Сейф и повтори сохранение'
               );
             }
             const encrypted = this.deps.cryptoVault.encryptSecret(ocrSecret.payload);
@@ -1087,7 +1143,7 @@ export class CapturePipeline {
               ? ocrSecret.meta.last4
                 ? `${ocrSecret.meta.service} · •••• ${ocrSecret.meta.last4}`
                 : ocrSecret.meta.service
-              : `${ocrSecret.meta.service} · Доступ`;
+              : `${ocrSecret.meta.service} · ${isEn ? 'Access' : 'Доступ'}`;
             const targetSecretOrbit = this.resolveSecretOrbitId(ocrSecret.meta.kind, explicitOrbit);
             const createdSecret = this.deps.repo.createItem({
               dna: 'secret',
@@ -1097,7 +1153,7 @@ export class CapturePipeline {
                 input.focusBoardId ?? (mode === 'focus' ? config.activeFocusBoardId : null),
               title: safeExplicitTitle || secretTitle,
               body: '',
-              summary: 'Найдено на скриншоте · скрыто в Сейфе',
+              summary: isEn ? 'Detected in screenshot · hidden in Vault' : 'Найдено на скриншоте · скрыто в Сейфе',
               imagePath: null,
               thumbPath: null,
               ogImageUrl: null,
@@ -1105,7 +1161,12 @@ export class CapturePipeline {
               extractedActions: [],
               encryptedPayload: encrypted,
               secretMeta: ocrSecret.meta,
-              tags: [...new Set([...(input.tags ?? []), isBankCard ? 'карта' : 'сейф'])].slice(0, 4),
+              tags: [
+                ...new Set([
+                  ...(input.tags ?? []),
+                  isBankCard ? (isEn ? 'card' : 'карта') : isEn ? 'vault' : 'сейф',
+                ]),
+              ].slice(0, 4),
               source,
               externalId: input.externalId ?? null,
               contentHash: crypto.randomUUID(),
@@ -1151,6 +1212,7 @@ export class CapturePipeline {
       extraTags: input.tags,
       subKindHint: input.subKind ?? null,
       preferLinkForUrlWithImage: source === 'browser_ext' && Boolean(input.url),
+      locale,
     });
 
     let effectiveBody = cleanText;
@@ -1179,7 +1241,7 @@ export class CapturePipeline {
 
     if (local.dna === 'link' && local.url && config.enableUrlUnfurl && !input.isDemo) {
       const og = await Promise.race([
-        unfurlUrl(local.url).catch(() => null),
+        unfurlUrl(local.url, locale).catch(() => null),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 5500)),
       ]);
       if (og) {
@@ -1191,7 +1253,8 @@ export class CapturePipeline {
           (!effectiveTitle ||
             effectiveTitle === local.domain ||
             effectiveTitle === local.url ||
-            effectiveTitle.startsWith('Ссылка'))
+            effectiveTitle.startsWith('Ссылка') ||
+            effectiveTitle.startsWith('Link'))
         ) {
           effectiveTitle = og.title;
         }
@@ -1242,6 +1305,7 @@ export class CapturePipeline {
           extraTags: input.tags,
           subKindHint: input.subKind ?? null,
           preferLinkForUrlWithImage: true,
+          locale,
         });
         if (wasLink && local.url) local.dna = 'link';
         if (!effectiveTitle) effectiveTitle = local.title;
@@ -1288,7 +1352,7 @@ export class CapturePipeline {
     const initialActions: ExtractedAction[] = [];
     for (const act of [
       ...syncExtraLinks,
-      ...extractActionsFromText(`${effectiveBody}\n${preScannedOcrText}\n${input.url ?? ''}`),
+      ...extractActionsFromText(`${effectiveBody}\n${preScannedOcrText}\n${input.url ?? ''}`, locale),
     ]) {
       const k = `${act.type}:${act.value}`;
       if (!initialActions.some((x) => `${x.type}:${x.value}` === k) && initialActions.length < 8) {
@@ -1311,7 +1375,8 @@ export class CapturePipeline {
           }
         : null;
 
-    const isBlankDraftNote = !hasImage && !local.url && rawText === 'Новая заметка';
+    const isBlankDraftNote =
+      !hasImage && !local.url && (rawText === 'Новая заметка' || rawText === 'New note');
     const needsBackground =
       !isBlankDraftNote &&
       !local.isFleetingScratch &&
@@ -1368,7 +1433,7 @@ export class CapturePipeline {
           notes: override.notes ?? rawText,
         });
       } else if (!(input.url && rawText.trim() === input.url.trim())) {
-        const parsedEv = parseRussianEvent(rawText);
+        const parsedEv = parseRussianEvent(rawText, undefined, undefined, locale);
         if (parsedEv?.isEventIntent) {
           this.syncAutoCalendarEvent(created, parsedEv);
         }
@@ -1425,8 +1490,10 @@ export class CapturePipeline {
     const initialTagsJson = JSON.stringify(current.tags);
 
     const config = this.deps.getConfig();
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     let ocrText = current.ocrText;
-    let title = isGenericImageTitle(current.title) ? 'Скриншот' : current.title;
+    let title = isGenericImageTitle(current.title) ? (isEn ? 'Screenshot' : 'Скриншот') : current.title;
     let body = current.body;
     let summary = current.summary;
     let domain = current.domain;
@@ -1461,7 +1528,7 @@ export class CapturePipeline {
       if (ocr.text) {
         ocrText = ocr.text;
 
-        const ocrSecret = analyzeForSecret(ocrText);
+        const ocrSecret = analyzeForSecret(ocrText, { locale });
         if (ocrSecret.isSecret && ocrSecret.payload && ocrSecret.meta) {
           const latestBeforeSecret = this.deps.repo.getItemById(itemId);
           if (!latestBeforeSecret || latestBeforeSecret.dna === 'secret') return;
@@ -1479,8 +1546,10 @@ export class CapturePipeline {
             this.cleanupUnreferencedMedia([prevImg, prevThumb, prevMedia, fallbackBase, ...freedMedia]);
             this.deps.onItemDeleted?.(itemId);
             this.deps.onSecurityNotice?.({
-              title: 'Скриншот удалён для защиты · Kapsula',
-              body: 'На скриншоте найдены конфиденциальные данные, но Сейф сейчас заблокирован. Разблокируй Сейф и сохрани их снова.',
+              title: isEn ? 'Screenshot removed for protection · Kapsula' : 'Скриншот удалён для защиты · Kapsula',
+              body: isEn
+                ? 'Sensitive data was found in the screenshot while Vault is locked. Unlock Vault and save it again.'
+                : 'На скриншоте найдены конфиденциальные данные, но Сейф сейчас заблокирован. Разблокируй Сейф и сохрани их снова.',
             });
             return;
           }
@@ -1496,14 +1565,14 @@ export class CapturePipeline {
               ? ocrSecret.meta.last4
                 ? `${ocrSecret.meta.service} · •••• ${ocrSecret.meta.last4}`
                 : ocrSecret.meta.service
-              : `${ocrSecret.meta.service} · Доступ`;
+              : `${ocrSecret.meta.service} · ${isEn ? 'Access' : 'Доступ'}`;
 
           const updatedSecret = this.deps.repo.updateItem(itemId, {
             dna: 'secret',
             orbit: keepOrbit,
             title: secretTitle,
             body: '',
-            summary: 'Найдено на скриншоте · скрыто в Сейфе',
+            summary: isEn ? 'Detected in screenshot · hidden in Vault' : 'Найдено на скриншоте · скрыто в Сейфе',
             imagePath: null,
             thumbPath: null,
             ogImageUrl: null,
@@ -1511,7 +1580,7 @@ export class CapturePipeline {
             extractedActions: [],
             encryptedPayload: encrypted,
             secretMeta: ocrSecret.meta,
-            tags: [...new Set([...latestBeforeSecret.tags, 'сейф'])].slice(0, 4),
+            tags: [...new Set([...latestBeforeSecret.tags, isEn ? 'vault' : 'сейф'])].slice(0, 4),
             aiStatus: 'skipped_secret',
           });
           this.cleanupUnreferencedMedia([prevImg, prevThumb]);
@@ -1519,7 +1588,7 @@ export class CapturePipeline {
           return;
         }
 
-        for (const act of extractActionsFromText(ocr.text)) {
+        for (const act of extractActionsFromText(ocr.text, locale)) {
           pushUniqueAction(act);
         }
       }
@@ -1533,19 +1602,26 @@ export class CapturePipeline {
       Boolean(current.body && current.body.trim() !== (current.url || '').trim());
 
     if (current.url && config.enableUrlUnfurl && (!alreadyUnfurled || bypassCache)) {
-      const og = await unfurlUrl(current.url);
+      const og = await unfurlUrl(current.url, locale);
       if (og.domain) domain = og.domain;
       if (og.platform) platform = og.platform;
       if (
         og.title &&
         (title === current.domain ||
           title.startsWith('Ссылка') ||
+          title.startsWith('Link') ||
           title === current.url ||
           isGenericImageTitle(title))
       ) {
         title = og.title;
       }
-      if (og.description && (!summary || summary === current.url || summary.startsWith('Сохранённая ссылка'))) {
+      if (
+        og.description &&
+        (!summary ||
+          summary === current.url ||
+          summary.startsWith('Сохранённая ссылка') ||
+          summary.startsWith('Saved link'))
+      ) {
         summary = og.description;
       }
       if (
@@ -1627,15 +1703,30 @@ export class CapturePipeline {
       }
     }
 
-    // C. Multimodal Vision AI enrichment for screenshots, social post media, & empty-body links
-    // Skip Vision on generic web og:image banners when we already extracted clean title + description/body
+    // C. Multimodal Vision AI enrichment for screenshots, visual-only social posts, & empty-body links
+    // Skip Vision when a link/Telegram post already extracted a real title and meaningful body copy
     const effectiveImgAbs = imgAbsPath || (imagePath ? path.join(this.mediaDir, imagePath) : null);
     const isSocialPostWithMedia =
       platform === 'telegram' || platform === 'instagram' || platform === 'x';
+    const hasRichExtractedLinkTitle =
+      current.dna === 'link' &&
+      Boolean(title?.trim()) &&
+      title.trim() !== (domain || '').trim() &&
+      title.trim() !== (current.url || '').trim() &&
+      !title.startsWith('Ссылка') &&
+      !title.startsWith('Link') &&
+      !isGenericImageTitle(title) &&
+      !(platform && title.trim().toLowerCase() === platform.toLowerCase());
+    const hasRichExtractedLinkBody =
+      current.dna === 'link' &&
+      body.trim().length >= 40 &&
+      body.trim() !== (current.url || '').trim();
+    const preserveExtractedLinkCopy = hasRichExtractedLinkTitle && hasRichExtractedLinkBody;
     const linkNeedsVisualBody =
       current.dna === 'link' && (!body.trim() || body.trim() === (current.url || '').trim());
     const shouldRunVision =
-      current.dna !== 'link' || isSocialPostWithMedia || linkNeedsVisualBody;
+      current.dna !== 'link' ||
+      (!preserveExtractedLinkCopy && (isSocialPostWithMedia || linkNeedsVisualBody));
     if (
       shouldRunVision &&
       effectiveImgAbs &&
@@ -1663,8 +1754,11 @@ export class CapturePipeline {
         });
         if (vision) {
           visionUsed = true;
-          visionTitle = vision.title;
-          visionSummary = vision.summary || null;
+          visionTitle = hasRichExtractedLinkTitle ? null : vision.title;
+          visionSummary =
+            hasRichExtractedLinkBody && summary.trim().length >= 25
+              ? null
+              : vision.summary || null;
           visionOrbitSuggestion = vision.suggestedOrbitId || vision.suggestedNewSection;
           visionTags = vision.tags;
           visionCalSuggestion = vision.calendarEvent ?? null;
@@ -1686,8 +1780,13 @@ export class CapturePipeline {
             }
           } else if (vision.bodyMarkdown && (!body.trim() || body.trim() === current.url)) {
             body = vision.bodyMarkdown;
-          } else if (vision.bodyMarkdown && body.trim() && !body.includes(vision.bodyMarkdown.slice(0, 40))) {
-            body = `${body.trim()}\n\n### На изображении\n${vision.bodyMarkdown}`;
+          } else if (
+            !hasRichExtractedLinkBody &&
+            vision.bodyMarkdown &&
+            body.trim() &&
+            !body.includes(vision.bodyMarkdown.slice(0, 40))
+          ) {
+            body = `${body.trim()}\n\n### ${isEn ? 'In the image' : 'На изображении'}\n${vision.bodyMarkdown}`;
           }
         }
       }
@@ -1709,8 +1808,10 @@ export class CapturePipeline {
       url: latestMid.url,
       title:
         title !== 'Скриншот' &&
+        title !== 'Screenshot' &&
         title !== latestMid.domain &&
         !title.startsWith('Ссылка') &&
+        !title.startsWith('Link') &&
         !isGenericImageTitle(title)
           ? title
           : null,
@@ -1720,14 +1821,25 @@ export class CapturePipeline {
       extraTags: [...latestMid.tags, ...visionTags],
       subKindHint: latestMid.subKind,
       preferLinkForUrlWithImage: latestMid.dna === 'link' && Boolean(latestMid.url),
+      locale,
     });
 
     if (localRecheck.mediaMetaPatch) {
       mediaMeta = { ...(localRecheck.mediaMetaPatch), ...(mediaMeta ?? {}) };
     }
 
-    const chosenLocalTitle = visionTitle || (isGenericImageTitle(localRecheck.title) ? 'Скриншот' : localRecheck.title);
-    const chosenLocalSummary = visionSummary || summary || localRecheck.summary;
+    const chosenLocalTitle = hasRichExtractedLinkTitle
+      ? title.trim()
+      : visionTitle ||
+        (isGenericImageTitle(localRecheck.title)
+          ? isEn
+            ? 'Screenshot'
+            : 'Скриншот'
+          : localRecheck.title);
+    const chosenLocalSummary =
+      hasRichExtractedLinkBody && summary.trim().length >= 25
+        ? summary.trim()
+        : visionSummary || summary || localRecheck.summary;
 
     if (mode === 'buffer') {
       const userEditedTitle = latestMid.title !== initialTitle;
@@ -1825,10 +1937,14 @@ export class CapturePipeline {
     const finalSubKind =
       latest.subKind ?? (contactCheck?.isContact ? 'contact' : localRecheck.subKind);
 
-    const bestFinalTitle =
-      visionTitle ||
-      (!isGenericImageTitle(aiResult.title) ? aiResult.title : chosenLocalTitle);
-    const bestFinalSummary = visionSummary || aiResult.summary || chosenLocalSummary;
+    const bestFinalTitle = hasRichExtractedLinkTitle
+      ? title.trim()
+      : visionTitle ||
+        (!isGenericImageTitle(aiResult.title) ? aiResult.title : chosenLocalTitle);
+    const bestFinalSummary =
+      hasRichExtractedLinkBody && summary.trim().length >= 25
+        ? summary.trim()
+        : visionSummary || aiResult.summary || chosenLocalSummary;
 
     const updated = this.deps.repo.updateItem(itemId, {
       orbit: finalOrbit,
@@ -1914,12 +2030,19 @@ export class CapturePipeline {
     wavBase64Fallback?: string;
     extractTasks?: boolean;
   }): Promise<TranscribeItemResult> {
+    const locale: AppLocale = this.deps.repo.getLocale();
+    const isEn = locale === 'en';
     const item = this.deps.repo.getItemById(input.itemId);
     if (!item) {
-      return { ok: false, error: 'Запись не найдена.' };
+      return { ok: false, error: isEn ? 'Note not found.' : 'Запись не найдена.' };
     }
     if (item.dna === 'secret') {
-      return { ok: false, error: 'Записи из Сейфа не отправляются в облачный ИИ.' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Vault items are never sent to Cloud AI.'
+          : 'Записи из Сейфа не отправляются в облачный ИИ.',
+      };
     }
 
     const audioPath = item.mediaPath
@@ -1927,7 +2050,13 @@ export class CapturePipeline {
       : undefined;
     const hasDiskAudio = Boolean(audioPath && fs.existsSync(audioPath));
     if (!hasDiskAudio && !input.wavBase64Fallback) {
-      return { ok: false, item, error: 'Аудиофайл этой записи не найден на диске.' };
+      return {
+        ok: false,
+        item,
+        error: isEn
+          ? 'Audio file for this note was not found on disk.'
+          : 'Аудиофайл этой записи не найден на диске.',
+      };
     }
 
     const cfg = this.deps.getConfig();
@@ -1954,18 +2083,22 @@ export class CapturePipeline {
       openRouterKey,
       cloudProxy: cfg.cloudProxy,
       budgetReached: budget.limitReached,
+      locale,
       onSpendUsd: (usd) => {
         if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'audio-transcribe', 600, 220, usd);
       },
       fetchFn: this.deps.fetchFn,
     });
 
+    const transcribeErrFallback = isEn
+      ? 'Could not transcribe the recording.'
+      : 'Не удалось расшифровать запись.';
     if (!res.ok || !res.result) {
       const latestOnErr = this.deps.repo.getItemById(input.itemId);
       if (latestOnErr) {
         const errMeta: MediaMetaWithTranscriptError = {
           ...(latestOnErr.mediaMeta ?? {}),
-          transcriptError: res.error || 'Не удалось расшифровать запись.',
+          transcriptError: res.error || transcribeErrFallback,
         };
         const updatedErr = this.deps.repo.updateItem(input.itemId, {
           mediaMeta: errMeta as MediaMeta,
@@ -1974,16 +2107,21 @@ export class CapturePipeline {
         return {
           ok: false,
           item: updatedErr ?? latestOnErr,
-          error: res.error || 'Не удалось расшифровать запись.',
+          error: res.error || transcribeErrFallback,
         };
       }
-      return { ok: false, error: res.error || 'Не удалось расшифровать запись.' };
+      return { ok: false, error: res.error || transcribeErrFallback };
     }
 
     const aiAudio = res.result;
     const latest = this.deps.repo.getItemById(input.itemId);
     if (!latest) {
-      return { ok: false, error: 'Запись была удалена во время расшифровки.' };
+      return {
+        ok: false,
+        error: isEn
+          ? 'Note was deleted during transcription.'
+          : 'Запись была удалена во время расшифровки.',
+      };
     }
 
     if (latest.body.trim().length > 0) {
@@ -1998,7 +2136,8 @@ export class CapturePipeline {
     let nextBody = aiAudio.transcript.trim();
     if (input.extractTasks && aiAudio.actionItems.length > 0) {
       const checklist = aiAudio.actionItems.map((t) => `- [ ] ${t}`).join('\n');
-      nextBody = nextBody ? `${nextBody}\n\n## Задачи\n${checklist}` : `## Задачи\n${checklist}`;
+      const tasksHeading = isEn ? '## Tasks' : '## Задачи';
+      nextBody = nextBody ? `${nextBody}\n\n${tasksHeading}\n${checklist}` : `${tasksHeading}\n${checklist}`;
     }
 
     const nextMeta: MediaMetaWithTranscriptError = {
@@ -2026,7 +2165,7 @@ export class CapturePipeline {
 
     if (updated) {
       this.deps.onItemUpserted?.(updated);
-      const voiceEv = parseRussianEvent(aiAudio.transcript);
+      const voiceEv = parseRussianEvent(aiAudio.transcript, undefined, undefined, locale);
       if (voiceEv?.isEventIntent) {
         const existingAuto = this.deps.repo.findCalendarEventByExternalId('vault_auto', updated.id);
         const existingLinked = this.deps.repo.findCalendarEventByLinkedItemId(updated.id);

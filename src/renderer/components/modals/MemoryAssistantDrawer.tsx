@@ -21,6 +21,7 @@ import {
 } from '@phosphor-icons/react';
 import type { AskVaultCitation, ChatTurn } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { friendlyErrorMessage, getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { KapsulaEmblem } from '../ui/KapsulaEmblem';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -34,12 +35,12 @@ interface MemoryAssistantDrawerProps {
   onSynthesizeFound?: (itemIds: string[]) => void;
 }
 
-const STARTER_PROMPTS = [
-  'Какие дела и задачи у меня сейчас открыты?',
-  'Найди недавние ссылки и полезные заметки',
-  'Подведи итоги по моим проектам и последним идеям',
-  'Напомни, о чём были недавние голосовые и скриншоты',
-];
+const STARTER_PROMPT_KEYS = [
+  'assistant.sample1',
+  'assistant.sample2',
+  'assistant.sample3',
+  'assistant.sample4',
+] as const;
 
 function renderInlineMarkdown(line: string): React.ReactNode[] {
   const tokens: React.ReactNode[] = [];
@@ -126,6 +127,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
   onOpenCitation,
   onSynthesizeFound,
 }) => {
+  const { t, locale } = useI18n();
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -199,7 +201,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
         ...nextHistory,
         {
           role: 'assistant',
-          content: friendlyErrorMessage(err, 'Не удалось подготовить ответ по записям.'),
+          content: friendlyErrorMessage(err, t('assistant.errorAnswer'), locale),
         },
       ]);
     } finally {
@@ -252,7 +254,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
               <div
                 onMouseDown={startResize}
                 className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[var(--k-accent)]/40 transition-colors z-20"
-                title="Потяни, чтобы изменить ширину"
+                title={t('assistant.resizeTitle')}
               />
             ) : null}
 
@@ -261,7 +263,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
               <div className="flex items-center gap-2 min-w-0">
                 <KapsulaEmblem size={20} />
                 <div className="text-[13px] font-semibold leading-tight truncate">
-                  Ассистент памяти
+                  {t('assistant.title')}
                 </div>
               </div>
 
@@ -278,22 +280,22 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                     {
                       value: 'compact',
                       label: '',
-                      ariaLabel: 'Компактная панель',
-                      title: 'Компактная панель',
+                      ariaLabel: t('assistant.width.compact'),
+                      title: t('assistant.width.compact'),
                       icon: <SidebarSimple className="w-3.5 h-3.5" />,
                     },
                     {
                       value: 'wide',
                       label: '',
-                      ariaLabel: 'Широкая панель',
-                      title: 'Широкая панель',
+                      ariaLabel: t('assistant.width.wide'),
+                      title: t('assistant.width.wide'),
                       icon: <Columns className="w-3.5 h-3.5" />,
                     },
                     {
                       value: 'full',
                       label: '',
-                      ariaLabel: widthMode === 'full' ? 'Свернуть обратно в панель' : 'На всё окно',
-                      title: widthMode === 'full' ? 'Свернуть обратно в панель' : 'На всё окно',
+                      ariaLabel: widthMode === 'full' ? t('assistant.width.exitFull') : t('assistant.width.full'),
+                      title: widthMode === 'full' ? t('assistant.width.exitFull') : t('assistant.width.full'),
                       icon:
                         widthMode === 'full' ? (
                           <ArrowsInSimple className="w-3.5 h-3.5" />
@@ -307,7 +309,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                 {turns.length > 0 ? (
                   <button
                     type="button"
-                    title="Очистить диалог"
+                    title={t('assistant.clearTitle')}
                     onClick={() => setTurns([])}
                     className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                   >
@@ -316,7 +318,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                 ) : null}
                 <button
                   type="button"
-                  aria-label="Закрыть ассистента"
+                  aria-label={t('assistant.closeAria')}
                   onClick={onClose}
                   className="k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                 >
@@ -336,28 +338,31 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                     <div className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4">
                       <div className="flex items-center gap-2 text-[13.5px] font-medium mb-1">
                         <Sparkle weight="fill" className="w-4 h-4 text-[var(--k-accent)]" />
-                        <span>Спроси о чём угодно из твоих записей</span>
+                        <span>{t('assistant.emptyHeading')}</span>
                       </div>
                       <p className="m-0 text-[12.5px] text-[var(--k-ink-secondary)] leading-relaxed">
-                        Понимаю запросы на русском и английском («инстаграм» найдёт «Instagram»), покажу карточки со скриншотами и помогу свести несколько заметок в одну.
+                        {t('assistant.emptyDesc')}
                       </p>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
                       <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] px-1">
-                        Примеры вопросов
+                        {t('assistant.sampleHeading')}
                       </div>
-                      {STARTER_PROMPTS.map((q) => (
-                        <button
-                          key={q}
-                          type="button"
-                          onClick={() => void ask(q)}
-                          className="k-interactive flex items-center justify-between gap-2 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 py-2.5 text-left text-[12.5px] text-[var(--k-ink-primary)] hover:border-[var(--k-accent)]/50 hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                        >
-                          <span>{q}</span>
-                          <ArrowRight className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
-                        </button>
-                      ))}
+                      {STARTER_PROMPT_KEYS.map((promptKey) => {
+                        const q = t(promptKey);
+                        return (
+                          <button
+                            key={promptKey}
+                            type="button"
+                            onClick={() => void ask(q)}
+                            className="k-interactive flex items-center justify-between gap-2 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3 py-2.5 text-left text-[12.5px] text-[var(--k-ink-primary)] hover:border-[var(--k-accent)]/50 hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                          >
+                            <span>{q}</span>
+                            <ArrowRight className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (
@@ -437,7 +442,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                                           stripMarkdownPreview(citCleanSummary),
                                           citCleanTitle
                                         ) ||
-                                        'Открыть запись'}
+                                        t('assistant.openItem')}
                                     </div>
                                   </div>
                                 </button>
@@ -452,7 +457,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                               className="k-interactive self-start inline-flex items-center gap-1.5 h-7 px-3 rounded-lg border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[11.5px] font-medium text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] cursor-pointer"
                             >
                               <GitMerge className="w-3.5 h-3.5" />
-                              <span>Свести найденное в одну заметку ({turn.citations.length})</span>
+                              <span>{t('assistant.synthesizeCited', { count: turn.citations.length })}</span>
                             </button>
                           ) : null}
                         </div>
@@ -463,7 +468,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
 
                 {loading ? (
                   <div className="self-start rounded-2xl rounded-bl-sm bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] px-3.5 py-2.5 text-[12.5px] text-[var(--k-ink-secondary)]">
-                    Ищу по хранилищу…
+                    {t('assistant.thinking')}
                   </div>
                 ) : null}
               </div>
@@ -486,14 +491,14 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Спроси на русском или английском…"
+                  placeholder={t('assistant.inputPlaceholder')}
                   className="flex-1 bg-transparent border-none outline-none text-[13px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
                 />
                 <button
                   type="submit"
                   data-testid="assistant-send-btn"
                   disabled={loading || !input.trim()}
-                  aria-label="Отправить"
+                  aria-label={t('assistant.sendAria')}
                   className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
                 >
                   <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />

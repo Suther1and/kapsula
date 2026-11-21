@@ -1,4 +1,5 @@
 import { mobileBridge } from '../native/bridge';
+import { tm } from './mobile-i18n';
 
 export const GITHUB_LATEST_RELEASE_URL =
   'https://api.github.com/repos/Suther1and/kapsula/releases/latest';
@@ -193,7 +194,7 @@ export async function checkForMobileUpdate(opts?: {
         sha256: null,
         releaseNotes: '',
         checkedAt,
-        error: 'Слишком частые проверки обновлений — попробуй чуть позже',
+        error: tm('updater.rateLimited'),
       };
     }
 
@@ -208,7 +209,7 @@ export async function checkForMobileUpdate(opts?: {
         sha256: null,
         releaseNotes: '',
         checkedAt,
-        error: 'Сервер обновлений временно недоступен — попробуй позже',
+        error: tm('updater.serverUnavailable'),
       };
     }
 
@@ -313,9 +314,7 @@ export async function checkForMobileUpdate(opts?: {
       sha256: null,
       releaseNotes: '',
       checkedAt,
-      error: isTimeout
-        ? 'Проверка обновлений заняла слишком много времени — попробуй ещё раз'
-        : 'Не удалось проверить обновления — проверь подключение к интернету',
+      error: isTimeout ? tm('updater.timeout') : tm('updater.networkError'),
     };
   } finally {
     clearTimeout(timer);

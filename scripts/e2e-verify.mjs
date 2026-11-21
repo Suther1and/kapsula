@@ -132,6 +132,7 @@ async function main() {
       env: {
         ...process.env,
         KAPSULA_DATA_DIR: tmpDataDir,
+        KAPSULA_LOCALE: 'ru',
         KAPSULA_E2E_QUIT_ON_CLOSE: '1',
         KAPSULA_E2E_KEEP_HUD: '1',
         KAPSULA_SKIP_SENDKEYS: '1',
@@ -1087,6 +1088,43 @@ async function main() {
     await saveShot(vault, '23-media-with-audio.png');
     await vault.getByTestId('nav-flow').click();
     await vault.waitForTimeout(180);
+
+    // 12b. Bilingual EN switch + Hideable sidebar sections smoke check
+    await vault.getByTestId('customize-sidebar-btn').click();
+    await vault.getByTestId('customize-sidebar-toggle-media').click();
+    assert.equal(await vault.getByTestId('nav-media').count(), 0, 'Hidden Media nav section must disappear from sidebar');
+    await vault.getByTestId('customize-sidebar-show-all').click();
+    assert.equal(await vault.getByTestId('nav-media').count(), 1, 'Show all must restore Media nav section');
+    await vault.keyboard.press('Escape');
+    await vault.waitForTimeout(180);
+
+    await vault.getByTestId('open-settings-btn').click();
+    await vault.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 4000 });
+    await vault.getByTestId('settings-language-switcher').getByText('English', { exact: true }).click();
+    await vault.waitForFunction(
+      () => document.querySelector('[data-testid="nav-flow"]')?.textContent?.includes('All Items'),
+      undefined,
+      { timeout: 4000 }
+    );
+    const enChromeText = await vault.evaluate(() =>
+      ['nav-flow', 'nav-tasks', 'nav-secrets', 'open-settings-btn']
+        .map((id) => document.querySelector(`[data-testid="${id}"]`)?.textContent || '')
+        .join(' | ')
+    );
+    assert.ok(enChromeText.includes('Tasks') && enChromeText.includes('Vault'), `Expected EN nav chrome, got: ${enChromeText}`);
+    assert.ok(!/[А-Яа-яЁё]/.test(enChromeText), `EN nav chrome must not leak Cyrillic: ${enChromeText}`);
+    assert.ok(
+      await vault.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      'EN desktop view must have zero horizontal overflow'
+    );
+    await vault.getByTestId('settings-language-switcher').getByText('Русский', { exact: true }).click();
+    await vault.waitForFunction(
+      () => document.querySelector('[data-testid="nav-flow"]')?.textContent?.includes('Все записи'),
+      undefined,
+      { timeout: 4000 }
+    );
+    await vault.keyboard.press('Escape');
+    await vault.waitForTimeout(220);
 
     // -------------------------------------------------------------------------
     // 13. Alt+Пробел 5-Tab Command HUD Verification + Slide Without Height Squash

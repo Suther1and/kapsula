@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowSquareOut, GlobeSimple, PaperPlaneTilt } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
@@ -17,6 +18,7 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
   item,
   compactList = false,
 }) => {
+  const { t } = useI18n();
   const [bannerError, setBannerError] = useState(false);
 
   // Use local cached kapsula-media:// paths (remote ogImageUrl is blocked by CSP)
@@ -26,7 +28,7 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
 
   const hostLabel =
     item.domain ||
-    (item.url ? item.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : 'Ссылка');
+    (item.url ? item.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : t('dna.link'));
 
   const platformBadge =
     item.platform === 'telegram'
@@ -41,7 +43,7 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
               ? 'Instagram'
               : hostLabel;
 
-  const cleanTitle = cleanBrokenTextArtifacts(item.title || item.url || 'Сохранённая ссылка', true);
+  const cleanTitle = cleanBrokenTextArtifacts(item.title || item.url || t('dna.savedLink'), true);
   const rawPreview = cleanBrokenTextArtifacts(
     stripMarkdownPreview(
       item.summary && item.summary !== item.title
@@ -161,8 +163,8 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
       {item.url ? (
         <div className="flex items-center justify-start gap-2 pt-0.5">
           <CopySlotPill
-            label="Ссылка"
-            copiedLabel="Готово"
+            label={t('dna.link')}
+            copiedLabel={t('common.done')}
             widthPx={88}
             heightPx={28}
             onCopy={() => window.kapsula.copyText(item.url!)}
@@ -175,7 +177,7 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
             }}
             className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-accent)] hover:text-[var(--k-accent)] cursor-pointer"
           >
-            <span>Открыть</span>
+            <span>{t('common.open')}</span>
             <ArrowSquareOut className="w-3.5 h-3.5" />
           </button>
         </div>

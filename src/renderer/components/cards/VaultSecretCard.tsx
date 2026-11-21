@@ -14,6 +14,7 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { SecretCopyField, SecretPayload, TotpCodeSnapshot, VaultItem } from '@shared/types';
+import { useI18n } from '@shared/i18n/react';
 import { formatCardPanGroups } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { SecretMorphField } from '../ui/SecretMorphField';
@@ -31,12 +32,9 @@ interface VaultSecretCardProps {
 const CARD_BRAND_LABEL: Record<string, string> = {
   visa: 'VISA',
   mastercard: 'Mastercard',
-  mir: 'МИР',
   amex: 'AMEX',
   unionpay: 'UnionPay',
 };
-
-const AUTO_REMASK_SECONDS = 30;
 
 function formatTotpDisplay(code: string): string {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
@@ -103,8 +101,8 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
   onDelete,
   onUnlockRequest,
 }) => {
+  const { t } = useI18n();
   const [revealed, setRevealed] = useState(false);
-  const [revealSecLeft, setRevealSecLeft] = useState(0);
   const [payload, setPayload] = useState<SecretPayload | null>(null);
   const [loadingReveal, setLoadingReveal] = useState(false);
   const [totpSnap, setTotpSnap] = useState<TotpCodeSnapshot | null>(null);
@@ -118,7 +116,6 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
   useEffect(() => {
     if (vaultLocked || isTrashed) {
       setRevealed(false);
-      setRevealSecLeft(0);
       setPayload(null);
       setTotpSnap(null);
     }
@@ -126,30 +123,10 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
 
   useEffect(() => {
     setRevealed(false);
-    setRevealSecLeft(0);
     setPayload(null);
   }, [item.id, item.updatedAt, item.contentUpdatedAt]);
 
   const effectiveRevealed = revealed && !vaultLocked && !isTrashed;
-
-  // 30-second auto-re-mask countdown when revealed
-  useEffect(() => {
-    if (!effectiveRevealed) {
-      setRevealSecLeft(0);
-      return;
-    }
-    setRevealSecLeft(AUTO_REMASK_SECONDS);
-    const timer = window.setInterval(() => {
-      setRevealSecLeft((prev) => {
-        if (prev <= 1) {
-          setRevealed(false);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [effectiveRevealed]);
 
   // Live 1s polling for 2FA TOTP code when secret has TOTP and vault is unlocked (never in Trash)
   useEffect(() => {
@@ -199,7 +176,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
       setPayload(dec);
       setRevealed(true);
     } catch {
-      toast.error('Сначала разблокируй Сейф мастер-кодом');
+      toast.error(t('vault.unlockFirst'));
       onUnlockRequest();
     } finally {
       setLoadingReveal(false);
@@ -215,23 +192,23 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
       const res = await window.kapsula.copySecretField(item.id, field);
       if (!res.ok) {
         if (res.locked) onUnlockRequest();
-        else toast.error('Не удалось скопировать данные');
+        else toast.error(t('error.copyDataFailed'));
         return false;
       }
       if (field === 'expiry' || field === 'login') {
-        if (field === 'expiry') toast.success('Срок карты скопирован');
+        if (field === 'expiry') toast.success(t('vault.cardExpiryCopied'));
         return true;
       }
       if (field === 'totp') {
         setTotpCopied(true);
         window.setTimeout(() => setTotpCopied(false), 1600);
-        toast.success('2FA-код скопирован');
+        toast.success(t('vault.totpCopied'));
         return true;
       }
       const effectiveWipe = res.wipeSeconds ?? wipeSeconds ?? 30;
       return effectiveWipe > 0 ? effectiveWipe : true;
     } catch {
-      toast.error('Не удалось скопировать данные');
+      toast.error(t('error.copyDataFailed'));
       return false;
     }
   };
@@ -245,13 +222,13 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
       const res = await window.kapsula.copySecret(item.id);
       if (!res.ok) {
         if (res.locked) onUnlockRequest();
-        else toast.error('Не удалось скопировать секрет');
+        else toast.error(t('error.copySecretFailed'));
         return false;
       }
       const effectiveWipe = res.wipeSeconds ?? wipeSeconds ?? 30;
       return effectiveWipe > 0 ? effectiveWipe : true;
     } catch {
-      toast.error('Не удалось скопировать секрет');
+      toast.error(t('error.copySecretFailed'));
       return false;
     }
   };
@@ -263,7 +240,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
         <div className="mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 border border-[var(--k-border-hairline)] px-2.5 py-1.5 text-[11.5px] text-[var(--k-ink-secondary)]">
           <span className="inline-flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--k-amber)]" />
-            <span>2FA-код под мастер-кодом</span>
+            <span>{t('vault.totpProtected')}</span>
           </span>
           <span className="k-mono tracking-wider text-[var(--k-ink-muted)]">••• •••</span>
         </div>
@@ -278,7 +255,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
           e.stopPropagation();
           void handleCopyField('totp');
         }}
-        title="Нажми, чтобы скопировать 2FA-код"
+        title={t('vault.totpCopyTitle')}
         className="k-interactive mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 hover:bg-[var(--k-bg-surface-3)]/75 border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] px-2.5 py-1.5 cursor-pointer"
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -301,7 +278,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
               urgent ? 'text-[var(--k-amber)] font-semibold' : 'text-[var(--k-ink-secondary)]'
             }`}
           >
-            {totpSnap.remainingSec} с
+            {totpSnap.remainingSec} {t('common.secUnit')}
           </span>
           <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]">
             {totpCopied ? (
@@ -317,8 +294,10 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
 
   if (kind === 'bank_card') {
     const brandName =
-      (meta?.cardBrand && (CARD_BRAND_LABEL[meta.cardBrand.toLowerCase()] || meta.cardBrand)) ||
-      'КАРТА';
+      meta?.cardBrand && meta.cardBrand.toLowerCase() === 'mir'
+        ? t('vault.brand.mir')
+        : (meta?.cardBrand && (CARD_BRAND_LABEL[meta.cardBrand.toLowerCase()] || meta.cardBrand)) ||
+          t('vault.brand.cardFallback');
     const last4 = meta?.last4 || '••••';
     const maskedPan = `••••  ••••  ••••  ${last4}`;
     const revealedPan = effectiveRevealed && payload?.secretValue ? formatCardPanGroups(payload.secretValue) : null;
@@ -343,7 +322,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
             </span>
             <div className="min-w-0">
               <div className="text-[13.5px] font-semibold truncate text-[var(--k-ink-primary)]">
-                {item.title || 'Банковская карта'}
+                {item.title || t('vault.type.bank_card')}
               </div>
               <div className="k-mono text-[11.5px] text-[var(--k-ink-secondary)] truncate">
                 {brandName} · •••• {last4}{expiryText ? ` · ${expiryText}` : ''}
@@ -355,8 +334,8 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
             <div className="flex items-center gap-1.5 shrink-0">
               <CopySlotPill
                 data-testid={`secret-copy-pan-${item.id}`}
-                label="Номер"
-                copiedLabel="Готово"
+                label={t('vault.number')}
+                copiedLabel={t('common.done')}
                 widthPx={100}
                 heightPx={28}
                 tone="default"
@@ -368,7 +347,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
                 <CopySlotPill
                   data-testid={`secret-copy-expiry-${item.id}`}
                   label={expiryText}
-                  copiedLabel="Готово"
+                  copiedLabel={t('common.done')}
                   widthPx={84}
                   heightPx={28}
                   tone="default"
@@ -380,7 +359,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
                 <CopySlotPill
                   data-testid={`secret-copy-cvv-${item.id}`}
                   label="CVV"
-                  copiedLabel="Готово"
+                  copiedLabel={t('common.done')}
                   widthPx={98}
                   heightPx={28}
                   tone="default"
@@ -391,7 +370,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
               ) : null}
             </div>
           ) : (
-            <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">Скрыто в корзине</span>
+            <span className="text-[11px] text-[var(--k-ink-muted)] shrink-0">{t('vault.hiddenInTrash')}</span>
           )}
         </div>
       );
@@ -415,14 +394,14 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
         />
 
         {/* Header Row */}
-        <div className="relative flex items-center justify-between gap-2 mb-3">
+        <div className="relative flex items-start justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 min-w-0">
             <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--k-accent-soft)] border border-[var(--k-accent)]/20 shrink-0">
               <CreditCard weight="duotone" className="w-4 h-4 text-[var(--k-accent)]" />
             </span>
             <div className="min-w-0">
               <div className="text-[13.5px] font-semibold leading-tight truncate text-[var(--k-ink-primary)]">
-                {item.title || 'Банковская карта'}
+                {item.title || t('vault.type.bank_card')}
               </div>
               <div className="text-[10.5px] tracking-wider uppercase text-[var(--k-ink-muted)] font-medium">
                 {brandName}
@@ -430,23 +409,15 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            {effectiveRevealed && revealSecLeft > 0 ? (
-              <span
-                title="Данные автоматически скроются"
-                className="k-mono k-tabular text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]"
-              >
-                {revealSecLeft} с
-              </span>
-            ) : null}
+          <div className="flex items-center gap-0.5 shrink-0 -mt-1.5 -mr-1.5">
             {!isTrashed ? (
               <button
                 type="button"
                 data-testid={`secret-reveal-${item.id}`}
                 disabled={loadingReveal}
                 onClick={(e) => void handleToggleReveal(e)}
-                aria-label={effectiveRevealed ? 'Скрыть данные карты' : 'Показать данные карты'}
-                className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--k-bg-surface-1)]/85 border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+                aria-label={effectiveRevealed ? t('vault.hideCardAria') : t('vault.showCardAria')}
+                className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
               >
                 {vaultLocked ? (
                   <Lock className="w-3.5 h-3.5 text-[var(--k-amber)]" />
@@ -464,8 +435,8 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
                 e.stopPropagation();
                 onDelete(item.id);
               }}
-              aria-label="Удалить карту"
-              className="k-interactive inline-flex opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity duration-140 items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer shrink-0"
+              aria-label={t('vault.deleteCardAria')}
+              className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer shrink-0"
             >
               <Trash className="w-3.5 h-3.5" />
             </button>
@@ -487,11 +458,11 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
           <span className="k-mono whitespace-nowrap">
             {expiryText ? (
               <>
-                <span className="text-[10.5px] text-[var(--k-ink-muted)] mr-1.5">СРОК</span>
+                <span className="text-[10.5px] text-[var(--k-ink-muted)] mr-1.5">{t('vault.cardExpiryUpper')}</span>
                 <span className="text-[var(--k-ink-primary)]">{expiryText}</span>
               </>
             ) : (
-              <span className="text-[11px] text-[var(--k-ink-muted)]">Срок не указан</span>
+              <span className="text-[11px] text-[var(--k-ink-muted)]">{t('vault.cardNoExpiry')}</span>
             )}
           </span>
           {hasCvv ? (
@@ -523,14 +494,14 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
         <div className="relative flex items-center gap-1.5 pt-2.5 border-t border-[var(--k-border-hairline)]">
           {isTrashed ? (
             <span className="text-[11.5px] text-[var(--k-ink-muted)]">
-              Скрыто в корзине · восстанови, чтобы открыть в Сейфе
+              {t('vault.hiddenInTrashRestore')}
             </span>
           ) : (
             <>
               <CopySlotPill
                 data-testid={`secret-copy-pan-${item.id}`}
-                label="Номер"
-                copiedLabel="Готово"
+                label={t('vault.number')}
+                copiedLabel={t('common.done')}
                 widthPx={100}
                 heightPx={28}
                 tone="default"
@@ -542,7 +513,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
                 <CopySlotPill
                   data-testid={`secret-copy-expiry-${item.id}`}
                   label={expiryText}
-                  copiedLabel="Готово"
+                  copiedLabel={t('common.done')}
                   widthPx={82}
                   heightPx={28}
                   tone="default"
@@ -554,7 +525,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
                 <CopySlotPill
                   data-testid={`secret-copy-cvv-${item.id}`}
                   label="CVV"
-                  copiedLabel="Готово"
+                  copiedLabel={t('common.done')}
                   widthPx={98}
                   heightPx={28}
                   tone="default"
@@ -574,40 +545,40 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
   const Icon = kind === 'password' ? User : Key;
   const kindDefaultTitle =
     kind === 'password'
-      ? 'Аккаунт'
+      ? t('vault.account')
       : kind === 'api_key'
-        ? 'Секретный ключ'
+        ? t('vault.secretKey')
         : kind === 'seed'
-          ? 'Фраза восстановления'
+          ? t('dna.seed')
           : kind === 'note'
-            ? 'Секретная заметка'
-            : 'Секрет';
+            ? t('vault.type.note')
+            : t('vault.secretWord');
   const kindLabel =
     kind === 'password'
-      ? 'Пароль'
+      ? t('vault.passwordLabel')
       : kind === 'api_key'
-        ? 'Ключ доступа'
+        ? t('dna.apiKey')
         : kind === 'seed'
-          ? 'Фраза восстановления'
+          ? t('dna.seed')
           : kind === 'note'
-            ? 'Секретная заметка'
-            : 'Секрет';
+            ? t('vault.type.note')
+            : t('vault.secretWord');
   const copyValueLabel =
     kind === 'password'
-      ? 'Пароль'
+      ? t('vault.passwordLabel')
       : kind === 'api_key'
-        ? 'Ключ'
+        ? t('vault.keyLabel')
         : kind === 'seed'
-          ? 'Фраза'
+          ? t('vault.phraseLabel')
           : kind === 'note'
-            ? 'Заметка'
-            : 'Секрет';
+            ? t('vault.noteLabel')
+            : t('vault.secretWord');
   const hasLoginField = meta?.hasLogin ?? Boolean(meta?.loginHint && kind === 'password');
   const maskedBody =
     meta?.loginHint
       ? `${meta.loginHint} · ••••••••`
       : kind === 'api_key'
-        ? `${meta?.service || 'Ключ'} · ••••••••••••`
+        ? `${meta?.service || t('vault.keyLabel')} · ••••••••••••`
         : '••••••••••••';
 
   const displayTitle = (item.title || kindDefaultTitle).trim();
@@ -620,6 +591,20 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
         ? kindLabel
         : null;
 
+  const subtitleSlotActive = Boolean(subtitleText || hasLoginField || meta?.loginHint);
+  const revealedSubtitle =
+    effectiveRevealed && payload?.login
+      ? subtitleText && subtitleText.toLowerCase() !== payload.login.trim().toLowerCase()
+        ? `${subtitleText} · ${payload.login}`
+        : payload.login
+      : subtitleText || meta?.loginHint || '';
+  const revealedInlineSecret =
+    effectiveRevealed && payload?.login && !subtitleSlotActive
+      ? `${payload.login} · ${payload?.secretValue || ''}`
+      : effectiveRevealed
+        ? payload?.secretValue || ''
+        : '';
+
   return (
     <div
       data-testid={`secret-card-${item.id}`}
@@ -629,7 +614,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
       style={{
         background: 'linear-gradient(155deg, var(--k-bg-surface-1) 0%, var(--k-bg-surface-2) 100%)',
       }}
-      className="group relative k-card-lift rounded-2xl border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] p-4 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-card)] hover:shadow-[var(--k-shadow-card-hover)] overflow-clip cursor-pointer"
+      className="group relative k-card-lift rounded-2xl border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] px-3.5 py-3 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-card)] hover:shadow-[var(--k-shadow-card-hover)] overflow-clip cursor-pointer"
     >
       <div
         aria-hidden="true"
@@ -637,40 +622,32 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
         style={{ background: 'var(--k-accent-soft)' }}
       />
 
-      <div className="relative flex items-center justify-between gap-2 mb-3">
+      <div className="relative flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--k-accent-soft)] border border-[var(--k-accent)]/20 shrink-0">
             <Icon weight="duotone" className="w-4 h-4 text-[var(--k-accent)]" />
           </span>
           <div className="min-w-0">
-            <div className="text-[13.5px] font-semibold truncate text-[var(--k-ink-primary)]">
+            <div className="text-[13.5px] font-semibold leading-tight truncate text-[var(--k-ink-primary)]">
               {displayTitle}
             </div>
-            {subtitleText ? (
-              <div className="text-[11px] text-[var(--k-ink-muted)] truncate">
-                {subtitleText}
+            {subtitleSlotActive ? (
+              <div className="text-[11px] leading-[15px] h-[15px] text-[var(--k-ink-muted)] truncate k-selectable">
+                {revealedSubtitle || '\u00A0'}
               </div>
             ) : null}
           </div>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-          {effectiveRevealed && revealSecLeft > 0 ? (
-            <span
-              title="Данные автоматически скроются"
-              className="k-mono k-tabular text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]"
-            >
-              {revealSecLeft} с
-            </span>
-          ) : null}
+        <div className="flex items-center gap-0.5 shrink-0 -mt-1.5 -mr-1.5">
           {!isTrashed ? (
             <button
               type="button"
               data-testid={`secret-reveal-${item.id}`}
               disabled={loadingReveal}
               onClick={(e) => void handleToggleReveal(e)}
-              aria-label={effectiveRevealed ? 'Скрыть' : 'Показать'}
-              className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--k-bg-surface-1)]/85 border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+              aria-label={effectiveRevealed ? t('common.hide') : t('common.show')}
+              className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
             >
               {vaultLocked ? (
                 <Lock className="w-3.5 h-3.5 text-[var(--k-amber)]" />
@@ -688,25 +665,20 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
               e.stopPropagation();
               onDelete(item.id);
             }}
-            aria-label="Удалить"
-            className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+            aria-label={t('common.delete')}
+            className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer shrink-0"
           >
             <Trash className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      <div className="relative rounded-xl bg-[var(--k-bg-surface-2)]/80 border border-[var(--k-border-hairline)] px-3 py-2 mb-2.5">
-        {effectiveRevealed && payload?.login ? (
-          <div className="text-[11.5px] text-[var(--k-ink-secondary)] truncate mb-0.5 k-selectable">
-            {payload.login}
-          </div>
-        ) : null}
+      <div className="relative rounded-xl bg-[var(--k-bg-surface-2)]/80 border border-[var(--k-border-hairline)] px-2.5 py-1.5 mb-2">
         <SecretMorphField
           revealed={effectiveRevealed}
           maskedText={maskedBody}
-          revealedText={effectiveRevealed ? payload?.secretValue || '' : ''}
-          className="text-[13px] text-[var(--k-ink-primary)] w-full truncate"
+          revealedText={revealedInlineSecret}
+          className="text-[12.5px] leading-[18px] text-[var(--k-ink-primary)] w-full truncate block"
         />
       </div>
 
@@ -717,17 +689,17 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
           {isTrashed ? (
             <>
               <Lock className="w-3 h-3 text-[var(--k-ink-muted)]" />
-              <span>Скрыто в корзине</span>
+              <span>{t('vault.hiddenInTrash')}</span>
             </>
           ) : vaultLocked ? (
             <>
               <Lock className="w-3 h-3 text-[var(--k-amber)]" />
-              <span>Под кодом</span>
+              <span>{t('vault.underMasterCode')}</span>
             </>
           ) : (
             <>
               <LockOpen className="w-3 h-3 text-[var(--k-emerald)]" />
-              <span>Защищено</span>
+              <span>{t('vault.encryptedLocally')}</span>
             </>
           )}
         </span>
@@ -737,10 +709,10 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
             {hasLoginField ? (
               <CopySlotPill
                 data-testid={`secret-copy-login-${item.id}`}
-                label="Логин"
-                copiedLabel="Готово"
-                widthPx={86}
-                heightPx={28}
+                label={t('vault.login')}
+                copiedLabel={t('common.done')}
+                widthPx={84}
+                heightPx={26}
                 tone="default"
                 className="!bg-[var(--k-bg-surface-1)]/90 hover:!bg-[var(--k-bg-surface-2)]"
                 onCopy={() => handleCopyField('login')}
@@ -749,9 +721,9 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
             <CopySlotPill
               data-testid={`secret-copy-value-${item.id}`}
               label={copyValueLabel}
-              copiedLabel="Готово"
-              widthPx={104}
-              heightPx={28}
+              copiedLabel={t('common.done')}
+              widthPx={100}
+              heightPx={26}
               tone="default"
               className="!bg-[var(--k-bg-surface-1)]/90 hover:!bg-[var(--k-bg-surface-2)]"
               wipeSeconds={wipeSeconds ?? 30}

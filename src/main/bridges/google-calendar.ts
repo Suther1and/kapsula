@@ -6,7 +6,7 @@ import {
   DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
   DEFAULT_SYNC_SUPABASE_URL,
 } from '@shared/sync-contract';
-import type { CalendarEventInput, CalendarSyncStatus } from '@shared/types';
+import type { AppLocale, CalendarEventInput, CalendarSyncStatus } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
 import type { VaultCrypto } from '../security/vault-crypto';
 
@@ -29,12 +29,16 @@ function base64Url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-export function parseRussianDateExpression(rawText: string, nowMs = Date.now()): {
+export function parseRussianDateExpression(
+  rawText: string,
+  nowMs = Date.now(),
+  locale: AppLocale = 'ru'
+): {
   startAt: number;
   endAt: number;
   label: string;
 } | null {
-  const parsed = parseRussianEvent(rawText, nowMs);
+  const parsed = parseRussianEvent(rawText, nowMs, undefined, locale);
   if (!parsed) return null;
   return {
     startAt: parsed.startAt,
@@ -68,7 +72,10 @@ function parseIcalDateValue(raw: string): { ts: number; allDay: boolean } | null
   return null;
 }
 
-export function parseIcalFeed(icsRaw: string): Array<CalendarEventInput & { externalId: string }> {
+export function parseIcalFeed(
+  icsRaw: string,
+  locale: AppLocale = 'ru'
+): Array<CalendarEventInput & { externalId: string }> {
   // Unfold RFC 5545 folded lines
   const unfolded = (icsRaw || '').replace(/\r\n[ \t]/g, '').replace(/\r\n/g, '\n');
   const events: Array<CalendarEventInput & { externalId: string }> = [];
@@ -106,7 +113,7 @@ export function parseIcalFeed(icsRaw: string): Array<CalendarEventInput & { exte
       : startAt + (startParsed?.allDay ? 86_400_000 - 1000 : 3_600_000);
     events.push({
       externalId: uid || `ics:${startAt}:${summary.slice(0, 24)}`,
-      title: summary || 'Событие',
+      title: summary || (locale === 'en' ? 'Event' : 'Событие'),
       notes: description,
       location,
       startAt,
@@ -323,8 +330,13 @@ export class GoogleCalendarBridge {
   }
 
   public async connectOAuth(clientIdInput?: string): Promise<CalendarSyncStatus> {
+    const isEn = this.repo.getLocale() === 'en';
     if (this.authInFlight) {
-      throw new Error('Авторизация в Google уже открыта в браузере.');
+      throw new Error(
+        isEn
+          ? 'Google sign-in is already open in your browser.'
+          : 'Авторизация в Google уже открыта в браузере.'
+      );
     }
 
     const customClientId = (clientIdInput ?? this.repo.getSetting('gcal_client_id') ?? '').trim();
@@ -338,7 +350,9 @@ export class GoogleCalendarBridge {
       const builtIn = await this.fetchBuiltInOAuthConfig(true);
       if (!builtIn.enabled || !builtIn.clientId) {
         throw new Error(
-          'Встроенный вход в Google Календарь пока настраивается. Подключи его по секретной ссылке календаря или укажи свой идентификатор клиента.'
+          isEn
+            ? 'Built-in Google Calendar OAuth is being configured. Connect using your secret iCal link or enter a custom Client ID.'
+            : 'Встроенный вход в Google Календарь пока настраивается. Подключи его по секретной ссылке календаря или укажи свой идентификатор клиента.'
         );
       }
       effectiveClientId = builtIn.clientId;
@@ -368,7 +382,15 @@ export class GoogleCalendarBridge {
           };
 
           const timeout = setTimeout(() => {
-            finish(() => reject(new Error('Время ожидания входа через браузер истекло.')));
+            finish(() =>
+              reject(
+                new Error(
+                  isEn
+                    ? 'Browser sign-in timed out.'
+                    : 'Время ожидания входа через браузер истекло.'
+                )
+              )
+            );
           }, timeoutMs);
 
           let boundRedirectUri = '';
@@ -388,14 +410,36 @@ export class GoogleCalendarBridge {
               'Content-Type': 'text/html; charset=utf-8',
               Connection: 'close',
             });
+            const htmlTitle = isEn
+              ? 'Kapsula connected to Google Calendar'
+              : 'Kapsula подключена к Google Календарю';
+            const htmlBody = isEn
+              ? 'You can close this tab and return to the app.'
+              : 'Можешь закрыть эту вкладку и вернуться в приложение.';
             res.end(
-              '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px">Kapsula подключена к Google Календарю</h2><p style="margin:0;color:#b6b4ad">Можешь закрыть эту вкладку и вернуться в приложение.</p></div></body></html>'
+              `<!doctype html><html lang="${isEn ? 'en' : 'ru'}"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px">${htmlTitle}</h2><p style="margin:0;color:#b6b4ad">${htmlBody}</p></div></body></html>`
             );
 
             if (errParam) {
-              finish(() => reject(new Error('Доступ к Google Календарю был отклонён.')));
+              finish(() =>
+                reject(
+                  new Error(
+                    isEn
+                      ? 'Access to Google Calendar was denied.'
+                      : 'Доступ к Google Календарю был отклонён.'
+                  )
+                )
+              );
             } else if (returnedState !== state || !authCode) {
-              finish(() => reject(new Error('Не удалось подтвердить вход Google.')));
+              finish(() =>
+                reject(
+                  new Error(
+                    isEn
+                      ? 'Could not verify Google sign-in.'
+                      : 'Не удалось подтвердить вход Google.'
+                  )
+                )
+              );
             } else {
               finish(() => resolve({ code: authCode, redirectUri: boundRedirectUri }));
             }
@@ -405,7 +449,15 @@ export class GoogleCalendarBridge {
             const addr = server?.address();
             const port = typeof addr === 'object' && addr ? addr.port : 0;
             if (!port) {
-              finish(() => reject(new Error('Не удалось открыть локальный порт для входа.')));
+              finish(() =>
+                reject(
+                  new Error(
+                    isEn
+                      ? 'Could not open local port for sign-in.'
+                      : 'Не удалось открыть локальный порт для входа.'
+                  )
+                )
+              );
               return;
             }
             boundRedirectUri = `http://127.0.0.1:${port}/`;
@@ -423,7 +475,15 @@ export class GoogleCalendarBridge {
             authUrl.searchParams.set('code_challenge_method', 'S256');
             authUrl.searchParams.set('state', state);
             void Promise.resolve(openExternalFn(authUrl.toString())).catch(() => {
-              finish(() => reject(new Error('Не удалось открыть браузер для входа в Google.')));
+              finish(() =>
+                reject(
+                  new Error(
+                    isEn
+                      ? 'Could not open browser for Google sign-in.'
+                      : 'Не удалось открыть браузер для входа в Google.'
+                  )
+                )
+              );
             });
           });
         }
@@ -462,7 +522,7 @@ export class GoogleCalendarBridge {
       }
 
       if (!tokenResp.ok) {
-        throw new Error('Google не принял код авторизации.');
+        throw new Error(isEn ? 'Google rejected authorization code.' : 'Google не принял код авторизации.');
       }
 
       const rawTokenJson = (await tokenResp.json()) as {
@@ -473,7 +533,7 @@ export class GoogleCalendarBridge {
       };
       const tokenJson = rawTokenJson.data ?? rawTokenJson;
       if (!tokenJson.access_token) {
-        throw new Error('Google не вернул токен доступа.');
+        throw new Error(isEn ? 'Google did not return an access token.' : 'Google не вернул токен доступа.');
       }
 
       let email: string | undefined;
@@ -502,7 +562,12 @@ export class GoogleCalendarBridge {
       await this.syncNow();
       return this.getStatus();
     } catch (err) {
-      this.lastError = err instanceof Error ? err.message : 'Ошибка подключения Google Календаря';
+      this.lastError =
+        err instanceof Error
+          ? err.message
+          : isEn
+            ? 'Google Calendar connection error'
+            : 'Ошибка подключения Google Календаря';
       throw err;
     } finally {
       this.authInFlight = false;
@@ -589,7 +654,7 @@ export class GoogleCalendarBridge {
         const resp = await fetchImpl(icalUrl, { signal: AbortSignal.timeout(12_000) });
         if (resp.ok) {
           const text = await resp.text();
-          const parsed = parseIcalFeed(text);
+          const parsed = parseIcalFeed(text, this.repo.getLocale());
           for (const ev of parsed) {
             this.repo.upsertCalendarEvent({
               ...ev,
@@ -600,7 +665,10 @@ export class GoogleCalendarBridge {
           }
         }
       } catch {
-        this.lastError = 'Не удалось загрузить события по ссылке iCal.';
+        const isEn = this.repo.getLocale() === 'en';
+        this.lastError = isEn
+          ? 'Could not load events from the iCal URL.'
+          : 'Не удалось загрузить события по ссылке iCal.';
       }
     }
 
@@ -667,8 +735,9 @@ export class GoogleCalendarBridge {
                   ? Date.parse(`${gEv.end.date}T00:00:00`)
                   : startMs + 3_600_000;
 
+              const gcalLocale = this.repo.getLocale();
               this.repo.upsertCalendarEvent({
-                title: gEv.summary || 'Событие Google',
+                title: gEv.summary || (gcalLocale === 'en' ? 'Google Event' : 'Событие Google'),
                 notes: gEv.description || '',
                 startAt: Number.isFinite(startMs) ? startMs : Date.now(),
                 endAt: Number.isFinite(endMs) ? endMs : startMs + 3_600_000,
@@ -746,7 +815,10 @@ export class GoogleCalendarBridge {
           }
         }
       } catch {
-        this.lastError = 'Ошибка синхронизации с Google Календарём.';
+        const isEn = this.repo.getLocale() === 'en';
+        this.lastError = isEn
+          ? 'Google Calendar sync failed.'
+          : 'Ошибка синхронизации с Google Календарём.';
       }
     }
 

@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/react';
 import type { OrbitDef, VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts, truncateAtWordBoundary } from '@shared/html-entities';
+import { useI18n } from '@shared/i18n/react';
 import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import { formatDateCompact, getDnaHumanLabel, getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
@@ -62,12 +63,13 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
   onOpen,
   onToggleMarkdownTask,
 }) => {
+  const { t, locale } = useI18n();
   const firstTask = item.dna === 'note' ? FIRST_TASK_RE.exec(item.body || '') : null;
   const isChecklistDone = firstTask ? firstTask[1]!.toLowerCase() === 'x' : false;
-  const titleText = cleanBrokenTextArtifacts(item.title || getDnaHumanLabel(item), true);
+  const titleText = cleanBrokenTextArtifacts(item.title || getDnaHumanLabel(item, locale), true);
   const rawSnippet =
     item.dna === 'secret'
-      ? item.secretMeta?.loginHint || 'Защищено в Сейфе'
+      ? item.secretMeta?.loginHint || t('dna.vaultRecord')
       : cleanBrokenTextArtifacts(
           truncateAtWordBoundary(stripMarkdownPreview(item.summary || item.body || item.url || ''), 120),
           true
@@ -113,14 +115,14 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
             size="sm"
             checked={isChecklistDone}
             onChange={(next) => onToggleMarkdownTask!(item.id, 0, next)}
-            label={`Задача ${titleText}`}
+            label={t('cards.taskAria', { title: titleText })}
           />
         ) : showSelectInSlot ? (
           <AnimatedCheckbox
             size="sm"
             checked={selected}
             onChange={() => onToggleSelect!(item, false)}
-            label={`Выбрать ${titleText}`}
+            label={t('cards.selectAria', { title: titleText })}
           />
         ) : (
           <>
@@ -141,7 +143,7 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
                   size="sm"
                   checked={selected}
                   onChange={() => onToggleSelect(item, false)}
-                  label={`Выбрать ${titleText}`}
+                  label={t('cards.selectAria', { title: titleText })}
                 />
               </div>
             ) : null}
@@ -193,7 +195,7 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
               : ''
           } ${showSelectInSlot && hasInteractiveTaskBox ? 'opacity-0' : ''}`}
         >
-          {formatDateCompact(item.contentUpdatedAt || item.createdAt)}
+          {formatDateCompact(item.contentUpdatedAt || item.createdAt, locale)}
         </span>
         {hasInteractiveTaskBox && onToggleSelect ? (
           <div
@@ -207,13 +209,13 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
               size="sm"
               checked={selected}
               onChange={() => onToggleSelect(item, false)}
-              label={`Выбрать ${titleText}`}
+              label={t('cards.selectAria', { title: titleText })}
             />
           </div>
         ) : item.url ? (
           <button
             type="button"
-            title="Открыть ссылку"
+            title={t('cards.openLink')}
             onClick={(e) => {
               e.stopPropagation();
               void window.kapsula.openExternal(item.url!);

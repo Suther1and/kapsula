@@ -15,6 +15,7 @@ import {
   DeviceMobile,
   Fingerprint,
   FolderSimple,
+  Globe,
   Key,
   Laptop,
   LockKey,
@@ -53,13 +54,14 @@ import type {
   ThemeMode,
   VaultItem,
 } from '@shared/types';
-import { formatRelativeDate, getDnaHumanLabel } from '@renderer/lib/format';
+import type { AppLocale } from '@shared/i18n/core';
+import type { MobileDictKey } from '@shared/i18n/mobile-dict';
 import {
   fetchMobileCloudAiQuota,
-  formatUsdRu,
   type MobileCloudAiQuota,
 } from '../lib/mobile-ai';
-import { formatSyncTimeLabel, pluralRu } from '../lib/mobile-helpers';
+import { formatSyncTimeLabel } from '../lib/mobile-helpers';
+import { tm, useMobileI18n } from '../lib/mobile-i18n';
 import type { MobileUpdateCheckResult } from '../lib/mobile-updater';
 import { mobileBridge, type NativeAppVersion } from '../native/bridge';
 import type { MobileAiConfig } from '../storage/mobile-store';
@@ -141,15 +143,12 @@ interface SettingsCloudSheetProps {
   onSensitiveOverlayChange?: (visible: boolean) => void;
 }
 
-const AUTO_LOCK_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 1, label: '1 мин' },
-  { value: 5, label: '5 мин' },
-  { value: 15, label: '15 мин' },
-  { value: 30, label: '30 мин' },
-  { value: 0, label: 'Выкл' },
-];
+const AUTO_LOCK_VALUES = [1, 5, 15, 30, 0] as const;
 
-function evaluatePassphraseStrength(pass: string): {
+function evaluatePassphraseStrength(
+  pass: string,
+  locale: AppLocale
+): {
   score: number;
   label: string;
   color: string;
@@ -159,18 +158,22 @@ function evaluatePassphraseStrength(pass: string): {
   let score = 0;
   if (clean.length >= 10) score += 1;
   if (clean.length >= 14) score += 1;
-  if (/[A-ZА-Я]/.test(clean) && /[a-zа-я]/.test(clean)) score += 1;
-  if (/\d/.test(clean) || /[^a-zA-Zа-яА-Я0-9\s]/.test(clean)) score += 1;
+  if (/\p{Lu}/u.test(clean) && /\p{Ll}/u.test(clean)) score += 1;
+  if (/\d/.test(clean) || /[^\p{L}\p{N}\s]/u.test(clean)) score += 1;
   if (clean.length < 10) {
     return {
       score: 1,
-      label: `Ещё ${10 - clean.length} симв.`,
+      label: tm('settings.passMoreChars', { count: 10 - clean.length }, locale),
       color: 'var(--k-danger)',
     };
   }
-  if (score <= 2) return { score: 2, label: 'Нормальная', color: 'var(--k-amber)' };
-  if (score === 3) return { score: 3, label: 'Хорошая', color: 'var(--k-emerald)' };
-  return { score: 4, label: 'Надёжная', color: 'var(--k-emerald)' };
+  if (score <= 2) {
+    return { score: 2, label: tm('settings.passStrengthNormal', undefined, locale), color: 'var(--k-amber)' };
+  }
+  if (score === 3) {
+    return { score: 3, label: tm('settings.passStrengthGood', undefined, locale), color: 'var(--k-emerald)' };
+  }
+  return { score: 4, label: tm('settings.passStrengthStrong', undefined, locale), color: 'var(--k-emerald)' };
 }
 
 export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
@@ -222,6 +225,18 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   onUnarchiveItem,
   onSensitiveOverlayChange,
 }) => {
+  const {
+    locale,
+    setLocale,
+    localeOptions,
+    t,
+    plural,
+    formatRelativeDate,
+    formatUsd,
+    getDnaLabel,
+    getAccentLabel,
+    getBgLabel,
+  } = useMobileI18n();
   const prefersReduced = useReducedMotion();
   const [section, setSection] = useState<'cloud' | 'appearance' | 'structure'>(initialSection);
 
@@ -344,8 +359,14 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   const [editBoardName, setEditBoardName] = useState('');
   const [editBoardColor, setEditBoardColor] = useState(SECTION_COLOR_PALETTE[4]!);
 
-  const setupStrength = useMemo(() => evaluatePassphraseStrength(passphrase), [passphrase]);
-  const changeStrength = useMemo(() => evaluatePassphraseStrength(nextPassphrase), [nextPassphrase]);
+  const setupStrength = useMemo(
+    () => evaluatePassphraseStrength(passphrase, locale),
+    [passphrase, locale]
+  );
+  const changeStrength = useMemo(
+    () => evaluatePassphraseStrength(nextPassphrase, locale),
+    [nextPassphrase, locale]
+  );
 
   const currentAccentHue = useMemo(() => {
     if (appearance.accentMode === 'custom') {
@@ -364,12 +385,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
           ? await syncEngine.signIn(email, password)
           : await syncEngine.signUp(email, password);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось войти');
+        toast.error(res.error || t('settings.signInError'));
       } else if (res.needsEmailConfirmation) {
-        toast.info('Проверь почту и подтверди аккаунт, затем войди снова');
+        toast.info(t('settings.confirmEmailInfo'));
       } else {
         setPassword('');
-        toast.success('Вход выполнен');
+        toast.success(t('settings.signInSuccess'));
       }
     } finally {
       setBusy(false);
@@ -382,9 +403,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
     try {
       const res = await syncEngine.signInWithGoogle();
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось войти через Google');
+        toast.error(res.error || t('settings.googleError'));
       } else {
-        toast.info('Выбери аккаунт Google в открывшемся окне');
+        toast.info(t('settings.googlePickAccount'));
       }
     } finally {
       setGoogleBusy(false);
@@ -394,25 +415,25 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   const handleSetupPassphrase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (passphrase.trim().length < 10) {
-      toast.error('Секретная фраза должна содержать не менее 10 символов');
+      toast.error(t('settings.passMinLenErr'));
       return;
     }
     if (passphrase !== passphraseConfirm) {
-      toast.error('Секретные фразы не совпадают');
+      toast.error(t('settings.passMismatchErr'));
       return;
     }
     setBusy(true);
     try {
       const res = await syncEngine.setupPassphrase(passphrase);
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось настроить шифрование');
+        toast.error(res.error || t('settings.setupE2eeErr'));
       } else {
         setPassphrase('');
         setPassphraseConfirm('');
         if (res.recoveryKey) {
           setShownRecoveryKey(res.recoveryKey);
         }
-        toast.success('Сквозное шифрование настроено');
+        toast.success(t('settings.setupE2eeSuccess'));
       }
     } finally {
       setBusy(false);
@@ -426,7 +447,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
       newPassAfterRecovery.trim().length > 0 &&
       newPassAfterRecovery.trim().length < 10
     ) {
-      toast.error('Новая секретная фраза должна быть не короче 10 символов');
+      toast.error(t('settings.newPassMinLenErr'));
       return;
     }
     setBusy(true);
@@ -439,12 +460,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               newPassAfterRecovery.trim() || undefined
             );
       if (!res.ok) {
-        toast.error(res.error || 'Не удалось расшифровать хранилище');
+        toast.error(res.error || t('settings.unlockErr'));
       } else {
         setPassphrase('');
         setRecoveryInput('');
         setNewPassAfterRecovery('');
-        toast.success('Облако подключено и синхронизировано');
+        toast.success(t('settings.unlockSuccess'));
       }
     } finally {
       setBusy(false);
@@ -456,9 +477,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
     try {
       const res = await syncEngine.syncNow();
       if (res.ok) {
-        toast.success(
-          `Синхронизировано (получено ${res.pulled ?? 0}, отправлено ${res.pushed ?? 0})`
-        );
+        toast.success(t('settings.syncDone', { pulled: res.pulled ?? 0, pushed: res.pushed ?? 0 }));
       } else if (res.error) {
         toast.error(res.error);
       }
@@ -474,7 +493,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
       if (res.ok) {
         mobileBridge.haptic('success');
         toast.success(
-          `Сверка завершена (получено ${res.pulled ?? 0}, отправлено ${res.pushed ?? 0})`
+          t('settings.reconcileDone', { pulled: res.pulled ?? 0, pushed: res.pushed ?? 0 })
         );
       } else if (res.error) {
         toast.error(res.error);
@@ -487,23 +506,23 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   const handleCopyRecovery = async () => {
     if (!shownRecoveryKey) return;
     await mobileBridge.copySensitive(shownRecoveryKey, 60, true);
-    toast.success('Резервный ключ скопирован · буфер очистится через 60 с');
+    toast.success(t('settings.recoveryCopied'));
   };
 
   const handleSaveMasterPin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (hasMasterPin && !currentPin.trim()) {
       mobileBridge.haptic('error');
-      toast.error('Введи текущий мастер-ПИН');
+      toast.error(t('settings.enterCurrentPin'));
       return;
     }
     const clean = newPin.trim();
     if (clean.length < 4) {
-      toast.error('Мастер-ПИН должен быть не короче 4 символов');
+      toast.error(t('settings.pinMinLen'));
       return;
     }
     if (clean !== confirmPin.trim()) {
-      toast.error('ПИНы не совпадают');
+      toast.error(t('settings.pinMismatch'));
       return;
     }
     setPinSaving(true);
@@ -514,9 +533,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
       setConfirmPin('');
       setPinEditorOpen(false);
       mobileBridge.haptic('success');
-      toast.success(hasMasterPin ? 'Мастер-ПИН обновлён' : 'Мастер-ПИН установлен');
+      toast.success(hasMasterPin ? t('settings.pinUpdated') : t('settings.pinSet'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Не удалось сохранить мастер-ПИН');
+      toast.error(err instanceof Error ? err.message : t('settings.pinSaveErr'));
     } finally {
       setPinSaving(false);
     }
@@ -525,7 +544,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   const handleRemoveMasterPinClick = async () => {
     if (hasMasterPin && !currentPin.trim()) {
       mobileBridge.haptic('error');
-      toast.error('Введи текущий мастер-ПИН, чтобы убрать защиту');
+      toast.error(t('settings.enterPinToRemove'));
       return;
     }
     setPinSaving(true);
@@ -536,9 +555,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
       setConfirmPin('');
       setPinEditorOpen(false);
       mobileBridge.haptic('success');
-      toast('Мастер-ПИН удалён');
+      toast(t('settings.pinRemoved'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Не удалось убрать мастер-ПИН');
+      toast.error(err instanceof Error ? err.message : t('settings.pinRemoveErr'));
     } finally {
       setPinSaving(false);
     }
@@ -559,12 +578,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
       toast.success(
         aiProviderDraft === 'local'
           ? isCloudAccountSignedIn
-            ? 'Включён встроенный ИИ Kapsula'
-            : 'Настройки ИИ сохранены'
-          : 'Настройки ИИ сохранены'
+            ? t('settings.aiBuiltinEnabled')
+            : t('settings.aiSaved')
+          : t('settings.aiSaved')
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Не удалось сохранить настройки ИИ');
+      toast.error(err instanceof Error ? err.message : t('settings.aiSaveErr'));
     } finally {
       setAiSaving(false);
     }
@@ -602,10 +621,10 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
           className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold disabled:opacity-50"
         >
           {busy
-            ? 'Подключаю…'
+            ? t('settings.connecting')
             : authMode === 'signin'
-              ? 'Войти в облако'
-              : 'Создать аккаунт'}
+              ? t('settings.signInCloudBtn')
+              : t('settings.signUpCloudBtn')}
         </button>
       </div>
     ) : section === 'cloud' && syncStatus.state === 'needs_passphrase_setup' ? (
@@ -617,7 +636,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
           disabled={busy}
           className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold disabled:opacity-50"
         >
-          {busy ? 'Создаю ключ…' : 'Включить сквозное шифрование'}
+          {busy ? t('settings.creatingKey') : t('settings.enableE2eeBtn')}
         </button>
       </div>
     ) : section === 'cloud' && syncStatus.state === 'needs_passphrase_unlock' ? (
@@ -629,7 +648,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
           disabled={busy}
           className="k-tap w-full h-11 rounded-2xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[14px] font-semibold disabled:opacity-50"
         >
-          {busy ? 'Проверяю ключ…' : 'Расшифровать и синхронизировать'}
+          {busy ? t('settings.verifyingKey') : t('settings.decryptAndSyncBtn')}
         </button>
       </div>
     ) : undefined;
@@ -637,7 +656,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   return (
     <BottomSheet
       open={open}
-      title="Облако и настройки"
+      title={t('settings.title')}
       subtitle={
         syncStatus.email
           ? `${syncStatus.email} · ${syncStatus.deviceName}`
@@ -657,25 +676,28 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
         <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
           {(
             [
-              { id: 'cloud', label: 'Облако' },
-              { id: 'appearance', label: 'Вид и Сейф' },
+              { id: 'cloud', label: t('settings.tabCloud') },
+              { id: 'appearance', label: t('settings.tabAppearance') },
               {
                 id: 'structure',
-                label: trashedItems.length > 0 ? `Разделы · ${trashedItems.length}` : 'Разделы',
+                label:
+                  trashedItems.length > 0
+                    ? t('settings.tabSectionsCount', { count: trashedItems.length })
+                    : t('settings.tabSections'),
               },
             ] as const
-          ).map((t) => {
-            const active = section === t.id;
+          ).map((tabItem) => {
+            const active = section === tabItem.id;
             return (
               <button
-                key={t.id}
+                key={tabItem.id}
                 type="button"
-                data-testid={`settings-tab-${t.id}`}
+                data-testid={`settings-tab-${tabItem.id}`}
                 onClick={() => {
                   mobileBridge.haptic('light');
-                  setSection(t.id);
+                  setSection(tabItem.id);
                 }}
-                className={`relative ${keyboardOpen ? 'py-1.5' : 'py-2'} rounded-xl text-[12.5px] font-semibold transition-colors ${
+                className={`relative ${keyboardOpen ? 'py-1.5' : 'py-2'} px-1.5 rounded-xl text-[12px] font-semibold transition-colors ${
                   active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
                 }`}
               >
@@ -690,7 +712,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     className="absolute inset-0 rounded-xl bg-[var(--k-bg-surface-1)] shadow-xs"
                   />
                 ) : null}
-                <span className="relative z-10">{t.label}</span>
+                <span className="relative z-10 truncate block">{tabItem.label}</span>
               </button>
             );
           })}
@@ -703,11 +725,10 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               <div className="rounded-2xl p-4 bg-[var(--k-accent-soft)] border border-[var(--k-border-focus)] space-y-3">
                 <div className="flex items-center gap-2 text-[14px] font-bold text-[var(--k-ink-primary)]">
                   <Key weight="duotone" className="w-5 h-5 text-[var(--k-accent)]" />
-                  Сохрани резервный ключ восстановления
+                  {t('settings.saveRecoveryTitle')}
                 </div>
                 <p className="text-[12.5px] leading-relaxed text-[var(--k-ink-secondary)]">
-                  Этот ключ показывается один раз. Если забудешь секретную фразу, только он сможет
-                  расшифровать твоё хранилище.
+                  {t('settings.saveRecoveryHint')}
                 </p>
                 <div className="k-mono text-[13px] p-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] break-all text-[var(--k-ink-primary)] k-selectable">
                   {shownRecoveryKey}
@@ -719,14 +740,14 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     className="k-tap flex-1 h-10 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[13px] font-semibold inline-flex items-center justify-center gap-1.5"
                   >
                     <Copy className="w-4 h-4" />
-                    Скопировать ключ
+                    {t('settings.copyKeyBtn')}
                   </button>
                   <button
                     type="button"
                     onClick={() => setShownRecoveryKey(null)}
                     className="k-tap px-4 h-10 rounded-xl bg-[var(--k-bg-surface-2)] text-[13px] font-medium text-[var(--k-ink-primary)]"
                   >
-                    Сохранил
+                    {t('settings.savedKeyBtn')}
                   </button>
                 </div>
               </div>
@@ -743,7 +764,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
-                    Облако Kapsula
+                    {t('settings.cloudTitle')}
                   </div>
                   <div className="inline-flex p-0.5 rounded-lg bg-[var(--k-bg-surface-1)] text-[11.5px] shrink-0">
                     <button
@@ -755,7 +776,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           : 'text-[var(--k-ink-muted)]'
                       }`}
                     >
-                      Войти
+                      {t('settings.authSignIn')}
                     </button>
                     <button
                       type="button"
@@ -766,21 +787,20 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           : 'text-[var(--k-ink-muted)]'
                       }`}
                     >
-                      Создать
+                      {t('settings.authSignUp')}
                     </button>
                   </div>
                 </div>
 
                 {!keyboardOpen ? (
                   <p className="text-[12.5px] leading-relaxed text-[var(--k-ink-secondary)]">
-                    Войди тем же аккаунтом, что на Windows или Mac — заметки, карты Сейфа, задачи,
-                    календарь и медиа синхронизируются со сквозным шифрованием.
+                    {t('settings.cloudHint')}
                   </p>
                 ) : null}
 
                 {syncStatus.state === 'awaiting_email_confirm' ? (
                   <div className="rounded-xl p-2.5 bg-[var(--k-amber-soft)] text-[12px] text-[var(--k-amber)]">
-                    Подтверди почту по ссылке из письма, затем нажми «Войти».
+                    {t('settings.emailSentHint')}
                   </div>
                 ) : null}
 
@@ -792,12 +812,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   className="k-tap w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] text-[13.5px] font-semibold text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-2.5 disabled:opacity-50"
                 >
                   <GoogleBrandIcon className="w-4 h-4 shrink-0" />
-                  <span>{googleBusy ? 'Открываю Google…' : 'Войти через Google'}</span>
+                  <span>{googleBusy ? t('settings.openingGoogle') : t('settings.signInGoogle')}</span>
                 </button>
 
                 <div className="flex items-center gap-2.5 text-[11px] text-[var(--k-ink-muted)]">
                   <span className="h-px flex-1 bg-[var(--k-border-hairline)]" />
-                  <span>или по почте</span>
+                  <span>{t('settings.orByEmail')}</span>
                   <span className="h-px flex-1 bg-[var(--k-border-hairline)]" />
                 </div>
 
@@ -810,7 +830,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     emailTouchedRef.current = true;
                     setEmail(e.target.value);
                   }}
-                  placeholder="Электронная почта"
+                  placeholder={t('settings.emailPlaceholder')}
                   className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                 />
                 <input
@@ -819,7 +839,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   data-testid="cloud-password-input"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Пароль аккаунта"
+                  placeholder={t('settings.passwordPlaceholder')}
                   className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                 />
 
@@ -838,12 +858,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                 }`}
               >
                 <div className="text-[14px] font-semibold text-[var(--k-ink-primary)]">
-                  Секретная фраза шифрования
+                  {t('settings.passphraseTitle')}
                 </div>
                 {!keyboardOpen ? (
                   <p className="text-[12.5px] leading-relaxed text-[var(--k-ink-secondary)]">
-                    Защищает все записи и Сейф до отправки в облако. Сервер никогда не видит
-                    открытый текст.
+                    {t('settings.passphraseHint')}
                   </p>
                 ) : null}
                 <input
@@ -851,7 +870,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   required
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Секретная фраза (от 10 символов)"
+                  placeholder={t('settings.passphrasePlaceholder')}
                   className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                 />
                 {passphrase.trim().length > 0 ? (
@@ -883,7 +902,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   required
                   value={passphraseConfirm}
                   onChange={(e) => setPassphraseConfirm(e.target.value)}
-                  placeholder="Повтори секретную фразу"
+                  placeholder={t('settings.passphraseRepeatPlaceholder')}
                   className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                 />
               </form>
@@ -899,7 +918,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
-                    Расшифровать хранилище
+                    {t('settings.decryptTitle')}
                   </div>
                   <button
                     type="button"
@@ -908,7 +927,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     }
                     className="text-[12px] text-[var(--k-accent)] font-medium shrink-0"
                   >
-                    {unlockMode === 'passphrase' ? 'По ключу' : 'По фразе'}
+                    {unlockMode === 'passphrase'
+                      ? t('settings.byRecoveryKey')
+                      : t('settings.byPassphrase')}
                   </button>
                 </div>
 
@@ -918,7 +939,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     required
                     value={passphrase}
                     onChange={(e) => setPassphrase(e.target.value)}
-                    placeholder="Секретная фраза с компьютера"
+                    placeholder={t('settings.desktopPassphrasePlaceholder')}
                     className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                   />
                 ) : (
@@ -935,7 +956,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       type="password"
                       value={newPassAfterRecovery}
                       onChange={(e) => setNewPassAfterRecovery(e.target.value)}
-                      placeholder="Новая фраза от 10 символов (необязательно)"
+                      placeholder={t('settings.newOptionalPassPlaceholder')}
                       className="w-full h-10 px-3.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[14px] text-[var(--k-ink-primary)]"
                     />
                   </>
@@ -969,16 +990,18 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       <div className="min-w-0">
                         <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
                           {syncStatus.state === 'syncing'
-                            ? 'Идёт синхронизация…'
+                            ? t('settings.statusSyncing')
                             : syncStatus.state === 'offline'
-                              ? 'Работаем офлайн'
+                              ? t('settings.statusOffline')
                               : syncStatus.state === 'error'
-                                ? 'Ошибка синхронизации'
-                                : 'Синхронизация активна'}
+                                ? t('settings.statusError')
+                                : t('settings.statusActive')}
                         </div>
                         <div className="text-[12px] text-[var(--k-ink-muted)] truncate">
-                          {formatSyncTimeLabel(syncStatus.lastSyncAt)} · в очереди{' '}
-                          {syncStatus.pendingCount}
+                          {t('settings.syncQueueSummary', {
+                            time: formatSyncTimeLabel(syncStatus.lastSyncAt, locale),
+                            count: syncStatus.pendingCount,
+                          })}
                         </div>
                       </div>
                     </div>
@@ -992,13 +1015,15 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       <ArrowsClockwise
                         className={`w-4 h-4 ${syncStatus.state === 'syncing' ? 'animate-spin' : ''}`}
                       />
-                      Обновить
+                      {t('settings.refresh')}
                     </button>
                   </div>
 
                   {syncStatus.lastReconcileAt ? (
                     <div className="text-[11.5px] text-[var(--k-ink-muted)]">
-                      Сверка: {formatSyncTimeLabel(syncStatus.lastReconcileAt)}
+                      {t('settings.reconcileStamp', {
+                        time: formatSyncTimeLabel(syncStatus.lastReconcileAt, locale),
+                      })}
                     </div>
                   ) : null}
 
@@ -1006,8 +1031,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     <div className="flex items-center gap-2 rounded-xl p-2.5 bg-[var(--k-amber-soft)] text-[12px] text-[var(--k-amber)]">
                       <WarningCircle className="w-4 h-4 shrink-0" />
                       <span>
-                        Отложенных записей: {syncStatus.failedDirtyCount}. Запусти сверку для
-                        повторной отправки.
+                        {t('settings.failedDirtyHint', { count: syncStatus.failedDirtyCount ?? 0 })}
                       </span>
                     </div>
                   ) : null}
@@ -1028,7 +1052,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     <ArrowsClockwise
                       className={`w-3.5 h-3.5 text-[var(--k-accent)] ${reconciling ? 'animate-spin' : ''}`}
                     />
-                    {reconciling ? 'Выполняю сверку…' : 'Сверка синхронизации'}
+                    {reconciling ? t('settings.reconciling') : t('settings.reconcileBtn')}
                   </button>
 
                   <div className="flex items-center gap-2 pt-1 flex-wrap">
@@ -1050,7 +1074,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       }}
                       className="k-tap flex-1 min-w-[120px] h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-primary)]"
                     >
-                      Новый ключ
+                      {t('settings.newRecoveryBtn')}
                     </button>
 
                     <button
@@ -1058,19 +1082,19 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       onClick={() => setShowChangePass((v) => !v)}
                       className="k-tap px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-primary)]"
                     >
-                      Сменить фразу
+                      {t('settings.changePassBtn')}
                     </button>
 
                     <button
                       type="button"
                       onClick={async () => {
                         await syncEngine.signOut();
-                        toast('Вышел из облачного аккаунта');
+                        toast(t('settings.signedOutToast'));
                       }}
                       className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-danger)]"
                     >
                       <SignOut className="w-3.5 h-3.5" />
-                      Выйти
+                      {t('settings.signOutBtn')}
                     </button>
                   </div>
 
@@ -1079,7 +1103,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       onSubmit={async (e) => {
                         e.preventDefault();
                         if (nextPassphrase.trim().length < 10) {
-                          toast.error('Новая секретная фраза должна быть не короче 10 символов');
+                          toast.error(t('settings.newPassMinLenErr'));
                           return;
                         }
                         setBusy(true);
@@ -1092,9 +1116,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             setCurPassphrase('');
                             setNextPassphrase('');
                             setShowChangePass(false);
-                            toast.success('Секретная фраза обновлена');
+                            toast.success(t('settings.passUpdatedToast'));
                           } else {
-                            toast.error(res.error || 'Не удалось сменить фразу');
+                            toast.error(res.error || t('settings.passChangeErr'));
                           }
                         } finally {
                           setBusy(false);
@@ -1107,7 +1131,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         required
                         value={curPassphrase}
                         onChange={(e) => setCurPassphrase(e.target.value)}
-                        placeholder="Текущая секретная фраза"
+                        placeholder={t('settings.currentPassPlaceholder')}
                         className="w-full h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[13px] text-[var(--k-ink-primary)]"
                       />
                       <input
@@ -1115,7 +1139,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         required
                         value={nextPassphrase}
                         onChange={(e) => setNextPassphrase(e.target.value)}
-                        placeholder="Новая секретная фраза (от 10 символов)"
+                        placeholder={t('settings.newPassPlaceholder')}
                         className="w-full h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[13px] text-[var(--k-ink-primary)]"
                       />
                       {nextPassphrase.trim().length > 0 ? (
@@ -1131,7 +1155,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         disabled={busy}
                         className="k-tap w-full h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
                       >
-                        Сохранить новую фразу
+                        {t('settings.saveNewPassBtn')}
                       </button>
                     </form>
                   ) : null}
@@ -1140,7 +1164,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                 {syncStatus.devices.length > 0 ? (
                   <div className="rounded-2xl p-3.5 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-2">
                     <div className="text-[12px] font-semibold text-[var(--k-ink-secondary)]">
-                      Подключённые устройства ({syncStatus.devices.length})
+                      {t('settings.devicesHeading', { count: syncStatus.devices.length })}
                     </div>
                     {syncStatus.devices.map((dev) => {
                       const DevIcon = deviceIcon(dev.platform);
@@ -1156,7 +1180,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             </span>
                             {dev.isCurrent ? (
                               <span className="px-1.5 py-0.5 rounded-md bg-[var(--k-accent-soft)] text-[10.5px] font-medium text-[var(--k-accent)] shrink-0">
-                                это устройство
+                                {t('settings.thisDevice')}
                               </span>
                             ) : null}
                           </div>
@@ -1174,9 +1198,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                 onClick={() => setShowCustomServer((v) => !v)}
                 className="w-full flex items-center justify-between gap-2 text-left text-[12.5px] font-medium text-[var(--k-ink-secondary)]"
               >
-                <span className="truncate">Свой сервер облака</span>
+                <span className="truncate">{t('settings.customServerTitle')}</span>
                 <span className="text-[11.5px] text-[var(--k-ink-muted)] whitespace-nowrap shrink-0">
-                  {syncStatus.hasCustomServer ? 'Свой' : 'По умолчанию'}
+                  {syncStatus.hasCustomServer ? t('settings.customBadge') : t('settings.defaultBadge')}
                 </span>
               </button>
 
@@ -1193,12 +1217,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       setCustomKey('');
                       toast.success(
                         customUrl.trim()
-                          ? 'Подключён свой облачный сервер'
-                          : 'Возвращён стандартный сервер Kapsula'
+                          ? t('settings.customServerConnected')
+                          : t('settings.defaultServerRestored')
                       );
                     } catch (err) {
                       toast.error(
-                        err instanceof Error ? err.message : 'Некорректные параметры сервера'
+                        err instanceof Error ? err.message : t('settings.invalidServerErr')
                       );
                     } finally {
                       setBusy(false);
@@ -1210,14 +1234,14 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     type="url"
                     value={customUrl}
                     onChange={(e) => setCustomUrl(e.target.value)}
-                    placeholder="Адрес облачного сервера (пусто — стандартный)"
+                    placeholder={t('settings.serverUrlPlaceholder')}
                     className="w-full h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[12.5px] text-[var(--k-ink-primary)]"
                   />
                   <input
                     type="password"
                     value={customKey}
                     onChange={(e) => setCustomKey(e.target.value)}
-                    placeholder="Публичный ключ доступа сервера"
+                    placeholder={t('settings.serverKeyPlaceholder')}
                     className="w-full h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] outline-none text-[12.5px] text-[var(--k-ink-primary)]"
                   />
                   <button
@@ -1225,7 +1249,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     disabled={busy}
                     className="k-tap w-full h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] text-[12.5px] font-medium text-[var(--k-ink-primary)]"
                   >
-                    Применить адрес сервера
+                    {t('settings.applyServerBtn')}
                   </button>
                 </form>
               ) : null}
@@ -1245,7 +1269,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         className="w-4 h-4 text-[var(--k-accent)] shrink-0"
                       />
                       <span className="text-[13px] font-semibold text-[var(--k-ink-primary)] truncate">
-                        Обновление приложения
+                        {t('settings.appUpdatesTitle')}
                       </span>
                     </div>
                     <span className="px-2 py-0.5 rounded-md bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[11px] font-medium text-[var(--k-ink-muted)] k-mono shrink-0">
@@ -1256,14 +1280,14 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   <div className="text-[12px] leading-relaxed text-[var(--k-ink-secondary)]">
                     {updateInfo?.status === 'update_available' && updateInfo.latestVersion ? (
                       <span className="text-[var(--k-accent)] font-medium">
-                        Доступна новая версия v{updateInfo.latestVersion}
+                        {t('settings.updateAvailableLabel', { version: updateInfo.latestVersion })}
                       </span>
                     ) : updateInfo?.status === 'up_to_date' ? (
-                      <span>Установлена актуальная версия Kapsula</span>
+                      <span>{t('settings.upToDateLabel')}</span>
                     ) : updateInfo?.status === 'error' && updateInfo.error ? (
                       <span className="text-[var(--k-amber)]">{updateInfo.error}</span>
                     ) : (
-                      <span>Проверяй и устанавливай новые версии Kapsula прямо из приложения</span>
+                      <span>{t('settings.updatesHint')}</span>
                     )}
                   </div>
 
@@ -1276,7 +1300,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         />
                       </div>
                       <div className="text-[11px] text-[var(--k-ink-muted)] text-right k-tabular">
-                        Загрузка: {updateDownloadPercent}%
+                        {t('settings.downloadingPct', { pct: updateDownloadPercent })}
                       </div>
                     </div>
                   ) : null}
@@ -1291,14 +1315,14 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           onClick={() => void onInstallUpdate()}
                           className="k-tap flex-1 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
                         >
-                          {updateInstalling ? 'Загружаю…' : 'Обновить приложение'}
+                          {updateInstalling ? t('settings.downloadingShort') : t('settings.installUpdateBtn')}
                         </button>
                         <button
                           type="button"
                           data-testid="settings-check-updates-btn"
                           disabled={updateChecking || updateInstalling}
                           onClick={() => void onCheckUpdates()}
-                          aria-label="Проверить обновления"
+                          aria-label={t('settings.checkUpdatesAria')}
                           className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] disabled:opacity-50 shrink-0"
                         >
                           <ArrowsClockwise
@@ -1317,7 +1341,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         <ArrowsClockwise
                           className={`w-3.5 h-3.5 text-[var(--k-accent)] ${updateChecking ? 'animate-spin' : ''}`}
                         />
-                        {updateChecking ? 'Проверяю…' : 'Проверить обновления'}
+                        {updateChecking ? t('settings.checkingUpdates') : t('settings.checkUpdatesBtn')}
                       </button>
                     )}
                   </div>
@@ -1332,11 +1356,10 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     className="k-tap w-full h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-2"
                   >
                     <ClipboardText className="w-4 h-4 text-[var(--k-accent)]" />
-                    Скопировать диагностику
+                    {t('settings.copyDiagnosticsBtn')}
                   </button>
                   <p className="text-[11px] leading-relaxed text-[var(--k-ink-muted)]">
-                    Техническая сводка без заметок, паролей, ключей и почты — удобно для
-                    обращения в поддержку.
+                    {t('settings.diagnosticsHint')}
                   </p>
                 </div>
               </>
@@ -1347,10 +1370,47 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
         {/* ==================== APPEARANCE, VAULT & AI TAB ==================== */}
         {section === 'appearance' ? (
           <div className="space-y-4">
+            {/* Language / Язык */}
+            <div
+              data-testid="settings-language-selector"
+              className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-between gap-2.5"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Globe weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                <span className="text-[13.5px] font-semibold text-[var(--k-ink-primary)] truncate">
+                  {t('common.language')}
+                </span>
+              </div>
+              <div className="inline-flex items-center gap-1 p-0.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] shrink-0">
+                {localeOptions.map((opt) => {
+                  const active = locale === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      data-testid={`settings-lang-${opt.id}`}
+                      aria-pressed={active}
+                      onClick={() => {
+                        mobileBridge.haptic('light');
+                        setLocale(opt.id);
+                      }}
+                      className={`k-tap px-2.5 h-8 rounded-lg text-[12px] font-semibold transition-colors ${
+                        active
+                          ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] shadow-xs'
+                          : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Theme */}
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3">
               <div className="text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
-                Тема оформления
+                {t('settings.themeHeading')}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -1367,7 +1427,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   }`}
                 >
                   <Moon weight="duotone" className="w-4 h-4 shrink-0" />
-                  <span>Тёмная</span>
+                  <span>{t('welcome.themeDark')}</span>
                 </button>
                 <button
                   type="button"
@@ -1383,7 +1443,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   }`}
                 >
                   <Sun weight="duotone" className="w-4 h-4 shrink-0" />
-                  <span>Светлая</span>
+                  <span>{t('welcome.themeLight')}</span>
                 </button>
               </div>
             </div>
@@ -1393,7 +1453,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                   <Palette weight="duotone" className="w-4 h-4 text-[var(--k-accent)]" />
-                  Акцентный цвет
+                  {t('settings.accentHeading')}
                 </div>
                 {appearance.accentMode === 'custom' ? (
                   <button
@@ -1407,7 +1467,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     }
                     className="text-[11.5px] text-[var(--k-accent)] font-medium"
                   >
-                    Сбросить
+                    {t('common.reset')}
                   </button>
                 ) : null}
               </div>
@@ -1441,8 +1501,8 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       >
                         {active ? <Check weight="bold" className="w-2.5 h-2.5 text-white" /> : null}
                       </span>
-                      <span className="text-[12.5px] font-medium whitespace-nowrap">
-                        {preset.label}
+                      <span className="text-[12.5px] font-medium whitespace-nowrap truncate">
+                        {getAccentLabel(preset.id, preset.label)}
                       </span>
                     </button>
                   );
@@ -1452,7 +1512,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               {/* Custom Accent Hue + HEX */}
               <div className="pt-2 border-t border-[var(--k-border-hairline)] space-y-2">
                 <div className="flex items-center justify-between text-[11.5px] text-[var(--k-ink-secondary)]">
-                  <span>Свой оттенок</span>
+                  <span>{t('settings.customHue')}</span>
                   <span className="k-mono text-[var(--k-ink-muted)]">{currentAccentHue}°</span>
                 </div>
                 <input
@@ -1460,7 +1520,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   min={0}
                   max={360}
                   value={currentAccentHue}
-                  aria-label="Оттенок акцента"
+                  aria-label={t('settings.accentHueAria')}
                   onChange={(e) => {
                     const hue = Number(e.target.value);
                     const hex = hslToHex(hue, 76, theme === 'dark' ? 58 : 48);
@@ -1478,7 +1538,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     type="text"
                     value={hexDraft}
                     maxLength={7}
-                    aria-label="HEX-код акцента"
+                    aria-label={t('settings.accentHexAria')}
                     onChange={(e) => {
                       const v = e.target.value;
                       setHexDraft(v);
@@ -1498,7 +1558,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3">
               <div className="flex items-center justify-between gap-1.5 min-w-0">
                 <div className="text-[13px] font-semibold text-[var(--k-ink-primary)] whitespace-nowrap shrink-0">
-                  Фон и поверхности
+                  {t('settings.bgHeading')}
                 </div>
                 <div className="flex items-center gap-0.5 shrink-0 -mr-1.5">
                   <button
@@ -1507,7 +1567,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     onClick={() => setShowBgSliders((v) => !v)}
                     className="k-tap min-h-[34px] px-1.5 rounded-lg inline-flex items-center whitespace-nowrap text-[11.5px] text-[var(--k-accent)] font-medium"
                   >
-                    {showBgSliders ? 'Свернуть' : 'Тонкая настройка'}
+                    {showBgSliders ? t('settings.bgCollapse') : t('settings.bgExpand')}
                   </button>
                   {activeBgPreset !== (theme === 'dark' ? 'obsidian' : 'porcelain') ? (
                     <button
@@ -1524,7 +1584,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       }}
                       className="k-tap min-h-[34px] px-1.5 rounded-lg inline-flex items-center whitespace-nowrap text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]"
                     >
-                      Сброс
+                      {t('common.reset')}
                     </button>
                   ) : null}
                 </div>
@@ -1580,7 +1640,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             }}
                           />
                         </span>
-                        <span className="text-[12px] font-medium truncate">{preset.label}</span>
+                        <span className="text-[12px] font-medium truncate">
+                          {getBgLabel(theme, preset.id, preset.label)}
+                        </span>
                       </span>
                       {active ? (
                         <Check weight="bold" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
@@ -1594,7 +1656,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                 <div className="pt-2 border-t border-[var(--k-border-hairline)] space-y-2.5">
                   <div className="space-y-1">
                     <div className="flex justify-between text-[11px] text-[var(--k-ink-secondary)]">
-                      <span>Оттенок фона</span>
+                      <span>{t('settings.bgHue')}</span>
                       <span className="k-mono text-[var(--k-ink-muted)]">{Math.round(activeBgHue)}°</span>
                     </div>
                     <input
@@ -1611,7 +1673,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
 
                   <div className="space-y-1">
                     <div className="flex justify-between text-[11px] text-[var(--k-ink-secondary)]">
-                      <span>Насыщенность тона</span>
+                      <span>{t('settings.bgSaturation')}</span>
                       <span className="k-mono text-[var(--k-ink-muted)]">{Math.round(activeBgTint)}%</span>
                     </div>
                     <input
@@ -1628,7 +1690,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
 
                   <div className="space-y-1">
                     <div className="flex justify-between text-[11px] text-[var(--k-ink-secondary)]">
-                      <span>Яркость фона</span>
+                      <span>{t('settings.bgLightness')}</span>
                       <span className="k-mono text-[var(--k-ink-muted)]">
                         {Math.round(activeBgLightness)}%
                       </span>
@@ -1655,13 +1717,13 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3">
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                 <Rows weight="duotone" className="w-4 h-4 text-[var(--k-accent)]" />
-                Плотность списков
+                {t('settings.densityHeading')}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {(
                   [
-                    { id: 'comfortable', label: 'Комфортная' },
-                    { id: 'compact', label: 'Компактная' },
+                    { id: 'comfortable', label: t('settings.densityComfortable') },
+                    { id: 'compact', label: t('settings.densityCompact') },
                   ] as const
                 ).map((d) => (
                   <button
@@ -1688,7 +1750,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3.5">
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                 <ShieldCheck weight="duotone" className="w-5 h-5 text-[var(--k-emerald)]" />
-                Защита Сейфа
+                {t('settings.vaultSecurityHeading')}
               </div>
 
               <div className="flex items-center justify-between gap-3">
@@ -1696,12 +1758,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   <Fingerprint className="w-5 h-5 text-[var(--k-accent)] shrink-0" />
                   <div className="min-w-0">
                     <div className="text-[13.5px] font-medium text-[var(--k-ink-primary)]">
-                      Вход по отпечатку или лицу
+                      {t('settings.biometricTitle')}
                     </div>
                     <div className="text-[11.5px] text-[var(--k-ink-muted)]">
                       {!biometricEnabled && hasMasterPin && vaultLocked
-                        ? 'Разблокируй Сейф мастер-ПИНом, чтобы включить биометрию'
-                        : 'Блокировать Сейф автоматически при сворачивании'}
+                        ? t('settings.biometricLockedHint')
+                        : t('settings.biometricAutoLockHint')}
                     </div>
                   </div>
                 </div>
@@ -1714,7 +1776,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     }
                     onChangeBiometric(checked);
                   }}
-                  aria-label="Вход по отпечатку или лицу"
+                  aria-label={t('settings.biometricTitle')}
                   className={`k-switch-root${!biometricEnabled && hasMasterPin && vaultLocked ? ' opacity-60' : ''}`}
                 >
                   <Switch.Thumb className="k-switch-thumb" />
@@ -1728,12 +1790,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     <LockKey className="w-5 h-5 text-[var(--k-accent)] shrink-0" />
                     <div className="min-w-0">
                       <div className="text-[13.5px] font-medium text-[var(--k-ink-primary)]">
-                        Мастер-ПИН Сейфа
+                        {t('settings.masterPinTitle')}
                       </div>
                       <div className="text-[11.5px] text-[var(--k-ink-muted)]">
                         {hasMasterPin
-                          ? 'Активен · резервный вход без биометрии'
-                          : 'Запасной вход, если биометрия недоступна'}
+                          ? t('settings.masterPinActiveHint')
+                          : t('settings.masterPinEmptyHint')}
                       </div>
                     </div>
                   </div>
@@ -1743,7 +1805,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     onClick={() => setPinEditorOpen((v) => !v)}
                     className="k-tap px-3 h-8 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12px] font-medium text-[var(--k-ink-primary)] shrink-0"
                   >
-                    {hasMasterPin ? 'Изменить' : 'Задать'}
+                    {hasMasterPin ? t('settings.changeBtn') : t('settings.setBtn')}
                   </button>
                 </div>
 
@@ -1759,7 +1821,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         data-testid="settings-current-pin-input"
                         value={currentPin}
                         onChange={(e) => setCurrentPin(e.target.value)}
-                        placeholder="Текущий мастер-ПИН"
+                        placeholder={t('settings.currentPinPlaceholder')}
                         className="w-full h-9 px-3 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[13.5px] text-[var(--k-ink-primary)] placeholder:tracking-normal"
                       />
                     ) : null}
@@ -1768,7 +1830,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       inputMode="numeric"
                       value={newPin}
                       onChange={(e) => setNewPin(e.target.value)}
-                      placeholder="Новый мастер-ПИН (от 4 символов)"
+                      placeholder={t('settings.newPinPlaceholder')}
                       className="w-full h-9 px-3 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none k-mono text-[13.5px] text-[var(--k-ink-primary)] placeholder:tracking-normal"
                     />
                     <input
@@ -1776,7 +1838,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       inputMode="numeric"
                       value={confirmPin}
                       onChange={(e) => setConfirmPin(e.target.value)}
-                      placeholder="Повтори мастер-ПИН"
+                      placeholder={t('settings.repeatPinPlaceholder')}
                       className="w-full h-9 px-3 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] outline-none k-mono text-[13.5px] text-[var(--k-ink-primary)] placeholder:tracking-normal"
                     />
                     <div className="flex items-center gap-2">
@@ -1785,7 +1847,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                         disabled={pinSaving}
                         className="k-tap flex-1 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
                       >
-                        Сохранить ПИН
+                        {t('settings.savePinBtn')}
                       </button>
                       {hasMasterPin ? (
                         <button
@@ -1795,7 +1857,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           onClick={() => void handleRemoveMasterPinClick()}
                           className="k-tap px-3 h-9 rounded-xl bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12px] font-medium disabled:opacity-50"
                         >
-                          Убрать
+                          {t('settings.removePinBtn')}
                         </button>
                       ) : null}
                     </div>
@@ -1807,30 +1869,32 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               <div className="space-y-1.5 pt-2.5 border-t border-[var(--k-border-hairline)]">
                 <div className="flex items-center gap-1.5 text-[12.5px] text-[var(--k-ink-secondary)]">
                   <Timer className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                  Автоблокировка Сейфа при бездействии
+                  {t('settings.autoLockLabel')}
                 </div>
                 <div className="grid grid-cols-5 gap-1.5">
-                  {AUTO_LOCK_OPTIONS.map((opt) => {
+                  {AUTO_LOCK_VALUES.map((val) => {
                     const lockedOffBlocked =
-                      opt.value === 0 && (hasMasterPin || biometricEnabled) && vaultLocked;
+                      val === 0 && (hasMasterPin || biometricEnabled) && vaultLocked;
+                    const optLabel =
+                      val === 0 ? t('settings.autoLockOff') : t('settings.autoLockMin', { min: val });
                     return (
                       <button
-                        key={opt.value}
+                        key={val}
                         type="button"
-                        data-testid={`settings-autolock-${opt.value}`}
+                        data-testid={`settings-autolock-${val}`}
                         onClick={() => {
                           if (!lockedOffBlocked) {
                             mobileBridge.haptic('light');
                           }
-                          onChangeAutoLockMinutes(opt.value);
+                          onChangeAutoLockMinutes(val);
                         }}
                         className={`k-tap h-9 rounded-xl border text-[12px] font-medium ${
-                          autoLockMinutes === opt.value
+                          autoLockMinutes === val
                             ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
                             : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                         }${lockedOffBlocked ? ' opacity-60' : ''}`}
                       >
-                        {opt.label}
+                        {optLabel}
                       </button>
                     );
                   })}
@@ -1840,7 +1904,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               {/* Clipboard Auto-Wipe */}
               <div className="space-y-1.5 pt-2.5 border-t border-[var(--k-border-hairline)]">
                 <div className="text-[12.5px] text-[var(--k-ink-secondary)]">
-                  Автоочистка буфера после копирования пароля, 2FA или карты
+                  {t('settings.clipboardWipeLabel')}
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {[15, 30, 60].map((sec) => (
@@ -1857,7 +1921,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
                       }`}
                     >
-                      {sec} с
+                      {t('common.secondsShort', { count: sec })}
                     </button>
                   ))}
                 </div>
@@ -1872,11 +1936,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                   <Sparkle weight="duotone" className="w-4 h-4 text-[var(--k-accent)]" />
-                  ИИ для голоса и заметок
+                  {t('settings.aiHeading')}
                 </div>
                 {currentProviderHasKey && aiProviderDraft !== 'local' ? (
                   <span className="px-2 py-0.5 rounded-md bg-[var(--k-emerald-soft)] text-[10.5px] font-medium text-[var(--k-emerald)] shrink-0">
-                    Ключ сохранён
+                    {t('settings.aiKeySavedBadge')}
                   </span>
                 ) : null}
               </div>
@@ -1888,11 +1952,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[12.5px] font-semibold text-[var(--k-ink-primary)]">
-                    Встроенный ИИ Kapsula
+                    {anyAiKeySaved ? t('settings.aiCustomActiveTitle') : t('settings.aiBuiltinTitle')}
                   </span>
                   {anyAiKeySaved ? (
                     <span className="px-2 py-0.5 rounded-md bg-[var(--k-accent-soft)] text-[10.5px] font-medium text-[var(--k-accent)] shrink-0">
-                      Личный ключ
+                      {t('settings.aiPersonalBadge')}
                     </span>
                   ) : isCloudAccountSignedIn ? (
                     <span
@@ -1909,20 +1973,19 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       (cloudAiQuota.blocked ||
                         cloudAiQuota.globalExhausted ||
                         cloudAiQuota.remainingUsd <= 0)
-                        ? 'Лимит исчерпан'
-                        : 'Активен'}
+                        ? t('settings.aiQuotaExhausted')
+                        : t('settings.aiActiveBadge')}
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[10.5px] font-medium text-[var(--k-ink-muted)] shrink-0">
-                      Нужен вход
+                      {t('settings.aiSignInNeededBadge')}
                     </span>
                   )}
                 </div>
 
                 {anyAiKeySaved ? (
                   <p className="text-[11.5px] leading-relaxed text-[var(--k-ink-muted)]">
-                    Работает через твой личный ключ без месячного лимита. Удали ключ ниже, чтобы
-                    вернуться ко встроенному ИИ.
+                    {t('settings.aiPersonalActiveHint')}
                   </p>
                 ) : isCloudAccountSignedIn ? (
                   <>
@@ -1946,8 +2009,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           </div>
                           <div className="text-[11.5px] text-[var(--k-ink-secondary)]">
                             {cloudAiQuotaLoading && !cloudAiQuota
-                              ? 'Загружаю статус квоты…'
-                              : `Потрачено ${formatUsdRu(spent)} из ${formatUsdRu(limit)} в этом месяце`}
+                              ? t('settings.aiQuotaLoading')
+                              : t('settings.aiQuotaUsage', {
+                                  spent: formatUsd(spent),
+                                  limit: formatUsd(limit),
+                                })}
                           </div>
                         </div>
                       );
@@ -1955,21 +2021,19 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   </>
                 ) : (
                   <p className="text-[11.5px] leading-relaxed text-[var(--k-ink-muted)]">
-                    Войди в Облако Kapsula, чтобы расшифровывать голос и выделять задачи без
-                    настройки ключей (до $1,00 в месяц), или добавь свой ключ ниже.
+                    {t('settings.aiSignInPrompt')}
                   </p>
                 )}
               </div>
 
               <p className="text-[12px] leading-relaxed text-[var(--k-ink-muted)]">
-                Свой ключ необязателен — он снимает месячный лимит и хранится только на твоём
-                устройстве.
+                {t('settings.aiKeyOptionalHint')}
               </p>
 
               <div className="grid grid-cols-3 gap-1.5">
                 {(
                   [
-                    { id: 'local', label: 'Встроенный' },
+                    { id: 'local', label: t('settings.aiProviderBuiltin') },
                     { id: 'google_ai_studio', label: 'Gemini' },
                     { id: 'openrouter', label: 'OpenRouter' },
                   ] as const
@@ -1997,10 +2061,10 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   onChange={(e) => setAiKeyDraft(e.target.value)}
                   placeholder={
                     currentProviderHasKey
-                      ? 'Ключ уже задан (введи новый для замены)'
+                      ? t('settings.aiKeySetPlaceholder')
                       : aiProviderDraft === 'google_ai_studio'
-                        ? 'API-ключ Google AI (AIza…)'
-                        : 'API-ключ OpenRouter (sk-or-…)'
+                        ? t('settings.aiGoogleKeyPlaceholder')
+                        : t('settings.aiOpenRouterKeyPlaceholder')
                   }
                   className="w-full h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[12.5px] text-[var(--k-ink-primary)]"
                 />
@@ -2012,7 +2076,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   disabled={aiSaving}
                   className="k-tap flex-1 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
                 >
-                  {aiSaving ? 'Сохраняю…' : 'Сохранить настройки ИИ'}
+                  {aiSaving ? t('settings.aiSaving') : t('settings.aiSaveBtn')}
                 </button>
                 {anyAiKeySaved ? (
                   <button
@@ -2025,11 +2089,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       });
                       setAiProviderDraft('local');
                       setAiKeyDraft('');
-                      toast('Ключ ИИ удалён');
+                      toast(t('settings.aiKeyRemoved'));
                     }}
                     className="k-tap px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12px] text-[var(--k-danger)]"
                   >
-                    Сбросить
+                    {t('common.reset')}
                   </button>
                 ) : null}
               </div>
@@ -2044,7 +2108,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3">
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                 <FolderSimple className="w-4 h-4 text-[var(--k-accent)]" />
-                Разделы ({orbits.length})
+                {t('settings.orbitsHeading', { count: orbits.length })}
               </div>
 
               <form
@@ -2054,7 +2118,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   await onCreateOrbit(newOrbitName.trim(), newOrbitColor);
                   setNewOrbitName('');
                   mobileBridge.haptic('success');
-                  toast.success('Раздел создан');
+                  toast.success(t('settings.orbitCreated'));
                 }}
                 className="flex items-center gap-2"
               >
@@ -2063,13 +2127,13 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   data-testid="settings-new-orbit-input"
                   value={newOrbitName}
                   onChange={(e) => setNewOrbitName(e.target.value)}
-                  placeholder="Новый раздел…"
+                  placeholder={t('settings.newOrbitPlaceholder')}
                   className="flex-1 h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
                 />
                 <button
                   type="submit"
                   disabled={!newOrbitName.trim()}
-                  aria-label="Создать раздел"
+                  aria-label={t('settings.createOrbitAria')}
                   className="k-tap inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] disabled:opacity-40"
                 >
                   <Plus weight="bold" className="w-4 h-4" />
@@ -2111,7 +2175,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             color: editOrbitColor,
                           });
                           setEditingOrbitId(null);
-                          toast.success('Раздел обновлён');
+                          toast.success(t('common.orbitUpdated'));
                         }}
                         className="p-2.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-focus)] space-y-2"
                       >
@@ -2126,7 +2190,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           <button
                             type="submit"
                             className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)]"
-                            aria-label="Сохранить"
+                            aria-label={t('common.save')}
                           >
                             <Check weight="bold" className="w-4 h-4" />
                           </button>
@@ -2134,7 +2198,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             type="button"
                             onClick={() => setEditingOrbitId(null)}
                             className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
-                            aria-label="Отмена"
+                            aria-label={t('common.cancel')}
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -2187,7 +2251,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             setEditOrbitName(o.name);
                             setEditOrbitColor(o.color);
                           }}
-                          aria-label="Редактировать раздел"
+                          aria-label={t('settings.editOrbitAria')}
                           className="k-tap p-1.5 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]"
                         >
                           <PencilSimple className="w-4 h-4" />
@@ -2196,9 +2260,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           type="button"
                           onClick={() => {
                             void onDeleteOrbit(o.id);
-                            toast('Раздел удалён');
+                            toast(t('settings.orbitDeleted'));
                           }}
-                          aria-label="Удалить раздел"
+                          aria-label={t('settings.deleteOrbitAria')}
                           className="k-tap p-1.5 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)]"
                         >
                           <Trash className="w-4 h-4" />
@@ -2210,11 +2274,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               </div>
             </div>
 
-            {/* Canvases (Холсты) */}
+            {/* Canvases */}
             <div className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3">
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                 <Swatches className="w-4 h-4 text-[var(--k-emerald)]" />
-                Холсты ({boards.length})
+                {t('settings.boardsHeading', { count: boards.length })}
               </div>
 
               <form
@@ -2224,7 +2288,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   await onCreateBoard(newBoardName.trim(), newBoardColor);
                   setNewBoardName('');
                   mobileBridge.haptic('success');
-                  toast.success('Холст создан');
+                  toast.success(t('settings.boardCreated'));
                 }}
                 className="flex items-center gap-2"
               >
@@ -2232,13 +2296,13 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   type="text"
                   value={newBoardName}
                   onChange={(e) => setNewBoardName(e.target.value)}
-                  placeholder="Новый холст…"
+                  placeholder={t('settings.newBoardPlaceholder')}
                   className="flex-1 h-10 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none text-[13.5px] text-[var(--k-ink-primary)]"
                 />
                 <button
                   type="submit"
                   disabled={!newBoardName.trim()}
-                  aria-label="Создать холст"
+                  aria-label={t('settings.createBoardAria')}
                   className="k-tap inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] disabled:opacity-40"
                 >
                   <Plus weight="bold" className="w-4 h-4" />
@@ -2280,7 +2344,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             color: editBoardColor,
                           });
                           setEditingBoardId(null);
-                          toast.success('Холст обновлён');
+                          toast.success(t('common.boardUpdated'));
                         }}
                         className="p-2.5 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-focus)] space-y-2"
                       >
@@ -2295,7 +2359,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           <button
                             type="submit"
                             className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)]"
-                            aria-label="Сохранить"
+                            aria-label={t('common.save')}
                           >
                             <Check weight="bold" className="w-4 h-4" />
                           </button>
@@ -2303,7 +2367,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             type="button"
                             onClick={() => setEditingBoardId(null)}
                             className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]"
-                            aria-label="Отмена"
+                            aria-label={t('common.cancel')}
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -2357,7 +2421,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             setEditBoardName(b.name);
                             setEditBoardColor(b.color);
                           }}
-                          aria-label="Редактировать холст"
+                          aria-label={t('settings.editBoardAria')}
                           className="k-tap p-2 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]"
                         >
                           <PencilSimple className="w-4 h-4" />
@@ -2366,9 +2430,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           type="button"
                           onClick={() => {
                             void onDeleteBoard(b.id);
-                            toast('Холст удалён');
+                            toast(t('settings.boardDeleted'));
                           }}
-                          aria-label="Удалить холст"
+                          aria-label={t('settings.deleteBoardAria')}
                           className="k-tap p-2 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)]"
                         >
                           <Trash className="w-4 h-4" />
@@ -2380,20 +2444,19 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               </div>
             </div>
 
-            {/* Archive (Архив) — View & Unarchive items archived on Desktop/Mac */}
+            {/* Archive — View & Unarchive items archived on Desktop/Mac */}
             <div
               data-testid="settings-archive-section"
               className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3"
             >
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                 <Archive className="w-4 h-4 text-[var(--k-accent)]" />
-                Архив ({archivedItems.length})
+                {t('settings.archiveHeading', { count: archivedItems.length })}
               </div>
 
               {archivedItems.length === 0 ? (
                 <p className="text-[12.5px] text-[var(--k-ink-muted)]">
-                  Архив пуст. Записи, убранные в архив на ПК или Mac, появятся здесь — их можно
-                  вернуть в ленту в любой момент.
+                  {t('settings.archiveEmptyHint')}
                 </p>
               ) : (
                 <div className="space-y-1.5">
@@ -2407,10 +2470,10 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       >
                         <div className="min-w-0 flex-1">
                           <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-                            {it.title || 'Без названия'}
+                            {it.title || t('common.noTitle')}
                           </div>
                           <div className="text-[11px] text-[var(--k-ink-muted)] truncate">
-                            {getDnaHumanLabel(it)}
+                            {getDnaLabel(it.dna, it.subKind)}
                             {it.updatedAt ? ` · ${formatRelativeDate(it.updatedAt)}` : ''}
                           </div>
                         </div>
@@ -2422,16 +2485,16 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                             try {
                               await onUnarchiveItem(it.id);
                               mobileBridge.haptic('success');
-                              toast.success('Возвращено из архива');
+                              toast.success(t('settings.unarchivedToast'));
                             } finally {
                               setArchiveBusyId(null);
                             }
                           }}
-                          aria-label="Вернуть из архива"
+                          aria-label={t('settings.unarchiveAria')}
                           className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[11.5px] font-medium shrink-0"
                         >
                           <ArrowCounterClockwise className="w-3.5 h-3.5" />
-                          Вернуть
+                          {t('common.restore')}
                         </button>
                       </div>
                     );
@@ -2440,7 +2503,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               )}
             </div>
 
-            {/* Trash (Корзина) — Restore / Purge Permanently / Empty Trash */}
+            {/* Trash — Restore / Purge Permanently / Empty Trash */}
             <div
               data-testid="settings-trash-section"
               className="rounded-2xl p-4 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] space-y-3"
@@ -2448,7 +2511,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--k-ink-primary)]">
                   <Trash className="w-4 h-4 text-[var(--k-danger)]" />
-                  Корзина ({trashedItems.length})
+                  {t('settings.trashHeading', { count: trashedItems.length })}
                 </div>
                 {trashedItems.length > 0 ? (
                   confirmEmptyTrash ? (
@@ -2461,19 +2524,21 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                           setConfirmEmptyTrash(false);
                           mobileBridge.haptic('medium');
                           toast.success(
-                            `Корзина очищена (${pluralRu(count, 'запись', 'записи', 'записей')})`
+                            t('settings.trashEmptiedToast', {
+                              count: plural('item', count),
+                            })
                           );
                         }}
                         className="k-tap px-2.5 h-7 rounded-lg bg-[var(--k-danger)] text-white text-[11.5px] font-semibold"
                       >
-                        Очистить навсегда
+                        {t('settings.emptyTrashConfirmBtn')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConfirmEmptyTrash(false)}
                         className="k-tap px-2 h-7 rounded-lg bg-[var(--k-bg-surface-1)] text-[11.5px] text-[var(--k-ink-secondary)]"
                       >
-                        Отмена
+                        {t('common.cancel')}
                       </button>
                     </div>
                   ) : (
@@ -2483,7 +2548,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       onClick={() => setConfirmEmptyTrash(true)}
                       className="k-tap px-2.5 h-7 rounded-lg bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[11.5px] font-medium"
                     >
-                      Очистить корзину
+                      {t('settings.emptyTrashBtn')}
                     </button>
                   )
                 ) : null}
@@ -2491,8 +2556,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
 
               {trashedItems.length === 0 ? (
                 <p className="text-[12.5px] text-[var(--k-ink-muted)]">
-                  Корзина пуста. Удалённые записи и секреты попадают сюда и могут быть восстановлены
-                  или стёрты навсегда на всех устройствах.
+                  {t('settings.trashEmptyHint')}
                 </p>
               ) : (
                 <div className="space-y-1.5">
@@ -2506,11 +2570,13 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       >
                         <div className="min-w-0 flex-1">
                           <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-                            {it.title || 'Без названия'}
+                            {it.title || t('common.noTitle')}
                           </div>
                           <div className="text-[11px] text-[var(--k-ink-muted)] truncate">
-                            {getDnaHumanLabel(it)}
-                            {it.deletedAt ? ` · удалено ${formatRelativeDate(it.deletedAt)}` : ''}
+                            {getDnaLabel(it.dna, it.subKind)}
+                            {it.deletedAt
+                              ? ` · ${t('settings.deletedRelative', { time: formatRelativeDate(it.deletedAt) })}`
+                              : ''}
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -2522,16 +2588,16 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                               try {
                                 await onRestoreTrashedItem(it.id);
                                 mobileBridge.haptic('success');
-                                toast.success('Восстановлено из корзины');
+                                toast.success(t('settings.restoredFromTrashToast'));
                               } finally {
                                 setTrashBusyId(null);
                               }
                             }}
-                            aria-label="Восстановить"
+                            aria-label={t('common.restoreAria')}
                             className="k-tap inline-flex items-center gap-1 px-2.5 h-8 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[11.5px] font-medium"
                           >
                             <ArrowCounterClockwise className="w-3.5 h-3.5" />
-                            Вернуть
+                            {t('common.restore')}
                           </button>
                           <button
                             type="button"
@@ -2541,12 +2607,12 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                               try {
                                 await onPurgeTrashedItem(it.id);
                                 mobileBridge.haptic('medium');
-                                toast('Удалено навсегда');
+                                toast(t('settings.purgedToast'));
                               } finally {
                                 setTrashBusyId(null);
                               }
                             }}
-                            aria-label="Удалить навсегда"
+                            aria-label={t('common.purgeAria')}
                             className="k-tap inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--k-danger-soft)] text-[var(--k-danger)]"
                           >
                             <Trash className="w-3.5 h-3.5" />
