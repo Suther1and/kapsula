@@ -1,0 +1,161 @@
+name: Build Kapsula Windows (.exe)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows NSIS Installer (.exe)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build & package Windows NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --win nsis --x64 "-c.win.signExecutable=false" "-c.win.verifyUpdateCodeSignature=false" --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify installer, latest.yml, blockmap, PE icon & SHA-256
+        shell: bash
+        run: |
+          node --input-type=module << 'EOF'
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+          import { createRequire } from 'node:module';
+          import path from 'node:path';
+
+          const require = createRequire(import.meta.url);
+          const releaseDir = path.resolve('release');
+          const entries = fs.readdirSync(releaseDir);
+
+          const installers = entries.filter((f) => /^Kapsula-Setup-.*\.exe$/i.test(f));
+          if (installers.length !== 1) {
+            throw new Error(`Expected exactly 1 Kapsula-Setup-*.exe in release/, found: ${JSON.stringify(installers)}`);
+          }
+          const installerName = installers[0];
+          const blockmapName = `${installerName}.blockmap`;
+          if (!entries.includes(blockmapName)) {
+            throw new Error(`Missing blockmap: release/${blockmapName}`);
+          }
+          if (!entries.includes('latest.yml')) {
+            throw new Error('Missing release/latest.yml required for electron-updater');
+          }
+
+          const latestYml = fs.readFileSync(path.join(releaseDir, 'latest.yml'), 'utf8');
+          for (const key of ['version:', 'path:', 'sha512:']) {
+            if (!latestYml.includes(key)) {
+              throw new Error(`release/latest.yml is missing required field "${key}"`);
+            }
+          }
+
+          const appUpdateYmlPath = path.join(releaseDir, 'win-unpacked', 'resources', 'app-update.yml');
+          if (!fs.existsSync(appUpdateYmlPath)) {
+            throw new Error(`Missing ${appUpdateYmlPath} required for in-app auto-updates`);
+          }
+          const appUpdateYml = fs.readFileSync(appUpdateYmlPath, 'utf8');
+          if (!appUpdateYml.includes('provider: github') || !appUpdateYml.includes('repo: kapsula')) {
+            throw new Error(`Unexpected app-update.yml contents:\n${appUpdateYml}`);
+          }
+
+          // Verify win-unpacked/Kapsula.exe has build/icon.ico embedded (never default Electron icon)
+          const unpackedExe = path.join(releaseDir, 'win-unpacked', 'Kapsula.exe');
+          const iconPath = path.resolve('build', 'icon.ico');
+          if (!fs.existsSync(unpackedExe)) {
+            throw new Error(`Missing unpacked executable at ${unpackedExe}`);
+          }
+          const appBuilderPkg = require.resolve('app-builder-lib/package.json');
+          const resedit = createRequire(appBuilderPkg)('resedit');
+          const exeParsed = resedit.NtExecutable.from(fs.readFileSync(unpackedExe));
+          const exeRes = resedit.NtExecutableResource.from(exeParsed);
+          const iconGroups = resedit.Resource.IconGroupEntry.fromEntries(exeRes.entries);
+          const expectedIcon = resedit.Data.IconFile.from(fs.readFileSync(iconPath));
+          if (iconGroups.length === 0 || iconGroups[0].icons.length !== expectedIcon.icons.length) {
+            throw new Error(
+              `Embedded PE icon mismatch in Kapsula.exe: found ${iconGroups[0]?.icons.length ?? 0} entries, expected ${expectedIcon.icons.length}`
+            );
+          }
+
+          const filesToHash = [installerName, blockmapName, 'latest.yml'];
+          const lines = filesToHash.map((name) => {
+            const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(releaseDir, name))).digest('hex');
+            return `${hash}  ${name}`;
+          });
+          fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS-windows.txt'), lines.join('\n') + '\n', 'utf8');
+
+          const sizeMb = (fs.statSync(path.join(releaseDir, installerName)).size / (1024 * 1024)).toFixed(2);
+          console.log(`[verify-windows] Installer: ${installerName} (${sizeMb} MB)`);
+          console.log(`[verify-windows] PE icon verified (${iconGroups[0].icons.length} sizes matching build/icon.ico)`);
+          console.log('--- release/latest.yml ---');
+          console.log(latestYml.trim());
+          console.log('--- release/SHA256SUMS-windows.txt ---');
+          console.log(lines.join('\n'));
+          EOF
+
+      - name: Upload Windows installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kapsula-Windows-installer
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/SHA256SUMS-windows.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Ensure GitHub Release exists (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            EXTRA_ARGS=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              EXTRA_ARGS+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" --title "Kapsula $RELEASE_TAG" --generate-notes "${EXTRA_ARGS[@]}" || true
+          fi
+
+      - name: Attach Windows installer to GitHub Release (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/SHA256SUMS-windows.txt

@@ -1,0 +1,185 @@
+import React, { useState } from 'react';
+import { ArrowSquareOut, GlobeSimple, PaperPlaneTilt } from '@phosphor-icons/react';
+import type { VaultItem } from '@shared/types';
+import { cleanBrokenTextArtifacts } from '@shared/html-entities';
+import { getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
+import { CopySlotPill } from '../ui/CopySlotPill';
+import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
+
+interface SmartLinkCardProps {
+  item: VaultItem;
+  compactList?: boolean;
+}
+
+const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
+
+export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
+  item,
+  compactList = false,
+}) => {
+  const [bannerError, setBannerError] = useState(false);
+
+  // Use local cached kapsula-media:// paths (remote ogImageUrl is blocked by CSP)
+  const localBannerSrc = getMediaUrl(item.thumbPath || item.imagePath);
+  const hasVideo = Boolean(item.mediaPath && VIDEO_PATH_RE.test(item.mediaPath));
+  const showBanner = Boolean(localBannerSrc) && !hasVideo && !bannerError && !compactList;
+
+  const hostLabel =
+    item.domain ||
+    (item.url ? item.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : 'Ссылка');
+
+  const platformBadge =
+    item.platform === 'telegram'
+      ? 'Telegram'
+      : item.platform === 'x'
+        ? 'X'
+        : item.platform === 'youtube'
+          ? 'YouTube'
+          : item.platform === 'github'
+            ? 'GitHub'
+            : item.platform === 'instagram'
+              ? 'Instagram'
+              : hostLabel;
+
+  const cleanTitle = cleanBrokenTextArtifacts(item.title || item.url || 'Сохранённая ссылка', true);
+  const rawPreview = cleanBrokenTextArtifacts(
+    stripMarkdownPreview(
+      item.summary && item.summary !== item.title
+        ? item.summary
+        : item.body && item.body !== item.url
+          ? item.body
+          : ''
+    ),
+    true
+  );
+  const cleanPreview = stripLeadingTitle(rawPreview, cleanTitle);
+
+  const itemChannel = (() => {
+    const m = /^https?:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([a-zA-Z0-9_]{3,})/i.exec(item.url || '');
+    return m?.[1]?.toLowerCase() ?? null;
+  })();
+
+  const embeddedLinks = (item.extractedActions ?? [])
+    .filter((a) => {
+      if (a.type !== 'url' || a.value === item.url) return false;
+      const lbl = (a.label || '').toLowerCase();
+      if (/подписаться|subscribe|прислать новость|наш канал|бот обратной/i.test(lbl)) return false;
+      if (itemChannel && /^https?:\/\/(?:t\.me|telegram\.me)\//i.test(a.value)) {
+        const sub = /^https?:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([a-zA-Z0-9_]{3,})(?:\/(\d+))?/i.exec(a.value);
+        // Strip self-channel root links (`t.me/channel`) & invite links (`t.me/+...`)
+        if (a.value.includes('t.me/+') || (sub && sub[1]?.toLowerCase() === itemChannel && !sub[2])) {
+          return false;
+        }
+      }
+      return true;
+    })
+    .slice(0, 2);
+
+  if (compactList) {
+    return (
+      <div className="flex items-center justify-between gap-3 min-w-0 flex-1">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--k-ink-muted)]">
+            <GlobeSimple className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
+            <span className="truncate">{platformBadge}</span>
+          </div>
+          <div className="text-[13.5px] font-semibold text-[var(--k-ink-primary)] truncate">
+            {cleanTitle}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      {hasVideo && item.mediaPath ? (
+        <InlineReferenceVideo
+          mediaPath={item.mediaPath}
+          posterPath={item.thumbPath || item.imagePath}
+          heightClass="max-h-[190px]"
+        />
+      ) : showBanner ? (
+        <div className="rounded-xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] max-h-[168px]">
+          <img
+            src={localBannerSrc!}
+            alt={cleanTitle}
+            onError={() => setBannerError(true)}
+            className="w-full h-[156px] object-cover block"
+          />
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2 text-[11.5px] font-medium text-[var(--k-ink-muted)]">
+        <span className="inline-flex items-center gap-1.5 min-w-0">
+          {item.platform === 'telegram' ? (
+            <PaperPlaneTilt weight="duotone" className="w-3.5 h-3.5 text-[var(--k-info)] shrink-0" />
+          ) : (
+            <GlobeSimple weight="duotone" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
+          )}
+          <span className="truncate">{platformBadge}</span>
+        </span>
+        {item.mediaMeta?.forwardAuthor ? (
+          <span
+            data-testid="smart-link-author"
+            className="truncate text-[11px] max-w-[130px]"
+          >
+            {item.mediaMeta.forwardAuthor}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] leading-snug line-clamp-2">
+        {cleanTitle}
+      </div>
+
+      {cleanPreview && cleanPreview !== cleanTitle ? (
+        <p className="m-0 text-[12.5px] text-[var(--k-ink-secondary)] line-clamp-3 leading-relaxed">
+          {cleanPreview}
+        </p>
+      ) : null}
+
+      {embeddedLinks.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {embeddedLinks.map((act) => (
+            <button
+              key={act.value}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void window.kapsula.openExternal(act.value);
+              }}
+              className="k-interactive inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-md border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11px] text-[var(--k-accent)] hover:border-[var(--k-accent)]/60 cursor-pointer"
+            >
+              <span className="truncate">{act.label}</span>
+              <ArrowSquareOut className="w-2.5 h-2.5 shrink-0" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {item.url ? (
+        <div className="flex items-center justify-start gap-2 pt-0.5">
+          <CopySlotPill
+            label="Ссылка"
+            copiedLabel="Готово"
+            widthPx={88}
+            heightPx={28}
+            onCopy={() => window.kapsula.copyText(item.url!)}
+          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void window.kapsula.openExternal(item.url!);
+            }}
+            className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-accent)] hover:text-[var(--k-accent)] cursor-pointer"
+          >
+            <span>Открыть</span>
+            <ArrowSquareOut className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+};

@@ -1,0 +1,101 @@
+name: Build Kapsula macOS (.dmg)
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Целевая архитектура macOS'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - arm64
+          - x64
+          - universal
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build macOS DMG (${{ github.event.inputs.arch || 'both' }})
+    runs-on: macos-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Package macOS .dmg
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          TARGET_ARCH: ${{ github.event.inputs.arch || 'both' }}
+        run: |
+          node scripts/pack-mac.mjs --arch="$TARGET_ARCH"
+
+      - name: Verify generated .dmg artifacts
+        env:
+          TARGET_ARCH: ${{ github.event.inputs.arch || 'both' }}
+        run: |
+          ls -lh release/*.dmg
+          if [ "$TARGET_ARCH" = "both" ]; then
+            ls release/*-arm64.dmg >/dev/null
+            ls release/*-x64.dmg >/dev/null
+          fi
+          (cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt)
+          cat release/SHA256SUMS-macos.txt
+
+      - name: Upload .dmg artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kapsula-macOS-dmg
+          path: |
+            release/*.dmg
+            release/SHA256SUMS-macos.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Ensure GitHub Release exists (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            EXTRA_ARGS=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              EXTRA_ARGS+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" --title "Kapsula $RELEASE_TAG" --generate-notes "${EXTRA_ARGS[@]}" || true
+          fi
+
+      - name: Attach .dmg to GitHub Release (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            release/*.dmg
+            release/SHA256SUMS-macos.txt

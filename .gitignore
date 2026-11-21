@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build & release artifacts
+dist/
+dist-electron/
+release/
+release-*/
+coverage/
+test-results/
+
+# Local scratch & tooling
+.tmp/
+.impeccable/
+*.log
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.*
+keystore-env.json
+android/local.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.dpapi
+
+# Local databases & backups
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+
+# Internal local workflow state
+_bmad/custom/*.user.toml
+_bmad/render/

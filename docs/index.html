@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kapsula — заметки, задачи и зашифрованный Сейф</title>
+  <meta
+    name="description"
+    content="Локальное приложение для заметок, канбан-задач, быстрой панели Alt + Space и зашифрованного Сейфа с 2FA. Windows, macOS и Android со сквозным шифрованием."
+  />
+  <meta name="theme-color" content="#0e0e11" id="meta-theme-color" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Kapsula — спокойное место для заметок, задач и Сейфа" />
+  <meta
+    property="og:description"
+    content="Локальное приложение для Windows, macOS и Android: заметки, быстрая панель по горячей клавише, канбан-доска и зашифрованный Сейф с 2FA."
+  />
+  <meta property="og:image" content="assets/hero-feed-dark.png" />
+  <link rel="icon" type="image/png" href="assets/kapsula-icon.png" />
+  <link rel="apple-touch-icon" href="assets/kapsula-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Onest:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('kapsula-docs-theme');
+        var theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
+        document.documentElement.setAttribute('data-theme', theme);
+        var meta = document.getElementById('meta-theme-color');
+        if (meta) meta.setAttribute('content', theme === 'light' ? '#f4f5f7' : '#0e0e11');
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <!--
+    THESIS: Editorial utility showcase matching Kapsula's own Obsidian Graphite and Porcelain Light workspace; refuses neon SaaS tropes, eyebrows, and filler cards.
+    OWN-WORLD: #0e0e11 / #17171c / #1f1f26 dark and #f4f5f7 / #ffffff light surfaces, #d95826 / #c54914 terracotta primary action, Onest display + Inter UI + JetBrains Mono data, 1px hairline structure.
+    STORY: Visitor immediately sees real product proof, watches the live recording, explores six authentic surfaces, verifies local-first encryption facts, and downloads the right binary for their OS.
+    FIRST VIEWPORT: Minimal 56px sticky bar, centered editorial headline + one-sentence lead + OS-aware download CTA, followed immediately by the framed live workspace screenshot.
+    FORM: Editorial product showcase (Persuade mode, established world).
+    FINISH: Verified at 1440x900 dark/light and 390x844 mobile via Playwright visual QA and Impeccable detector.
+  -->
+
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a class="brand" href="#top" aria-label="Kapsula — в начало страницы">
+        <img class="brand-icon" src="assets/kapsula-icon.png" alt="" width="28" height="28" />
+        <span class="brand-name">Kapsula</span>
+      </a>
+
+      <nav class="header-nav" aria-label="Разделы страницы">
+        <a href="#features">Возможности</a>
+        <a href="#demo">Демо</a>
+        <a href="#security">Безопасность</a>
+        <a href="#download">Скачать</a>
+      </nav>
+
+      <div class="header-actions">
+        <button
+          type="button"
+          class="icon-btn"
+          id="theme-toggle"
+          aria-label="Переключить тему оформления"
+          aria-pressed="false"
+        >
+          <svg class="icon-sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77"></path>
+          </svg>
+          <svg class="icon-moon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z"></path>
+          </svg>
+          <span class="theme-label" id="theme-toggle-label">Светлая</span>
+        </button>
+
+        <a
+          class="github-link"
+          href="https://github.com/Suther1and/kapsula"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2.16c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.12 3.05.74.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"></path>
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero">
+      <div class="container">
+        <div class="hero-copy">
+          <h1>Спокойное место для заметок, задач и&nbsp;Сейфа</h1>
+          <p class="hero-lead">
+            Локальное приложение для Windows, macOS и&nbsp;Android: заметки со&nbsp;связями, быстрая панель по&nbsp;горячей клавише, канбан-доска и&nbsp;зашифрованный Сейф с&nbsp;2FA.
+          </p>
+
+          <div class="hero-cta-row">
+            <a
+              class="btn btn-primary"
+              id="hero-download-btn"
+              href="https://github.com/Suther1and/kapsula/releases/latest"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3v12"></path>
+                <path d="m7 11 5 5 5-5"></path>
+                <path d="M5 20h14"></path>
+              </svg>
+              <span id="hero-download-label">Скачать для Windows</span>
+            </a>
+
+            <a class="btn btn-secondary" href="#demo">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="7 5 19 12 7 19 7 5"></polygon>
+              </svg>
+              <span>Смотреть демо</span>
+            </a>
+          </div>
+
+          <p class="hero-meta">
+            <span class="version-pill mono" id="hero-version">v1.0.1</span>
+            <span class="meta-dot" aria-hidden="true">·</span>
+            <span id="hero-os-note">Windows 10/11, macOS и&nbsp;Android</span>
+            <span class="meta-dot" aria-hidden="true">·</span>
+            <span>Бесплатно, лицензия MIT</span>
+          </p>
+        </div>
+
+        <figure class="hero-frame">
+          <div class="app-window">
+            <img
+              id="hero-screenshot"
+              src="assets/hero-feed-dark.png"
+              alt="Главный экран Kapsula с лентой заметок, разделами, чек-листами, голосовыми и визуальными референсами"
+              width="1380"
+              height="860"
+              decoding="async"
+              fetchpriority="high"
+            />
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <!-- Live Demo Video Showcase -->
+    <section class="section section-demo" id="demo">
+      <div class="container">
+        <div class="section-head">
+          <h2>Как Kapsula работает вживую</h2>
+          <p class="section-sub">
+            Лента, центрированный редактор, канбан-доска, Сейф с&nbsp;2FA, светлая тема и&nbsp;быстрая панель&nbsp;— запись реального приложения без постановочной графики.
+          </p>
+        </div>
+
+        <div class="video-frame" data-playing="false">
+          <video
+            id="demo-video"
+            class="demo-video"
+            controls
+            playsinline
+            preload="metadata"
+            poster="assets/kapsula-demo-poster.jpg"
+            width="1600"
+            height="900"
+          >
+            <source src="assets/kapsula-demo.mp4" type="video/mp4" />
+            Ваш браузер не поддерживает встроенное видео. Вы можете открыть файл напрямую:
+            <a href="assets/kapsula-demo.mp4">kapsula-demo.mp4</a>.
+          </video>
+
+          <button
+            type="button"
+            class="video-play-overlay"
+            id="video-play-btn"
+            aria-label="Воспроизвести демонстрацию Kapsula"
+          >
+            <span class="video-play-circle">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <polygon points="8 5 20 12 8 19 8 5"></polygon>
+              </svg>
+            </span>
+            <span class="video-play-caption">Смотреть обзор · ~30 сек</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Product Tour -->
+    <section class="section section-tour" id="features">
+      <div class="container">
+        <div class="section-head">
+          <h2>Один ритм для мыслей, дел и&nbsp;секретов</h2>
+          <p class="section-sub">
+            Переключайте экраны, чтобы посмотреть реальные режимы работы на&nbsp;компьютере и&nbsp;складном Android-смартфоне.
+          </p>
+        </div>
+
+        <div class="tour-shell">
+          <div class="tour-tabs-wrap">
+            <div class="tour-tabs" role="tablist" aria-label="Режимы Kapsula" id="tour-tablist">
+              <button type="button" role="tab" class="tour-tab" id="tab-notes" aria-selected="true" aria-controls="tour-panel" data-tour-index="0">
+                Заметки и&nbsp;фокус
+              </button>
+              <button type="button" role="tab" class="tour-tab" id="tab-hud" aria-selected="false" aria-controls="tour-panel" data-tour-index="1" tabindex="-1">
+                Быстрая панель
+              </button>
+              <button type="button" role="tab" class="tour-tab" id="tab-kanban" aria-selected="false" aria-controls="tour-panel" data-tour-index="2" tabindex="-1">
+                Канбан и&nbsp;сроки
+              </button>
+              <button type="button" role="tab" class="tour-tab" id="tab-vault" aria-selected="false" aria-controls="tour-panel" data-tour-index="3" tabindex="-1">
+                Сейф и&nbsp;2FA
+              </button>
+              <button type="button" role="tab" class="tour-tab" id="tab-light" aria-selected="false" aria-controls="tour-panel" data-tour-index="4" tabindex="-1">
+                Светлая тема
+              </button>
+              <button type="button" role="tab" class="tour-tab" id="tab-fold" aria-selected="false" aria-controls="tour-panel" data-tour-index="5" tabindex="-1">
+                Android и&nbsp;Fold
+              </button>
+            </div>
+          </div>
+
+          <div class="tour-stage" id="tour-panel" role="tabpanel" aria-labelledby="tab-notes">
+            <div class="tour-media-frame" id="tour-media-frame" data-mode="desktop">
+              <img
+                id="tour-image"
+                src="assets/hero-feed-dark.png"
+                alt="Главный экран Kapsula с разделами, заметками, голосовыми записями и референсами"
+                width="1380"
+                height="860"
+                decoding="async"
+              />
+            </div>
+
+            <div class="tour-caption-bar">
+              <div class="tour-caption-copy">
+                <h3 id="tour-title">Лента, разделы и&nbsp;связанные заметки</h3>
+                <p id="tour-desc">
+                  Текстовые заметки, чек-листы, голосовые с&nbsp;расшифровкой, ссылки и&nbsp;визуальные референсы живут в&nbsp;одной ленте. База открывается мгновенно без сети.
+                </p>
+              </div>
+              <div class="tour-caption-meta mono" id="tour-shortcut">Ctrl + F · мгновенный поиск</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Privacy & Architecture Ledger -->
+    <section class="section section-security" id="security">
+      <div class="container">
+        <div class="section-head">
+          <h2>Ваши записи принадлежат только вам</h2>
+          <p class="section-sub">
+            Никакой обязательной регистрации и&nbsp;закрытых форматов. Данные лежат на&nbsp;вашем диске, а&nbsp;облако получает только шифротекст.
+          </p>
+        </div>
+
+        <dl class="spec-ledger">
+          <div class="spec-row">
+            <dt>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
+                <path d="M4 5v7c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path>
+                <path d="M4 12v7c0 1.66 3.58 3 8 3s8-1.34 8-3v-7"></path>
+              </svg>
+              <span>Локальная база SQLite</span>
+            </dt>
+            <dd>
+              Все заметки, задачи, медиафайлы и&nbsp;полнотекстовый индекс хранятся локально на&nbsp;устройстве. В&nbsp;любой момент можно выгрузить весь архив в&nbsp;обычный Markdown с&nbsp;вложениями.
+            </dd>
+          </div>
+
+          <div class="spec-row">
+            <dt>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="4" y="11" width="16" height="10" rx="2"></rect>
+                <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+              </svg>
+              <span>Сквозное шифрование AES-256-GCM</span>
+            </dt>
+            <dd>
+              При включении синхронизации каждая запись шифруется на&nbsp;устройстве вашим ключом до&nbsp;отправки в&nbsp;сеть. Без парольной фразы или ключа восстановления данные нечитаемы.
+            </dd>
+          </div>
+
+          <div class="spec-row">
+            <dt>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 2.5 4.5 5.8v5.7c0 5 3.2 9.4 7.5 10.5 4.3-1.1 7.5-5.5 7.5-10.5V5.8L12 2.5Z"></path>
+                <path d="m9 12.2 2 2 4-4.2"></path>
+              </svg>
+              <span>Сейф и&nbsp;2FA изолированы от&nbsp;ИИ</span>
+            </dt>
+            <dd>
+              Банковские карты, пароли и&nbsp;TOTP-коды закрыты мастер-PIN и&nbsp;биометрией, скрываются при записи экрана, стираются из&nbsp;буфера через 30&nbsp;секунд и&nbsp;никогда не&nbsp;отправляются в&nbsp;языковые модели.
+            </dd>
+          </div>
+
+          <div class="spec-row">
+            <dt>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m14.5 5.5 4 4L9 19H5v-4l9.5-9.5Z"></path>
+                <path d="m12 8 4 4"></path>
+              </svg>
+              <span>ИИ по&nbsp;желанию и&nbsp;свой API-ключ</span>
+            </dt>
+            <dd>
+              Можно работать вообще без ИИ, использовать встроенную облачную квоту или подключить личный ключ Google AI Studio или OpenRouter. Токены и&nbsp;пароли вырезаются из&nbsp;текста перед запросом.
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Download Section -->
+    <section class="section section-download" id="download">
+      <div class="container">
+        <div class="section-head">
+          <h2>Скачать Kapsula</h2>
+          <p class="section-sub">
+            Последний релиз <span class="mono" id="download-version">v1.0.1</span>&nbsp;— готовые установщики и&nbsp;контрольные суммы SHA-256 публикуются в&nbsp;<a class="inline-link" href="https://github.com/Suther1and/kapsula/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>.
+          </p>
+        </div>
+
+        <div class="download-grid">
+          <article class="dl-card" data-platform="windows">
+            <div class="dl-top">
+              <div class="dl-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3 4.5 11 3.3v8.1H3V4.5Zm9.3-1.4L21 2v9.4h-8.7V3.1ZM3 12.6h8v8.1l-8-1.2v-6.9Zm9.3 0H21V22l-8.7-1.2v-8.2Z"></path>
+                </svg>
+              </div>
+              <span class="dl-match-badge">Ваша система</span>
+            </div>
+            <h3>Windows</h3>
+            <p class="dl-desc">Windows 10 / 11 (x64), встроенные автообновления</p>
+            <div class="dl-file mono" id="dl-file-windows">Kapsula-Setup.exe</div>
+            <a
+              class="btn btn-card"
+              id="dl-btn-windows"
+              href="https://github.com/Suther1and/kapsula/releases/latest"
+            >
+              Скачать Setup.exe
+            </a>
+          </article>
+
+          <article class="dl-card" data-platform="macos-arm64">
+            <div class="dl-top">
+              <div class="dl-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16.5 12.6c0-2.1 1.7-3.2 1.8-3.3-1-1.5-2.6-1.7-3.1-1.7-1.3-.1-2.6.8-3.3.8-.7 0-1.7-.8-2.8-.8-1.5 0-2.8.9-3.5 2.2-1.5 2.6-.4 6.5 1.1 8.6.7 1 1.6 2.2 2.7 2.1 1.1 0 1.5-.7 2.8-.7 1.3 0 1.7.7 2.8.7 1.2 0 1.9-1 2.6-2.1.8-1.2 1.2-2.4 1.2-2.4-.1-.1-2.3-.9-2.3-3.4ZM14.3 6.2c.6-.7 1-1.7.9-2.7-.9 0-1.9.6-2.5 1.3-.5.6-1 1.6-.9 2.6 1 .1 2-.5 2.5-1.2Z"></path>
+                </svg>
+              </div>
+              <span class="dl-match-badge">Ваша система</span>
+            </div>
+            <h3>macOS · Apple Silicon</h3>
+            <p class="dl-desc">Чипы M1, M2, M3, M4 · macOS 13 и&nbsp;новее</p>
+            <div class="dl-file mono" id="dl-file-mac-arm64">Kapsula-arm64.dmg</div>
+            <a
+              class="btn btn-card"
+              id="dl-btn-mac-arm64"
+              href="https://github.com/Suther1and/kapsula/releases/latest"
+            >
+              Скачать arm64.dmg
+            </a>
+          </article>
+
+          <article class="dl-card" data-platform="macos-x64">
+            <div class="dl-top">
+              <div class="dl-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16.5 12.6c0-2.1 1.7-3.2 1.8-3.3-1-1.5-2.6-1.7-3.1-1.7-1.3-.1-2.6.8-3.3.8-.7 0-1.7-.8-2.8-.8-1.5 0-2.8.9-3.5 2.2-1.5 2.6-.4 6.5 1.1 8.6.7 1 1.6 2.2 2.7 2.1 1.1 0 1.5-.7 2.8-.7 1.3 0 1.7.7 2.8.7 1.2 0 1.9-1 2.6-2.1.8-1.2 1.2-2.4 1.2-2.4-.1-.1-2.3-.9-2.3-3.4ZM14.3 6.2c.6-.7 1-1.7.9-2.7-.9 0-1.9.6-2.5 1.3-.5.6-1 1.6-.9 2.6 1 .1 2-.5 2.5-1.2Z"></path>
+                </svg>
+              </div>
+              <span class="dl-match-badge">Ваша система</span>
+            </div>
+            <h3>macOS · Intel</h3>
+            <p class="dl-desc">Компьютеры Mac на&nbsp;Intel (x64) · macOS 13+</p>
+            <div class="dl-file mono" id="dl-file-mac-x64">Kapsula-x64.dmg</div>
+            <a
+              class="btn btn-card"
+              id="dl-btn-mac-x64"
+              href="https://github.com/Suther1and/kapsula/releases/latest"
+            >
+              Скачать x64.dmg
+            </a>
+          </article>
+
+          <article class="dl-card" data-platform="android">
+            <div class="dl-top">
+              <div class="dl-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="6" y="2.5" width="12" height="19" rx="2.5"></rect>
+                  <line x1="10.5" y1="18" x2="13.5" y2="18"></line>
+                </svg>
+              </div>
+              <span class="dl-match-badge">Ваша система</span>
+            </div>
+            <h3>Android</h3>
+            <p class="dl-desc">Смартфоны и&nbsp;складные экраны Galaxy Z Fold</p>
+            <div class="dl-file mono" id="dl-file-android">Kapsula-android.apk</div>
+            <a
+              class="btn btn-card"
+              id="dl-btn-android"
+              href="https://github.com/Suther1and/kapsula/releases/latest"
+            >
+              Скачать APK
+            </a>
+          </article>
+        </div>
+
+        <details class="first-run-note">
+          <summary>
+            <span>Первый запуск на&nbsp;Windows и&nbsp;macOS</span>
+            <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"></path>
+            </svg>
+          </summary>
+          <div class="first-run-body">
+            <p>
+              Kapsula распространяется бесплатно с&nbsp;открытым исходным кодом и&nbsp;пока собирается без платных коммерческих сертификатов Apple Developer / EV Code Signing.
+            </p>
+            <p>
+              <strong>Windows:</strong> если SmartScreen покажет предупреждение, нажмите «Подробнее» → «Выполнить в&nbsp;любом случае».
+            </p>
+            <p>
+              <strong>macOS:</strong> перетащите приложение в&nbsp;«Программы», затем откройте через Правый клик → «Открыть» или выполните в&nbsp;Терминале:
+              <code>xattr -cr /Applications/Kapsula.app</code>
+            </p>
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <img src="assets/kapsula-icon.png" alt="" width="22" height="22" />
+        <span>Kapsula</span>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <span class="mono" id="footer-version">v1.0.1</span>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <span>MIT License</span>
+      </div>
+
+      <div class="footer-links">
+        <a href="https://github.com/Suther1and/kapsula" target="_blank" rel="noopener noreferrer">Исходный код</a>
+        <a href="https://github.com/Suther1and/kapsula/releases" target="_blank" rel="noopener noreferrer">Все релизы</a>
+        <a href="https://github.com/Suther1and/kapsula/issues" target="_blank" rel="noopener noreferrer">Сообщить о&nbsp;проблеме</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

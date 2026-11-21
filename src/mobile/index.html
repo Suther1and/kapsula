@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru" data-theme="dark" data-accent="terracotta" data-density="comfortable">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#0e0e11" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Kapsula</title>
+    <script>
+      (function () {
+        try {
+          var root = document.documentElement;
+          var t = localStorage.getItem('kapsula_mobile_theme');
+          if (t === 'light' || t === 'dark') {
+            root.setAttribute('data-theme', t);
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', t === 'light' ? '#f7f7f9' : '#0e0e11');
+          }
+          var acc = localStorage.getItem('kapsula.ui.accent');
+          var validAcc = ['terracotta', 'cobalt', 'emerald', 'violet', 'amber', 'rose'];
+          if (acc && validAcc.indexOf(acc) !== -1) {
+            root.setAttribute('data-accent', acc);
+          }
+          var dens = localStorage.getItem('kapsula.ui.density');
+          if (dens === 'compact' || dens === 'comfortable') {
+            root.setAttribute('data-density', dens);
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,577 @@
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Extension,
+  Node,
+  mergeAttributes,
+  type Editor,
+  type JSONContent,
+  type MarkdownParseHelpers,
+  type MarkdownRendererHelpers,
+  type MarkdownToken,
+  type RenderContext,
+} from '@tiptap/core';
+import {
+  NodeViewWrapper,
+  ReactNodeViewRenderer,
+  type NodeViewProps,
+} from '@tiptap/react';
+import {
+  ArrowsOutSimple,
+  Check,
+  Copy,
+  ImageBroken,
+  ImageSquare,
+  PencilSimple,
+  Trash,
+} from '@phosphor-icons/react';
+import { toast } from 'sonner';
+import { friendlyErrorMessage, getMediaUrl } from '../../lib/format';
+
+export interface KapsulaImageLightboxInfo {
+  src: string;
+  alt: string;
+  localFilename: string | null;
+}
+
+export interface KapsulaImageOptions {
+  onOpenLightbox?: (info: KapsulaImageLightboxInfo) => void;
+  compact?: boolean;
+}
+
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif|bmp|avif|heic|svg)$/i;
+
+export function extractLocalImageFilename(src: string | null | undefined): string | null {
+  if (!src || !src.startsWith('kapsula-media://local/')) return null;
+  try {
+    const raw = src.slice('kapsula-media://local/'.length).split(/[?#]/)[0] ?? '';
+    const decoded = decodeURIComponent(raw).trim();
+    return decoded || null;
+  } catch {
+    return null;
+  }
+}
+
+export function extractImageFilesFromDataTransfer(
+  dt: DataTransfer | null | undefined
+): File[] {
+  if (!dt) return [];
+  const files: File[] = [];
+  const seenKeys = new Set<string>();
+
+  const pushUnique = (file: File | null | undefined) => {
+    if (!file) return;
+    const isImage =
+      file.type.startsWith('image/') || (!file.type && IMAGE_EXT_RE.test(file.name || ''));
+    if (!isImage) return;
+    const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    files.push(file);
+  };
+
+  if (dt.items && dt.items.length > 0) {
+    for (let i = 0; i < dt.items.length; i += 1) {
+      const item = dt.items[i];
+      if (item && item.kind === 'file') {
+        pushUnique(item.getAsFile());
+      }
+    }
+  }
+  if (dt.files && dt.files.length > 0) {
+    for (let i = 0; i < dt.files.length; i += 1) {
+      pushUnique(dt.files[i]);
+    }
+  }
+  return files;
+}
+
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fileToBase64Payload(file: File): Promise<{
+  base64: string;
+  mimeType: string;
+  fileName: string;
+}> {
+  const mimeType = file.type || 'image/png';
+  const fileName = file.name || `image-${Date.now()}.png`;
+  try {
+    const buf = await file.arrayBuffer();
+    if (buf.byteLength > 0) {
+      return { base64: bufferToBase64(buf), mimeType, fileName };
+    }
+  } catch {
+    // Fallback to FileReader below
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error('Не удалось прочитать изображение'));
+    reader.readAsDataURL(file);
+  });
+  const commaIdx = dataUrl.indexOf(',');
+  return {
+    base64: commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl,
+    mimeType,
+    fileName,
+  };
+}
+
+export async function saveAndInsertImageFiles(
+  editor: Editor,
+  files: File[],
+  opts?: {
+    insertPos?: number | null;
+    onBeforeSave?: () => void;
+    onAfterSave?: () => void;
+  }
+): Promise<number> {
+  if (!files.length) return 0;
+  opts?.onBeforeSave?.();
+  const insertedNodes: Array<{ src: string; alt: string }> = [];
+
+  try {
+    for (const file of files) {
+      const { base64, mimeType, fileName } = await fileToBase64Payload(file);
+      let filePath = '';
+      try {
+        filePath = window.kapsula.getPathForFile?.(file) || '';
+      } catch {
+        filePath = '';
+      }
+      if (!base64 && !filePath) continue;
+
+      const saved = await window.kapsula.saveNoteImage({
+        ...(base64 ? { base64 } : {}),
+        ...(filePath ? { filePath } : {}),
+        mimeType,
+        fileName,
+      });
+      const src = saved.mediaUrl || getMediaUrl(saved.filename);
+      if (!src) continue;
+      insertedNodes.push({ src, alt: '' });
+    }
+
+    if (insertedNodes.length > 0 && !editor.isDestroyed) {
+      const content: JSONContent | JSONContent[] =
+        insertedNodes.length === 1
+          ? {
+              type: 'kapsulaImage',
+              attrs: insertedNodes[0]!,
+            }
+          : insertedNodes.map((img) => ({
+              type: 'paragraph',
+              content: [{ type: 'kapsulaImage', attrs: img }],
+            }));
+
+      if (typeof opts?.insertPos === 'number' && Number.isFinite(opts.insertPos)) {
+        const clampedPos = Math.max(0, Math.min(opts.insertPos, editor.state.doc.content.size));
+        editor.chain().focus().insertContentAt(clampedPos, content).run();
+      } else {
+        editor.chain().focus().insertContent(content).run();
+      }
+    }
+    return insertedNodes.length;
+  } catch (err) {
+    toast.error(friendlyErrorMessage(err, 'Не удалось вставить фото в заметку'));
+    return insertedNodes.length;
+  } finally {
+    opts?.onAfterSave?.();
+  }
+}
+
+const KapsulaImageView: React.FC<NodeViewProps> = ({
+  editor,
+  getPos,
+  node,
+  selected,
+  updateAttributes,
+  deleteNode,
+  extension,
+}) => {
+  const src = typeof node.attrs.src === 'string' ? node.attrs.src : '';
+  const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : '';
+  const options = extension.options as KapsulaImageOptions;
+  const localFilename = extractLocalImageFilename(src);
+
+  const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [captionDraft, setCaptionDraft] = useState(alt);
+  const captionInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setLoaded(false);
+    setErrored(false);
+  }, [src]);
+
+  useEffect(() => {
+    setCaptionDraft(alt);
+  }, [alt]);
+
+  useEffect(() => {
+    if (editingCaption) {
+      window.setTimeout(() => captionInputRef.current?.focus(), 10);
+    }
+  }, [editingCaption]);
+
+  const handleOpenLightbox = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!src || errored) return;
+    // Never leave an armed ProseMirror NodeSelection on the atomic image node —
+    // otherwise pressing Enter or typing right after closing Lightbox deletes the photo.
+    if (selected && typeof getPos === 'function') {
+      const pos = getPos();
+      if (typeof pos === 'number') {
+        const afterPos = Math.min(editor.state.doc.content.size, pos + node.nodeSize);
+        editor.commands.setTextSelection(afterPos);
+      }
+    }
+    options.onOpenLightbox?.({ src, alt, localFilename });
+  };
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (localFilename) {
+        const ok = await window.kapsula.copyImage(localFilename);
+        if (ok) {
+          setCopied(true);
+          toast.success('Фото скопировано');
+          window.setTimeout(() => setCopied(false), 1600);
+          return;
+        }
+      }
+      if (src) {
+        await window.kapsula.copyText(src);
+        setCopied(true);
+        toast.success('Ссылка на фото скопирована');
+        window.setTimeout(() => setCopied(false), 1600);
+      }
+    } catch {
+      toast.error('Не удалось скопировать фото');
+    }
+  };
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    deleteNode();
+  };
+
+  const commitCaption = () => {
+    const clean = captionDraft.trim();
+    if (clean !== alt) {
+      updateAttributes({ alt: clean });
+    }
+    setEditingCaption(false);
+  };
+
+  const showCaptionBar = editingCaption || Boolean(alt);
+
+  return (
+    <NodeViewWrapper
+      as="span"
+      className="k-inline-image-figure"
+      data-kapsula-image=""
+      data-testid="kapsula-inline-image"
+      contentEditable={false}
+    >
+      <span
+        className="k-inline-image-frame"
+        data-selected={selected ? 'true' : 'false'}
+      >
+        <span
+          className="k-inline-image-media"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          {!loaded && !errored ? (
+            <span className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)] animate-pulse">
+              <ImageSquare className="w-5 h-5 opacity-60" />
+              <span className="text-[12px]">Загружаю фото…</span>
+            </span>
+          ) : null}
+
+          {errored || !src ? (
+            <span className="flex flex-col items-center justify-center gap-2 py-7 px-4 text-center text-[var(--k-ink-muted)]">
+              <ImageBroken weight="duotone" className="w-7 h-7 opacity-70" />
+              <span className="text-[12.5px] font-medium text-[var(--k-ink-secondary)]">
+                Изображение недоступно
+              </span>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleDelete}
+                className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
+              >
+                <Trash className="w-3.5 h-3.5" />
+                Удалить блок
+              </button>
+            </span>
+          ) : (
+            <img
+              src={src}
+              alt={alt || 'Изображение в заметке'}
+              draggable={false}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onLoad={() => setLoaded(true)}
+              onError={() => {
+                setLoaded(true);
+                setErrored(true);
+              }}
+              onClick={handleOpenLightbox}
+              className={`k-inline-image-img ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            />
+          )}
+
+          {!errored && src ? (
+            <span
+              className="k-inline-image-toolbar"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              {options.onOpenLightbox ? (
+                <button
+                  type="button"
+                  title="Открыть крупно"
+                  aria-label="Открыть крупно"
+                  onClick={handleOpenLightbox}
+                  className="k-inline-image-btn"
+                >
+                  <ArrowsOutSimple weight="bold" className="w-3.5 h-3.5" />
+                  {!options.compact ? <span>Крупно</span> : null}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                title="Копировать фото"
+                aria-label="Копировать фото"
+                onClick={(e) => void handleCopy(e)}
+                className="k-inline-image-btn"
+              >
+                {copied ? (
+                  <Check weight="bold" className="w-3.5 h-3.5 text-[#4ade80]" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                {!options.compact ? <span>{copied ? 'Готово' : 'Копировать'}</span> : null}
+              </button>
+              {!options.compact ? (
+                <button
+                  type="button"
+                  title="Изменить подпись"
+                  aria-label="Изменить подпись"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditingCaption(true);
+                  }}
+                  className="k-inline-image-btn"
+                >
+                  <PencilSimple className="w-3.5 h-3.5" />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                title="Удалить фото"
+                aria-label="Удалить фото"
+                data-danger="true"
+                onClick={handleDelete}
+                className="k-inline-image-btn"
+              >
+                <Trash className="w-3.5 h-3.5" />
+              </button>
+            </span>
+          ) : null}
+        </span>
+
+        {showCaptionBar ? (
+          <span
+            className="k-inline-image-caption-bar"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!editingCaption) setEditingCaption(true);
+            }}
+          >
+            {editingCaption ? (
+              <input
+                ref={captionInputRef}
+                type="text"
+                value={captionDraft}
+                onChange={(e) => setCaptionDraft(e.target.value)}
+                onBlur={commitCaption}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitCaption();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setCaptionDraft(alt);
+                    setEditingCaption(false);
+                  }
+                }}
+                placeholder="Подпись к фото…"
+                className="k-inline-image-caption-input"
+              />
+            ) : (
+              <span className="truncate cursor-text flex-1" title="Нажми, чтобы изменить подпись">
+                {alt}
+              </span>
+            )}
+          </span>
+        ) : null}
+      </span>
+    </NodeViewWrapper>
+  );
+};
+
+/**
+ * TipTap v3 Paragraph.parseMarkdown (priority 1000) unwraps single-image paragraphs
+ * (`![alt](src)` on its own line) into top-level children, which fails ProseMirror
+ * schema validation when the image node is `inline: true, group: 'inline'`.
+ * Intercepting ONLY single-image paragraphs at priority 1100 keeps BOTH standalone
+ * and mid-sentence Markdown images 100% schema-valid inside `<paragraph>`.
+ */
+const KapsulaImageParagraphAdapter = Extension.create({
+  name: 'kapsulaImageParagraphAdapter',
+  priority: 1100,
+  markdownTokenName: 'paragraph',
+  parseMarkdown(token: MarkdownToken, helpers: MarkdownParseHelpers) {
+    const tokens = token.tokens || [];
+    if (tokens.length === 1 && tokens[0]?.type === 'image') {
+      const content = helpers.parseInline(tokens);
+      if (content.length > 0) {
+        return helpers.createNode('paragraph', undefined, content);
+      }
+    }
+    return [];
+  },
+  renderMarkdown(node: JSONContent, helpers: MarkdownRendererHelpers, ctx: RenderContext) {
+    if (!node) return '';
+    const content = Array.isArray(node.content) ? node.content : [];
+    if (content.length === 0) {
+      const prevContent = Array.isArray(ctx?.previousNode?.content)
+        ? ctx.previousNode.content
+        : [];
+      return ctx?.previousNode?.type === 'paragraph' && prevContent.length === 0
+        ? '&nbsp;'
+        : '';
+    }
+    return helpers.renderChildren(content);
+  },
+});
+
+export const KapsulaImage = Node.create<KapsulaImageOptions>({
+  name: 'kapsulaImage',
+  inline: true,
+  group: 'inline',
+  atom: true,
+  draggable: true,
+  selectable: true,
+
+  addExtensions() {
+    return [KapsulaImageParagraphAdapter];
+  },
+
+  addOptions() {
+    return {
+      onOpenLightbox: undefined,
+      compact: false,
+    };
+  },
+
+  addAttributes() {
+    return {
+      src: {
+        default: null,
+      },
+      alt: {
+        default: '',
+      },
+      title: {
+        default: null,
+      },
+    };
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: 'img[src]',
+        getAttrs: (el) => {
+          if (typeof el === 'string') return false;
+          const src = el.getAttribute('src');
+          if (!src) return false;
+          return {
+            src,
+            alt: el.getAttribute('alt') || '',
+            title: el.getAttribute('title') || null,
+          };
+        },
+      },
+    ];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['img', mergeAttributes(HTMLAttributes)];
+  },
+
+  markdownTokenName: 'image',
+
+  parseMarkdown(token: MarkdownToken) {
+    const imgToken = token as MarkdownToken & {
+      href?: string;
+      text?: string;
+      title?: string | null;
+    };
+    const src = typeof imgToken.href === 'string' ? imgToken.href.trim() : '';
+    if (!src) return [];
+    return {
+      type: 'kapsulaImage',
+      attrs: {
+        src,
+        alt: typeof imgToken.text === 'string' ? imgToken.text : '',
+        title: typeof imgToken.title === 'string' && imgToken.title ? imgToken.title : null,
+      },
+    };
+  },
+
+  renderMarkdown(node: JSONContent) {
+    const src = typeof node.attrs?.src === 'string' ? node.attrs.src.trim() : '';
+    if (!src) return '';
+    const alt =
+      typeof node.attrs?.alt === 'string'
+        ? node.attrs.alt.replace(/[\r\n]+/g, ' ').replace(/([[\]])/g, '\\$1')
+        : '';
+    const title =
+      typeof node.attrs?.title === 'string' && node.attrs.title.trim()
+        ? ` "${node.attrs.title.replace(/"/g, '\\"')}"`
+        : '';
+    const safeSrc = /[\s()]/.test(src) ? `<${src}>` : src;
+    return `![${alt}](${safeSrc}${title})`;
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(KapsulaImageView);
+  },
+});

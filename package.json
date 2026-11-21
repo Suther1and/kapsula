@@ -1,0 +1,179 @@
+{
+  "name": "kapsula-notes-plus",
+  "version": "1.0.1",
+  "description": "Kapsula — fast, encrypted cross-platform notes, tasks, vault, and AI workspace",
+  "main": "dist/main/index.js",
+  "author": "Kapsula Team",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build:icons": "node scripts/generate-icons.mjs",
+    "build:renderer": "vite build",
+    "build:main": "node scripts/build-main.mjs",
+    "build": "npm run build:icons && npm run build:renderer && npm run build:main",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e-verify.mjs",
+    "start": "electron .",
+    "pack:win": "npm run build && electron-builder --win --dir -c.win.signAndEditExecutable=false && node scripts/embed-exe-icon.mjs",
+    "pack:win:installer": "npm run build && electron-builder --win nsis --x64 -c.win.signExecutable=false -c.win.verifyUpdateCodeSignature=false --publish never",
+    "pack:mac": "node scripts/pack-mac.mjs",
+    "pack:mac:arm64": "node scripts/pack-mac.mjs --arch=arm64",
+    "pack:mac:x64": "node scripts/pack-mac.mjs --arch=x64",
+    "pack:mac:universal": "node scripts/pack-mac.mjs --arch=universal",
+    "build:mobile": "vite build --config vite.mobile.config.ts",
+    "build:android-icons": "node scripts/generate-android-icons.mjs",
+    "pack:android": "node scripts/pack-android.mjs --variant=release",
+    "pack:android:debug": "node scripts/pack-android.mjs --variant=debug"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/onest": "^5.3.1",
+    "@formkit/auto-animate": "^0.10.2",
+    "@mozilla/readability": "^0.6.0",
+    "@number-flow/react": "^0.6.2",
+    "@phosphor-icons/react": "^2.1.10",
+    "@supabase/supabase-js": "2.119.2",
+    "@tiptap/extension-code-block-lowlight": "^3.34.0",
+    "@tiptap/extension-highlight": "^3.34.0",
+    "@tiptap/extension-placeholder": "^3.34.0",
+    "@tiptap/extension-task-item": "^3.34.0",
+    "@tiptap/extension-task-list": "^3.34.0",
+    "@tiptap/extension-typography": "^3.34.0",
+    "@tiptap/markdown": "^3.34.0",
+    "@tiptap/pm": "^3.34.0",
+    "@tiptap/react": "^3.34.0",
+    "@tiptap/starter-kit": "^3.34.0",
+    "cmdk": "^1.1.1",
+    "electron-updater": "^6.8.11",
+    "linkedom": "^0.18.15",
+    "lowlight": "^3.3.0",
+    "motion": "^12.23.24",
+    "overlayscrollbars": "^2.17.0",
+    "overlayscrollbars-react": "^0.5.7",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sonner": "^2.0.8",
+    "unpdf": "^2.2.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^24.9.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.28.0",
+    "playwright": "^1.56.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.0.8"
+  },
+  "build": {
+    "appId": "com.notesplus.kapsula",
+    "productName": "Kapsula",
+    "afterPack": "scripts/after-pack-win.cjs",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Suther1and",
+        "repo": "kapsula"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/mobile/**",
+      "extension/**/*",
+      "build/icon.png",
+      "build/icon.icns",
+      "build/tray.png",
+      "build/trayTemplate.png",
+      "build/trayTemplate@2x.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist/main/winrt-ocr.ps1",
+      "dist/main/macos-vision-ocr",
+      "dist/main/macos-vision-ocr.swift",
+      "build/trayTemplate*.png"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "dir"
+      ],
+      "icon": "build/icon.ico",
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Kapsula",
+      "artifactName": "Kapsula-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "artifactName": "Kapsula-${version}-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Kapsula использует микрофон для записи голосовых заметок и диктовки.",
+        "NSScreenCaptureUsageDescription": "Kapsula использует захват экрана для сохранения скриншотов в хранилище.",
+        "NSAppleEventsUsageDescription": "Kapsula использует системные события для быстрой вставки текста из быстрой панели."
+      }
+    },
+    "dmg": {
+      "title": "Kapsula",
+      "icon": "build/icon.icns",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 145,
+          "y": 195,
+          "type": "file"
+        },
+        {
+          "x": 395,
+          "y": 195,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "asar": true
+  }
+}
