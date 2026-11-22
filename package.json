@@ -130,7 +130,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Kapsula",
-      "artifactName": "Kapsula-Setup-${version}.${ext}"
+      "artifactName": "Kapsula-${version}-windows.${ext}"
     },
     "mac": {
       "category": "public.app-category.productivity",

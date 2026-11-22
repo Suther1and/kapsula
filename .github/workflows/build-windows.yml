@@ -59,9 +59,9 @@ jobs:
           const releaseDir = path.resolve('release');
           const entries = fs.readdirSync(releaseDir);
 
-          const installers = entries.filter((f) => /^Kapsula-Setup-.*\.exe$/i.test(f));
+          const installers = entries.filter((f) => /^Kapsula-.*-windows\.exe$/i.test(f));
           if (installers.length !== 1) {
-            throw new Error(`Expected exactly 1 Kapsula-Setup-*.exe in release/, found: ${JSON.stringify(installers)}`);
+            throw new Error(`Expected exactly 1 Kapsula-*-windows.exe in release/, found: ${JSON.stringify(installers)}`);
           }
           const installerName = installers[0];
           const blockmapName = `${installerName}.blockmap`;

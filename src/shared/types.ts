@@ -117,6 +117,7 @@ export interface MediaMeta {
   contactHandle?: string;
   contactEmail?: string;
   contactRole?: string;
+  inNotesHub?: boolean;
   taskMeta?: Record<string, TaskBoardItemMeta>;
 }
 
@@ -446,8 +447,15 @@ export type TextTransformPreset = 'structure' | 'tasks' | 'polish' | 'summary';
 export interface TextTransformInput {
   itemId?: string;
   text: string;
-  preset: TextTransformPreset;
+  preset?: TextTransformPreset;
+  presets?: TextTransformPreset[];
 }
+
+export type TextTransformFallbackReason =
+  | 'no_ai_key'
+  | 'budget_limit'
+  | 'secret_detected'
+  | 'cloud_error';
 
 export interface TextTransformResult {
   titleSuggestion?: string;
@@ -455,6 +463,9 @@ export interface TextTransformResult {
   extractedTasks: string[];
   summary?: string;
   usedCloud: boolean;
+  changed?: boolean;
+  preRevisionId?: string | null;
+  fallbackReason?: TextTransformFallbackReason | null;
 }
 
 export type ItemRevisionSource =

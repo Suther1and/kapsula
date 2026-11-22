@@ -54,6 +54,21 @@ execFileSync('npx', builderArgs, { stdio: 'inherit', env });
 
 const releaseDir = path.resolve(process.cwd(), 'release');
 if (fs.existsSync(releaseDir)) {
+  const renameRules = [
+    { suffix: '-arm64.dmg', targetSuffix: '-mac-apple-silicon.dmg' },
+    { suffix: '-x64.dmg', targetSuffix: '-mac-intel.dmg' },
+  ];
+  for (const entry of fs.readdirSync(releaseDir)) {
+    for (const rule of renameRules) {
+      if (entry.endsWith(rule.suffix)) {
+        const src = path.join(releaseDir, entry);
+        const dst = path.join(releaseDir, `${entry.slice(0, -rule.suffix.length)}${rule.targetSuffix}`);
+        if (fs.existsSync(dst)) fs.rmSync(dst, { force: true });
+        fs.renameSync(src, dst);
+      }
+    }
+  }
+
   const dmgs = fs
     .readdirSync(releaseDir)
     .filter((f) => f.endsWith('.dmg'))

@@ -222,8 +222,8 @@ describe('Kapsula v7 macOS Platform Support (.dmg + E2EE Sync)', () => {
     expect(workflow).toContain('node-version: 24');
     expect(workflow).toContain('scripts/pack-mac.mjs');
     expect(workflow).toContain('actions/upload-artifact@v4');
-    expect(workflow).toContain('ls release/*-arm64.dmg');
-    expect(workflow).toContain('ls release/*-x64.dmg');
+    expect(workflow).toContain('ls release/*-mac-apple-silicon.dmg');
+    expect(workflow).toContain('ls release/*-mac-intel.dmg');
     expect(workflow).not.toContain('SHA256SUMS-');
   });
 

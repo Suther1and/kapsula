@@ -203,7 +203,10 @@ function main() {
 
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
   const srcApk = path.join(apkDir, apkName);
-  const outName = `Kapsula-${version}-android-${VARIANT}.apk`;
+  const outName =
+    VARIANT === 'release'
+      ? `Kapsula-${version}-android.apk`
+      : `Kapsula-${version}-android-${VARIANT}.apk`;
   const dstApk = path.join(RELEASE_DIR, outName);
   fs.copyFileSync(srcApk, dstApk);
 

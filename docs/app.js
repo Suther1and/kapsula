@@ -5,27 +5,54 @@
   const RELEASE_API = 'https://api.github.com/repos/Suther1and/kapsula/releases/latest';
   const DOWNLOAD_BASE = 'https://github.com/Suther1and/kapsula/releases/download/v';
 
+  const HERO_VIEWS = {
+    'theme-terracotta': {
+      enNote: 'All notes, pinned items, and folders',
+      ruNote: 'Лента заметок, закрепы и\u00A0разделы',
+      enAlt: 'Kapsula desktop workspace',
+      ruAlt: 'Рабочее пространство Kapsula на\u00A0компьютере',
+    },
+    'hud-search': {
+      enNote: 'Instant Ctrl+Space search across notes & 2FA',
+      ruNote: 'Мгновенный поиск по\u00A0Ctrl+Пробел поверх окон',
+      enAlt: 'Kapsula Command HUD search launcher',
+      ruAlt: 'Быстрый поиск по\u00A0Ctrl+Пробел в\u00A0Kapsula',
+    },
+    'note-studio': {
+      enNote: 'Full post extraction from Telegram, YouTube, X & GitHub',
+      ruNote: 'Полный текст и\u00A0медиа по\u00A0ссылкам из\u00A0Телеграма и\u00A0веба',
+      enAlt: 'Kapsula Note Studio with extracted link content',
+      ruAlt: 'Редактор заметки и\u00A0разбор ссылок в\u00A0Kapsula',
+    },
+    'tasks-kanban': {
+      enNote: 'Checklists synced between notes, boards & calendar',
+      ruNote: 'Задачи из\u00A0заметок, канбан-доска и\u00A0календарь',
+      enAlt: 'Kapsula tasks Kanban board',
+      ruAlt: 'Доска задач и\u00A0сроков в\u00A0Kapsula',
+    },
+  };
+
   const ACCENT_META = {
     terracotta: {
       hex: '#d95826',
       darkName: 'Obsidian',
       lightName: 'Porcelain',
       enDesc: 'Terracotta accent over warm Obsidian dark and Porcelain light surfaces.',
-      ruDesc: 'Терракотовый акцент на\u00A0тёплом графите или светлом фоне.',
+      ruDesc: 'Терракотовый акцент на\u00A0тёплом графите или светлой бумаге.',
     },
     emerald: {
-      hex: '#2db57d',
+      hex: '#168055',
       darkName: 'Pine',
       lightName: 'Sage',
       enDesc: 'Emerald green accent paired with calm Pine dark and soft Sage surfaces.',
-      ruDesc: 'Изумрудный акцент с\u00A0глубоким хвойным или мягким шалфейным фоном.',
+      ruDesc: 'Изумрудный акцент с\u00A0хвойным тёмным и\u00A0мягким светлым фоном.',
     },
     cobalt: {
       hex: '#4f86f7',
       darkName: 'Midnight',
       lightName: 'Ice',
       enDesc: 'Cobalt blue accent paired with Midnight dark and crisp Ice light surfaces.',
-      ruDesc: 'Кобальтовый акцент на\u00A0полуночном тёмном или прохладном светлом фоне.',
+      ruDesc: 'Кобальтовый акцент на\u00A0полуночном тёмном и\u00A0чистом светлом фоне.',
     },
     amethyst: {
       hex: '#9a75f5',
@@ -38,369 +65,183 @@
 
   const I18N = {
     en: {
-      metaTitle: 'Kapsula — Quick notes, links, tasks, and encrypted sync',
+      metaTitle: 'Kapsula — Notes, links, tasks, and encrypted vault',
       metaDesc:
-        'Kapsula captures notes, links, screenshots, voice memos, tasks, and 2FA secrets in one local-first workspace for Windows, macOS, and Android with end-to-end encrypted sync.',
-      'nav.demo': 'Overview',
-      'nav.workflow': 'Workflow',
+        'Kapsula keeps notes, web captures, tasks, voice memos, 2FA secrets, and encrypted cloud sync across Windows, macOS, and Android.',
+      skip: 'Skip to content',
+      'nav.overview': 'Overview',
       'nav.themes': 'Themes',
-      'nav.sync': 'Cloud Sync',
+      'nav.sync': 'Sync & Vault',
       'nav.download': 'Download',
+      'nav.cta': 'Download',
 
-      'hero.kicker': 'v1.0.2 · Windows · macOS · Android',
-      'hero.title': 'One box for notes, links, and tasks\u00A0— before they scatter',
+      'hero.title': 'Notes, links, and secrets — held in one place',
       'hero.lead':
-        'Press <span class="kbd-pill">Alt + Space</span> from any window to save a thought, paste a link, or look something up. It starts as one simple input box and expands into boards, themes, a\u00A02FA Vault, and encrypted cloud sync when you want it.',
-      'hero.secondaryCta': 'See how it works',
-      'hero.metaPlatforms': 'Free &amp; local-first · Sync is optional',
-      'hero.stageCaption':
-        'Appears over any app, detects dates automatically, and saves right away with <span class="kbd-pill">Ctrl+Enter</span>.',
+        'Press <kbd>Ctrl+Space</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.',
+      'hero.secondaryCta': 'Watch 30s walkthrough',
+      'hero.metaPlatforms': 'Windows, macOS & Android',
+      'hero.tabFeed': 'Workspace',
+      'hero.tabHud': 'Quick HUD',
+      'hero.tabStudio': 'Link Studio',
+      'hero.tabTasks': 'Task Board',
 
-      'demo.eyebrow': 'Overview',
-      'demo.title': 'From one shortcut to a structured workspace',
-      'demo.sub':
-        'A quick walkthrough of capture, note linking, Kanban boards, theme presets, 2FA Vault, and sync on Windows, macOS, and Android.',
-      'demo.playLabel': 'Play 30-sec walkthrough',
+      'overview.title': 'From quick capture to a structured archive',
+      'overview.sub':
+        'Start with one plain text box. Add folders, task boards, AI cleanup, and multi-device sync at your own pace.',
+      'overview.playLabel': 'Play 30s walkthrough',
 
-      'workflow.eyebrow': 'Progressive depth',
-      'workflow.title': 'Start with a single note. Turn on more only when you need it.',
-      'workflow.sub':
-        'Kapsula never forces you into folders or templates on day one. Capture first — organize into boards, checklists, and protected secrets at your own pace.',
+      'pillar1.title': 'Instant Command HUD',
+      'pillar1.desc':
+        'Pull up Ctrl+Space anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.',
+      'pillar2.title': 'Clean Link & Task Extraction',
+      'pillar2.desc':
+        'Telegram posts, YouTube, X, and GitHub URLs keep full text, code blocks, and previews. Checklists flow into boards and Google Calendar.',
+      'pillar3.title': 'Optional BYOK AI',
+      'pillar3.desc':
+        'Add your own OpenAI, OpenRouter, or Gemini key to merge scattered drafts, sort unfiled items, or transcribe voice notes.',
 
-      'beat1.tag': '01 · Instant HUD',
-      'beat1.title': 'Drop a note or search without switching windows',
-      'beat1.desc':
-        'Keep your focus in the game engine, browser, or terminal. Tap <span class="kbd-pill">Alt + Space</span> to save a link, record a voice memo, grab a screenshot, or find an older note in milliseconds.',
-      'beat1.b1': 'Recognizes dates like “Friday 3pm” and queues reminders right as you type',
-      'beat1.b2': 'Instant full-text search across titles, checkboxes, links, and 2FA entries',
-      'beat1.b3': 'Paste results back into your active app with Ctrl+Enter',
-      'beat1.btnCapture': 'Quick capture',
-      'beat1.btnSearch': 'Instant search',
-
-      'beat2.tag': '02 · Notes & Tasks',
-      'beat2.title': 'Checklists inside notes become real task boards',
-      'beat2.desc':
-        'Write checklists naturally inside any note alongside diagrams, links, and screenshots. Everything flows straight into the Tasks hub — switch between a Kanban board or tasks grouped by note.',
-      'beat2.b1': 'Custom columns, drag-and-drop priorities, and due-date filters',
-      'beat2.b2': 'Tick a task on the board or inside the note — both stay in sync',
-      'beat2.b3': 'Rich notes support embedded charts, screenshots, and [[note links]]',
-      'beat2.btnBoard': 'Kanban board',
-      'beat2.btnGrouped': 'Grouped by note',
-      'beat2.btnNote': 'Note editor',
-
-      'beat3.tag': '03 · 2FA Vault & Mobile',
-      'beat3.title': 'Passwords, 2FA codes, and your whole archive on Android',
-      'beat3.desc':
-        'Keep sensitive logins, API keys, bank cards, and live 2FA codes behind your Vault lock. Take the exact same notes, boards, and secrets onto Android phones and foldables like Galaxy Z Fold.',
-      'beat3.b1': 'Live 2FA countdown timers with one-tap copy and 30-second clipboard wipe',
-      'beat3.b2': 'Two-pane adaptive layout on foldable screens and tablets',
-      'beat3.b3': 'Works completely offline on every platform',
-      'beat3.btnVault': '2FA Vault',
-      'beat3.btnFold': 'Android Fold',
-      'beat3.btnPhone': 'Phone',
-
-      'tour.heading': 'Explore every screen',
-      'tour.tabFeed': 'Feed',
-      'tour.tabNote': 'Note Studio',
-      'tour.tabBoard': 'Kanban Board',
-      'tour.tabVault': '2FA Vault',
-      'tour.tabFold': 'Android Fold',
-      'tour.tabPhone': 'Android Phone',
-
-      'themes.eyebrow': 'Themes & Accent Colors',
-      'themes.title': 'Make the workspace yours in one click',
+      'themes.title': 'Built for late nights and daylight desks',
       'themes.sub':
-        'Pick Dark or Light mode, choose a background palette, or slide through any accent color — button text contrast recalculates automatically across the app.',
-      'themes.presetTerracotta': 'Terracotta · Obsidian',
-      'themes.presetEmerald': 'Emerald · Pine',
-      'themes.presetCobalt': 'Cobalt · Midnight',
-      'themes.presetAmethyst': 'Amethyst · Graphite',
-      'themes.modeDark': 'Dark',
-      'themes.modeLight': 'Light',
-      'themes.viewWorkspace': 'Live feed',
-      'themes.viewSettings': 'Theme picker',
+        'Pick between obsidian dark and warm porcelain light, swap signature accent palettes, and customize 24+ folder colors.',
+      'themes.light': 'Light',
+      'themes.dark': 'Dark',
+      'themes.viewApp': 'Workspace',
+      'themes.viewSettings': 'Settings',
 
-      'sync.eyebrow': 'Encrypted Cloud Sync',
-      'sync.title': 'Works offline on disk. Encrypted across your devices.',
+      'sync.title': 'Encrypted cloud where only you hold the key',
       'sync.sub':
-        'You never need an account to use Kapsula. Sign in with Google or email whenever you want notes, checklists, media, and Vault entries synced between Windows, macOS, and Android.',
-      'sync.s1Title': 'Encrypted on your device',
-      'sync.s1Desc':
-        'Notes, files, and Vault items are encrypted locally with AES-256-GCM before upload. Only scrambled data ever touches the server.',
-      'sync.s2Title': 'Cross-platform & offline-ready',
-      'sync.s2Desc':
-        'Write offline on Windows, macOS, or Android; pending updates reconcile automatically as soon as any device comes back online.',
-      'sync.s3Title': 'Printable recovery key',
-      'sync.s3Desc':
-        'Save one personal recovery phrase to restore your entire archive if you switch laptops or wipe your phone — with optional custom sync server support.',
-      'sync.s4Title': 'Clipboard & Vault safety',
-      'sync.s4Desc':
-        'Lock secrets behind a PIN or biometrics. Any password, card number, or 2FA code you copy wipes itself from the clipboard after 30 seconds.',
-      'sync.capDesktopTitle': 'Desktop · Sync status & connected devices',
-      'sync.capDesktopDesc': 'Real-time status, device list, recovery key export, and one-click reconcile.',
-      'sync.capMobileTitle': 'Android · Encrypted mobile sync',
-      'sync.capMobileDesc': 'Instant sync with desktop, share-sheet capture, and offline queue.',
+        'Records and media encrypt locally before leaving your machine. Sync Windows, macOS, and Android automatically — or keep everything offline.',
+      'sync.k1': 'Local cipher',
+      'sync.k2': 'Key derivation',
+      'sync.k3': 'Cross-platform',
+      'sync.k4': 'Portability',
+      'sync.v4': 'One-click JSON & Markdown export',
 
-      'dl.eyebrow': 'Download v1.0.2',
-      'dl.title': 'Ready on all your devices',
-      'dl.sub': 'Direct installers from the official GitHub release. Everything runs offline from minute one.',
-      'dl.recommended': 'Your device',
-      'dl.winDesc': '64-bit desktop installer (.exe)',
-      'dl.macArmDesc': 'M1 / M2 / M3 / M4 image (.dmg)',
-      'dl.macX64Desc': 'x86_64 Mac image (.dmg)',
-      'dl.androidDesc': 'Phones, tablets & Galaxy Z Fold (.apk)',
-      'dl.btnExe': 'Download .exe',
-      'dl.btnDmg': 'Download .dmg',
-      'dl.btnApk': 'Download .apk',
-      'dl.firstRunTitle': 'Note on first launch (Windows SmartScreen & macOS)',
-      'dl.firstRunWin':
-        '<strong>Windows:</strong> builds are independent open-source releases without a paid EV certificate. If SmartScreen appears, click <em>More info</em> → <em>Run anyway</em>.',
-      'dl.firstRunMac':
-        '<strong>macOS:</strong> if Gatekeeper marks the downloaded build as unverified, right-click the app in Applications and choose <em>Open</em>, or run <code>xattr -dr com.apple.quarantine /Applications/Kapsula.app</code>.',
+      'duo1.title': 'Passwords, Cards & 2FA Vault',
+      'duo1.desc':
+        'Store logins, cards, and live TOTP codes locked behind biometrics or your system keychain.',
+      'duo2.title': 'Phones & Foldable Tablets',
+      'duo2.desc':
+        'One-handed bottom bar on phones and an automatic two-pane workspace on Android foldables.',
 
+      'dl.title': 'Download Kapsula v1.0.2',
+      'dl.sub':
+        'Free desktop and Android installers with clean, human-readable filenames. Updates preserve your local vault.',
+      'dl.allReleases': 'Release notes on GitHub ↗',
+      'dl.recommended': 'Your OS',
+      'dl.winReq': 'Windows 10 / 11 (x64 installer)',
+      'dl.macArmReq': 'M1, M2, M3 & M4 Macs (.dmg)',
+      'dl.macIntelReq': 'Intel x64 Macs (.dmg)',
+      'dl.androidReq': 'Android 8.0+ phones & Fold (.apk)',
+      'dl.btn': 'Download',
+      'dl.helpSummary': 'First-run instructions (SmartScreen, macOS Gatekeeper, Android APK)',
+      'dl.helpWin':
+        '<strong>Windows:</strong> Open-source preview builds do not yet include a paid EV Authenticode certificate. If Microsoft SmartScreen appears once, click <em>More info → Run anyway</em>.',
+      'dl.helpMac':
+        '<strong>macOS:</strong> Drag Kapsula.app to Applications. If Gatekeeper blocks an unnotarized build, run once in Terminal: <code>xattr -cr /Applications/Kapsula.app</code>',
+      'dl.helpAndroid':
+        '<strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v1.0.2.',
+
+      'footer.repo': 'GitHub',
       'footer.releases': 'Releases',
-      'footer.issues': 'Issues',
+      'footer.license': 'License',
 
       cta: {
         win: 'Download for Windows',
-        'mac-arm': 'Download for Mac (Apple Silicon)',
-        'mac-x64': 'Download for Mac (Intel)',
-        android: 'Download for Android (.apk)',
-      },
-
-      tour: {
-        feed: {
-          mode: 'desktop',
-          base: 'theme-terracotta',
-          title: 'Clean Feed for notes, links, voice, and screenshots',
-          desc: 'Everything lands cleanly without crowding — filter by type, sort into boards, or keep a single stream.',
-          meta: 'Desktop · 1280×800',
-          alt: 'Kapsula desktop Feed showing notes, frame budget chart, voice cue, and link card',
-        },
-        note: {
-          mode: 'desktop',
-          base: 'note-studio',
-          title: 'Rich Note Studio with checkboxes and diagrams',
-          desc: 'Combine checklists, inline screenshots, reminders, tags, and [[cross-note links]] in a calm editor.',
-          meta: 'Desktop · Editor',
-          alt: 'Kapsula Note Studio showing formatted checklist and embedded diagram',
-        },
-        board: {
-          mode: 'desktop',
-          base: 'tasks-kanban',
-          title: 'Kanban Board synced straight from your notes',
-          desc: 'Turn note checklists into Inbox, In Progress, Waiting, and Done columns with priorities and due dates.',
-          meta: 'Desktop · Tasks',
-          alt: 'Kapsula Kanban tasks board',
-        },
-        vault: {
-          mode: 'desktop',
-          base: 'vault-2fa',
-          title: 'Encrypted Vault with live 2FA codes',
-          desc: 'Bank cards, logins, API keys, and 2FA authenticators locked locally with automatic 30-second clipboard clear.',
-          meta: 'Desktop · Vault',
-          alt: 'Kapsula encrypted 2FA Vault screen',
-        },
-        fold: {
-          mode: 'fold',
-          base: 'mobile-fold',
-          title: 'Two-pane adaptive layout on Galaxy Z Fold',
-          desc: 'Browse sections and notes on the left while editing markdown and checklists side by side on the inner display.',
-          meta: 'Android Fold · 860×840',
-          alt: 'Kapsula running on unfolded Android foldable with two-pane notes editor',
-        },
-        phone: {
-          mode: 'phone',
-          base: 'mobile-phone',
-          title: 'Android Phone with share-sheet capture & offline queue',
-          desc: 'Thumb-friendly navigation dock, voice memos, offline search, and end-to-end encrypted sync.',
-          meta: 'Android · 390×844',
-          alt: 'Kapsula Android phone feed with notes, palette capture, and bottom navigation',
-        },
+        'mac-arm': 'Download for macOS (Apple Silicon)',
+        'mac-x64': 'Download for macOS (Intel)',
+        android: 'Download Android APK',
+        fallback: 'Download Kapsula v1.0.2',
       },
     },
-
     ru: {
-      metaTitle: 'Kapsula\u00A0— заметки, ссылки, задачи и\u00A0шифрованная синхронизация',
+      metaTitle: 'Kapsula — Заметки, ссылки, задачи и зашифрованный сейф',
       metaDesc:
-        'Kapsula собирает заметки, ссылки, скриншоты, голосовые записи, задачи и\u00A0пароли с\u00A02FA на\u00A0Windows, macOS и\u00A0Android\u00A0— без привязки к\u00A0интернету и\u00A0со\u00A0сквозным шифрованием.',
-      'nav.demo': 'Обзор',
-      'nav.workflow': 'Как работает',
+        'Kapsula хранит заметки, посты из Телеграма, задачи, голосовые наброски, 2FA-коды и пароли на Windows, macOS и Android с шифрованной синхронизацией.',
+      skip: 'Перейти к\u00A0содержимому',
+      'nav.overview': 'Обзор',
       'nav.themes': 'Темы',
       'nav.sync': 'Синхронизация',
       'nav.download': 'Скачать',
+      'nav.cta': 'Скачать',
 
-      'hero.kicker': 'v1.0.2 · Windows, macOS и\u00A0Android',
-      'hero.title': 'Одно окно для заметок, ссылок и\u00A0задач',
+      'hero.title': 'Заметки, ссылки и\u00A0пароли в\u00A0одном быстром окне',
       'hero.lead':
-        'Нажмите <span class="kbd-pill">Alt + Space</span> в\u00A0любом приложении, чтобы записать мысль, сохранить ссылку или найти карточку. Вначале это одна строка ввода, а\u00A0когда захочется порядка\u00A0— доска задач, сейф с\u00A02FA, свои темы и\u00A0шифрованная синхронизация.',
-      'hero.secondaryCta': 'Как устроено',
-      'hero.metaPlatforms': 'Бесплатно и\u00A0офлайн · облако по\u00A0желанию',
-      'hero.stageCaption':
-        'Открывается поверх любого окна, само распознаёт дату и\u00A0сохраняет запись по\u00A0<span class="kbd-pill">Ctrl+Enter</span>.',
+        'Нажмите <kbd>Ctrl+Пробел</kbd> в\u00A0любой программе, чтобы записать мысль, разобрать ссылку или скопировать 2FA-код. Работает без сети, а\u00A0облако включается по желанию.',
+      'hero.secondaryCta': 'Ролик за 30\u00A0секунд',
+      'hero.metaPlatforms': 'Windows, macOS и\u00A0Android',
+      'hero.tabFeed': 'Лента',
+      'hero.tabHud': 'Ctrl+Пробел',
+      'hero.tabStudio': 'Редактор',
+      'hero.tabTasks': 'Задачи',
 
-      'demo.eyebrow': 'Короткий обзор',
-      'demo.title': 'От\u00A0одной горячей клавиши\u00A0— к\u00A0собранному архиву',
-      'demo.sub':
-        'За\u00A030\u00A0секунд показываем быстрый ввод, связи между заметками, канбан-доску, выбор тем, сейф с\u00A02FA и\u00A0синхронизацию между компьютером и\u00A0Android.',
-      'demo.playLabel': 'Смотреть обзор за\u00A030\u00A0секунд',
+      'overview.title': 'От\u00A0одной строчки до\u00A0собранной базы',
+      'overview.sub':
+        'Начните с\u00A0чистого поля для ввода. Разделы, доски задач, ИИ-разбор и\u00A0синхронизация подключаются тогда, когда нужны.',
+      'overview.playLabel': 'Смотреть ролик (30\u00A0с)',
 
-      'workflow.eyebrow': 'От\u00A0простого к\u00A0большему',
-      'workflow.title': 'Сначала простая строка записи. Всё остальное\u00A0— когда понадобится.',
-      'workflow.sub':
-        'Никакой настройки папок и\u00A0шаблонов на\u00A0старте. Просто сбрасывайте сюда всё нужное, а\u00A0дальше подключайте доску задач, разделы и\u00A0защищённый сейф.',
+      'pillar1.title': 'Панель поверх всех окон',
+      'pillar1.desc':
+        'Вызывайте поиск по Ctrl+Пробел из любой программы: находите заметки, диктуйте голосом или копируйте коды подтверждения без смены окна.',
+      'pillar2.title': 'Глубокий разбор ссылок и\u00A0дел',
+      'pillar2.desc':
+        'Посты из Телеграма, YouTube, X и\u00A0GitHub сохраняются с\u00A0текстом, кодом и\u00A0обложкой. Чеклисты сами уходят на доску и\u00A0в\u00A0Google Календарь.',
+      'pillar3.title': 'ИИ по\u00A0вашему ключу',
+      'pillar3.desc':
+        'Подключите свой ключ OpenAI, OpenRouter или Gemini, чтобы сводить разрозненные черновики, раскладывать архив и\u00A0расшифровывать голос.',
 
-      'beat1.tag': '01 · Быстрая панель',
-      'beat1.title': 'Записывайте и\u00A0ищите, не\u00A0уходя из\u00A0рабочей программы',
-      'beat1.desc':
-        'Нажмите <span class="kbd-pill">Alt + Space</span> прямо из\u00A0браузера, редактора кода или игры\u00A0— вставьте ссылку, надиктуйте голос, снимите область экрана или найдите нужную заметку за\u00A0пару секунд.',
-      'beat1.b1': 'Распознаёт фразы вроде «пятница в\u00A015:00» и\u00A0сразу предлагает напоминание',
-      'beat1.b2': 'Мгновенно ищет по\u00A0заголовкам, чек-листам, ссылкам и\u00A0записям сейфа',
-      'beat1.b3': 'Выбранный фрагмент можно вставить обратно в\u00A0открытое окно по\u00A0Ctrl+Enter',
-      'beat1.btnCapture': 'Быстрая запись',
-      'beat1.btnSearch': 'Мгновенный поиск',
-
-      'beat2.tag': '02 · Заметки и\u00A0задачи',
-      'beat2.title': 'Чек-листы внутри заметок сами собираются в\u00A0канбан',
-      'beat2.desc':
-        'Добавляйте списки дел прямо в\u00A0текст заметки вместе с\u00A0картинками и\u00A0ссылками. Задачи сразу появляются на\u00A0общей доске\u00A0— и\u00A0переключаются между колонками и\u00A0списком по\u00A0заметкам.',
-      'beat2.b1': 'Свои колонки, приоритеты, фильтры по\u00A0разделам и\u00A0срокам',
-      'beat2.b2': 'Отметка задачи на\u00A0доске сразу обновляет чек-лист внутри заметки',
-      'beat2.b3': 'Упоминания через [[название]] связывают заметки между собой',
-      'beat2.btnBoard': 'Канбан-доска',
-      'beat2.btnGrouped': 'По\u00A0заметкам',
-      'beat2.btnNote': 'Редактор',
-
-      'beat3.tag': '03 · Сейф и\u00A0Android',
-      'beat3.title': 'Пароли, коды 2FA и\u00A0весь архив\u00A0— на\u00A0компьютере и\u00A0в\u00A0телефоне',
-      'beat3.desc':
-        'Храните карты, токены и\u00A0одноразовые коды 2FA под ПИН-кодом. На\u00A0Android и\u00A0складных экранах вроде Galaxy Z Fold открываются те\u00A0же заметки, задачи и\u00A0сейф.',
-      'beat3.b1': 'Таймеры кодов 2FA и\u00A0автоочистка буфера обмена через 30\u00A0секунд',
-      'beat3.b2': 'На\u00A0складных экранах слева список, а\u00A0справа сразу открытый текст',
-      'beat3.b3': 'Всё работает и\u00A0ищется без интернета на\u00A0любом устройстве',
-      'beat3.btnVault': 'Сейф и\u00A02FA',
-      'beat3.btnFold': 'Android Fold',
-      'beat3.btnPhone': 'Смартфон',
-
-      'tour.heading': 'Все экраны приложения',
-      'tour.tabFeed': 'Лента',
-      'tour.tabNote': 'Заметка',
-      'tour.tabBoard': 'Канбан',
-      'tour.tabVault': 'Сейф 2FA',
-      'tour.tabFold': 'Android Fold',
-      'tour.tabPhone': 'Смартфон',
-
-      'themes.eyebrow': 'Темы и\u00A0палитра',
-      'themes.title': 'Подстройте вид приложения под свой монитор',
+      'themes.title': 'Тёмный графит и\u00A0тёплая светлая бумага',
       'themes.sub':
-        'Тёмная или светлая тема, 11\u00A0фоновых палитр и\u00A0любой акцентный цвет\u00A0— читаемость кнопок и\u00A0бейджей подбирается автоматически.',
-      'themes.presetTerracotta': 'Терракота · Графит',
-      'themes.presetEmerald': 'Изумруд · Хвоя',
-      'themes.presetCobalt': 'Кобальт · Ночь',
-      'themes.presetAmethyst': 'Аметист · Камень',
-      'themes.modeDark': 'Тёмная',
-      'themes.modeLight': 'Светлая',
-      'themes.viewWorkspace': 'Лента',
-      'themes.viewSettings': 'Окно тем',
+        'Переключайте полярность темы, выбирайте из\u00A0четырёх акцентных палитр и\u00A0настраивайте более 24 оттенков для иконок разделов.',
+      'themes.light': 'Светлая',
+      'themes.dark': 'Тёмная',
+      'themes.viewApp': 'Интерфейс',
+      'themes.viewSettings': 'Настройки',
 
-      'sync.eyebrow': 'Шифрованная синхронизация',
-      'sync.title': 'Сначала на\u00A0диске. В\u00A0облако\u00A0— только в\u00A0шифре.',
+      'sync.title': 'Облако с\u00A0шифрованием на\u00A0вашем устройстве',
       'sync.sub':
-        'Для работы не\u00A0нужен аккаунт и\u00A0интернет. Войдите через Google или по\u00A0почте, только если хотите, чтобы заметки, задачи и\u00A0сейф синхронизировались между Windows, macOS и\u00A0Android.',
-      'sync.s1Title': 'Шифр на\u00A0вашем устройстве',
-      'sync.s1Desc':
-        'Заметки, вложения и\u00A0карточки сейфа шифруются ключом AES-256-GCM ещё до\u00A0отправки. Сервер видит только закрытый набор байтов.',
-      'sync.s2Title': 'Офлайн без потерь',
-      'sync.s2Desc':
-        'Править заметки и\u00A0отмечать задачи можно в\u00A0самолёте или без сети\u00A0— когда связь появится, изменения подтянутся.',
-      'sync.s3Title': 'Резервный ключ восстановления',
-      'sync.s3Desc':
-        'Сохраните один ключ на\u00A0бумаге или в\u00A0менеджере: с\u00A0ним можно перенести весь архив на\u00A0новый ноутбук или телефон.',
-      'sync.s4Title': 'Сейф и\u00A0чистый буфер обмена',
-      'sync.s4Desc':
-        'Секреты закрыты ПИН-кодом или отпечатком, а\u00A0скопированные пароли, номера карт и\u00A02FA удаляются из\u00A0буфера через 30\u00A0секунд.',
-      'sync.capDesktopTitle': 'Компьютер · Статус и\u00A0список устройств',
-      'sync.capDesktopDesc': 'Подключённые устройства, резервный ключ и\u00A0принудительная сверка в\u00A0один клик.',
-      'sync.capMobileTitle': 'Android · Шифрованная синхронизация',
-      'sync.capMobileDesc': 'Обмен с\u00A0компьютером, быстрое «Поделиться» из\u00A0браузера и\u00A0работа без сети.',
+        'Заметки и\u00A0вложения шифруются мастер-ключом ещё до отправки в\u00A0сеть. Синхронизируйте Windows, macOS и\u00A0Android или храните всё только локально.',
+      'sync.k1': 'Шифрование',
+      'sync.k2': 'Ключ доступа',
+      'sync.k3': 'Платформы',
+      'sync.k4': 'Экспорт',
+      'sync.v4': 'Экспорт в\u00A0JSON и\u00A0Markdown в\u00A0один клик',
 
-      'dl.eyebrow': 'Скачать v1.0.2',
-      'dl.title': 'Сборки для компьютера и\u00A0телефона',
+      'duo1.title': 'Сейф паролей, карт и\u00A02FA',
+      'duo1.desc':
+        'Логины, номера карт и\u00A0одноразовые коды скрыты за биометрией или системной связкой ключей.',
+      'duo2.title': 'Телефоны и\u00A0складные экраны',
+      'duo2.desc':
+        'Нижняя панель под большой палец на смартфонах и\u00A0широкий двухпанельный режим на Android Fold.',
+
+      'dl.title': 'Скачать Kapsula v1.0.2',
       'dl.sub':
-        'Прямые установщики с\u00A0GitHub Releases. Работает локально с\u00A0первой минуты без обязательной регистрации.',
+        'Готовые установщики под Windows, macOS и\u00A0Android. Обновления сохраняют все локальные записи и\u00A0сейф.',
+      'dl.allReleases': 'История версий на GitHub ↗',
       'dl.recommended': 'Ваша система',
-      'dl.winDesc': 'Установщик для 64-бит (.exe)',
-      'dl.macArmDesc': 'Образ для M1 / M2 / M3 / M4 (.dmg)',
-      'dl.macX64Desc': 'Образ для Mac на\u00A0Intel (.dmg)',
-      'dl.androidDesc': 'Телефоны, планшеты и\u00A0Galaxy Z Fold (.apk)',
-      'dl.btnExe': 'Скачать .exe',
-      'dl.btnDmg': 'Скачать .dmg',
-      'dl.btnApk': 'Скачать .apk',
-      'dl.firstRunTitle': 'Про первый запуск на\u00A0Windows и\u00A0macOS',
-      'dl.firstRunWin':
-        '<strong>Windows:</strong> у\u00A0открытых сборок нет дорогой EV-подписи, поэтому SmartScreen может предупредить о\u00A0неизвестном авторе. Нажмите <em>Подробнее</em> → <em>Выполнить в\u00A0любом случае</em>.',
-      'dl.firstRunMac':
-        '<strong>macOS:</strong> если Gatekeeper не\u00A0пускает скачанное приложение, откройте его через правую кнопку мыши → <em>Открыть</em> или выполните в\u00A0терминале <code>xattr -dr com.apple.quarantine /Applications/Kapsula.app</code>.',
+      'dl.winReq': 'Windows 10 / 11 (x64-установщик)',
+      'dl.macArmReq': 'Mac на Apple Silicon M1–M4 (.dmg)',
+      'dl.macIntelReq': 'Mac на Intel x64 (.dmg)',
+      'dl.androidReq': 'Android 8.0+ смартфоны и\u00A0Fold (.apk)',
+      'dl.btn': 'Скачать',
+      'dl.helpSummary': 'Памятка при первом запуске (SmartScreen, macOS, Android)',
+      'dl.helpWin':
+        '<strong>Windows:</strong> открытые сборки пока не подписаны платным EV-сертификатом. Если SmartScreen покажет предупреждение, нажмите <em>Подробнее → Выполнить в\u00A0любом случае</em>.',
+      'dl.helpMac':
+        '<strong>macOS:</strong> перетащите Kapsula.app в\u00A0Программы. Если система не открывает ненотаризованную сборку, выполните в\u00A0Терминале: <code>xattr -cr /Applications/Kapsula.app</code>',
+      'dl.helpAndroid':
+        '<strong>Android:</strong> при первом запуске разрешите установку из браузера или проводника. Релизный APK подписан постоянным ключом — будущие обновления встанут поверх без потери базы.',
 
+      'footer.repo': 'GitHub',
       'footer.releases': 'Релизы',
-      'footer.issues': 'Сообщить об ошибке',
+      'footer.license': 'Лицензия',
 
       cta: {
         win: 'Скачать для Windows',
-        'mac-arm': 'Скачать для Mac (Apple Silicon)',
-        'mac-x64': 'Скачать для Mac (Intel)',
-        android: 'Скачать для Android (.apk)',
-      },
-
-      tour: {
-        feed: {
-          mode: 'desktop',
-          base: 'theme-terracotta',
-          title: 'Лента без лишнего шума',
-          desc: 'Заметки, графики, голосовые записи и\u00A0ссылки лежат в\u00A0аккуратной сетке с\u00A0быстрыми фильтрами.',
-          meta: 'Десктоп · 1280×800',
-          alt: 'Главная лента Kapsula на\u00A0компьютере с\u00A0заметками, графиком и\u00A0голосовой записью',
-        },
-        note: {
-          mode: 'desktop',
-          base: 'note-studio',
-          title: 'Редактор с\u00A0чек-листами и\u00A0картинками',
-          desc: 'Объединяйте списки дел, скриншоты, теги, напоминания и\u00A0[[связи]] в\u00A0одном окне.',
-          meta: 'Десктоп · Редактор',
-          alt: 'Редактор заметки Kapsula с\u00A0чек-листом и\u00A0встроенной диаграммой',
-        },
-        board: {
-          mode: 'desktop',
-          base: 'tasks-kanban',
-          title: 'Канбан-доска прямо из\u00A0заметок',
-          desc: 'Колонки «Входящие», «В\u00A0работе», «Ожидание» и\u00A0«Готово» с\u00A0приоритетами и\u00A0быстрым переключением в\u00A0список.',
-          meta: 'Десктоп · Задачи',
-          alt: 'Канбан-доска задач Kapsula',
-        },
-        vault: {
-          mode: 'desktop',
-          base: 'vault-2fa',
-          title: 'Сейф с\u00A0паролями и\u00A0живыми кодами 2FA',
-          desc: 'Банковские карты, ключи API, логины и\u00A0таймеры 2FA с\u00A0автоочисткой буфера обмена через 30\u00A0секунд.',
-          meta: 'Десктоп · Сейф',
-          alt: 'Экран сейфа Kapsula с\u00A0банковской картой и\u00A0кодами 2FA',
-        },
-        fold: {
-          mode: 'fold',
-          base: 'mobile-fold',
-          title: 'Две панели на\u00A0складном Galaxy Z Fold',
-          desc: 'На\u00A0широком экране список заметок и\u00A0фильтры по\u00A0разделам остаются слева, а\u00A0редактор\u00A0— справа.',
-          meta: 'Android Fold · 860×840',
-          alt: 'Kapsula на\u00A0развёрнутом складном экране Android в\u00A0две панели',
-        },
-        phone: {
-          mode: 'phone',
-          base: 'mobile-phone',
-          title: 'Быстрый ввод, голос и\u00A0офлайн-поиск на\u00A0смартфоне',
-          desc: 'Удобная нижняя панель под большой палец, голосовые записи, быстрый поиск без сети и\u00A0шифрованная синхронизация.',
-          meta: 'Android · 390×844',
-          alt: 'Kapsula на\u00A0смартфоне Android\u00A0— лента с\u00A0заметками и\u00A0нижней панелью',
-        },
+        'mac-arm': 'Скачать для macOS (Apple Silicon)',
+        'mac-x64': 'Скачать для macOS (Intel)',
+        android: 'Скачать APK для Android',
+        fallback: 'Скачать Kapsula v1.0.2',
       },
     },
   };
@@ -420,16 +261,29 @@
     return ACCENT_META[a] ? a : 'terracotta';
   }
 
+  function getInitialBandAccent(fallbackAccent) {
+    try {
+      const saved = localStorage.getItem('kapsula-docs-accent');
+      if (saved && ACCENT_META[saved]) return saved;
+    } catch (e) {}
+    return fallbackAccent === 'emerald' ? 'cobalt' : 'emerald';
+  }
+
+  const initialTheme = getInitialTheme();
+  const initialAccent = getInitialAccent();
   const state = {
     lang: getInitialLang(),
-    theme: getInitialTheme(),
-    accent: getInitialAccent(),
-    themeView: 'workspace',
-    tourId: 'feed',
-    beatShots: {
-      'beat1-img': 'hud-capture',
-      'beat2-img': 'tasks-kanban',
-      'beat3-img': 'vault-2fa',
+    theme: initialTheme,
+    accent: initialAccent,
+    heroShot: 'theme-terracotta',
+    bandAccent: getInitialBandAccent(initialAccent),
+    bandTheme: initialTheme === 'dark' ? 'light' : 'dark',
+    bandView: 'workspace',
+    filenames: {
+      win: `Kapsula-${DEFAULT_VERSION}-windows.exe`,
+      'mac-arm': `Kapsula-${DEFAULT_VERSION}-mac-apple-silicon.dmg`,
+      'mac-x64': `Kapsula-${DEFAULT_VERSION}-mac-intel.dmg`,
+      android: `Kapsula-${DEFAULT_VERSION}-android.apk`,
     },
   };
 
@@ -444,6 +298,7 @@
 
     if (/android/i.test(ua)) return 'android';
     if (/mac/i.test(plat) || /macintosh|mac os x/i.test(ua)) {
+      if (/iphone|ipad|ipod/i.test(ua)) return null;
       try {
         const canvas = document.createElement('canvas');
         const gl = canvas.getContext('webgl');
@@ -454,7 +309,8 @@
       } catch (e) {}
       return 'mac-arm';
     }
-    return 'win';
+    if (/win/i.test(plat) || /windows/i.test(ua)) return 'win';
+    return null;
   }
 
   function compareSemver(a, b) {
@@ -469,96 +325,100 @@
 
   function updateDownloadsAndPlatform() {
     const platform = detectPlatform();
-    document.querySelectorAll('.dl-card').forEach((card) => {
-      card.classList.toggle('is-recommended', card.dataset.platform === platform);
+    document.querySelectorAll('.dl-item').forEach((card) => {
+      card.classList.toggle('is-recommended', Boolean(platform && card.dataset.platform === platform));
     });
 
     const heroBtn = document.getElementById('hero-download-btn');
     const heroLabel = document.getElementById('hero-download-label');
-    const cardLink = document.querySelector(`[data-dl="${platform}"]`);
-    if (heroBtn && cardLink) {
-      heroBtn.setAttribute('href', cardLink.getAttribute('href') || '#download');
+    const heroFile = document.getElementById('hero-file-name');
+    const heroFileSep = document.getElementById('hero-file-sep');
+    const cardLink = platform ? document.querySelector(`[data-dl="${platform}"]`) : null;
+
+    if (heroBtn) {
+      heroBtn.setAttribute('href', (cardLink && cardLink.getAttribute('href')) || '#download');
     }
     if (heroLabel) {
-      heroLabel.textContent = I18N[state.lang].cta[platform] || I18N[state.lang].cta.win;
+      heroLabel.textContent = (platform && I18N[state.lang].cta[platform]) || I18N[state.lang].cta.fallback;
     }
-  }
-
-  function applyThemeStage() {
-    const meta = ACCENT_META[state.accent] || ACCENT_META.terracotta;
-    const img = document.getElementById('theme-preview-img');
-    const cap = document.getElementById('theme-stage-caption');
-    const tok = document.getElementById('theme-stage-tokens');
-
-    const base = state.themeView === 'settings' ? 'settings-appearance' : `theme-${state.accent}`;
-    if (img) {
-      img.src = shotPath(base);
-    }
-    if (cap) {
-      cap.innerHTML = state.lang === 'ru' ? meta.ruDesc : meta.enDesc;
-    }
-    if (tok) {
-      const surfaceName = state.theme === 'dark' ? meta.darkName : meta.lightName;
-      tok.textContent = `${meta.hex} · ${surfaceName}`;
-    }
-
-    document.querySelectorAll('[data-accent-preset]').forEach((btn) => {
-      btn.setAttribute('aria-pressed', String(btn.dataset.accentPreset === state.accent));
-    });
-    document.querySelectorAll('[data-theme-pick]').forEach((btn) => {
-      btn.setAttribute('aria-pressed', String(btn.dataset.themePick === state.theme));
-    });
-    document.querySelectorAll('[data-theme-view]').forEach((btn) => {
-      btn.setAttribute('aria-pressed', String(btn.dataset.themeView === state.themeView));
-    });
-  }
-
-  function applyTour(swapWithFade = false) {
-    const dict = I18N[state.lang].tour;
-    const item = dict[state.tourId] || dict.feed;
-    const frame = document.getElementById('tour-media-frame');
-    const img = document.getElementById('tour-stage-img');
-    const title = document.getElementById('tour-caption-title');
-    const desc = document.getElementById('tour-caption-desc');
-    const meta = document.getElementById('tour-caption-meta');
-
-    if (frame) frame.setAttribute('data-mode', item.mode);
-    if (title) title.innerHTML = item.title;
-    if (desc) desc.innerHTML = item.desc;
-    if (meta) meta.textContent = item.meta;
-
-    document.querySelectorAll('.tour-tab').forEach((tab) => {
-      tab.setAttribute('aria-selected', String(tab.dataset.tourId === state.tourId));
-    });
-
-    if (img) {
-      const nextSrc = shotPath(item.base);
-      img.alt = item.alt;
-      if (swapWithFade && frame && img.getAttribute('src') !== nextSrc) {
-        frame.classList.add('is-swapping');
-        window.setTimeout(() => {
-          img.src = nextSrc;
-          frame.classList.remove('is-swapping');
-        }, 110);
+    if (heroFile && heroFileSep) {
+      if (platform && state.filenames[platform]) {
+        heroFile.textContent = state.filenames[platform];
+        heroFile.hidden = false;
+        heroFileSep.hidden = false;
       } else {
-        img.src = nextSrc;
+        heroFile.hidden = true;
+        heroFileSep.hidden = true;
       }
     }
   }
 
+  function applyHeroStage() {
+    const view = HERO_VIEWS[state.heroShot] || HERO_VIEWS['theme-terracotta'];
+    const img = document.getElementById('hero-stage-img');
+    const note = document.getElementById('hero-stage-note');
+    const panel = document.getElementById('hero-panel');
+
+    if (img) {
+      img.src = shotPath(state.heroShot);
+      img.alt = state.lang === 'ru' ? view.ruAlt : view.enAlt;
+    }
+    if (note) {
+      note.textContent = state.lang === 'ru' ? view.ruNote : view.enNote;
+    }
+    document.querySelectorAll('[data-hero-shot]').forEach((btn) => {
+      const isSelected = btn.dataset.heroShot === state.heroShot;
+      btn.setAttribute('aria-selected', String(isSelected));
+      btn.setAttribute('tabindex', isSelected ? '0' : '-1');
+      if (isSelected && panel && btn.id) {
+        panel.setAttribute('aria-labelledby', btn.id);
+      }
+    });
+  }
+
+  function applyThemesBand() {
+    const meta = ACCENT_META[state.bandAccent] || ACCENT_META.emerald;
+    const img = document.getElementById('theme-preview-img');
+    const cap = document.getElementById('theme-stage-caption');
+    const tok = document.getElementById('theme-stage-tokens');
+
+    const base = state.bandView === 'settings' ? 'settings-appearance' : `theme-${state.bandAccent}`;
+    if (img) {
+      img.src = shotPath(base, state.lang, state.bandTheme);
+    }
+    if (cap) {
+      cap.textContent = state.lang === 'ru' ? meta.ruDesc : meta.enDesc;
+    }
+    if (tok) {
+      const surfaceName = state.bandTheme === 'dark' ? meta.darkName : meta.lightName;
+      tok.textContent = `${meta.hex} · ${surfaceName}`;
+    }
+
+    document.querySelectorAll('[data-accent-preset]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.accentPreset === state.bandAccent));
+    });
+    document.querySelectorAll('[data-band-mode]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.bandMode === state.bandTheme));
+    });
+    document.querySelectorAll('[data-theme-view]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.themeView === state.bandView));
+    });
+  }
+
   function applyAllLocalizedShots() {
+    applyHeroStage();
+    applyThemesBand();
     document.querySelectorAll('img[data-shot-base]').forEach((img) => {
-      const base = state.beatShots[img.id] || img.dataset.shotBase;
+      const base = img.dataset.shotBase;
       if (base) img.src = shotPath(base);
     });
-    applyTour(false);
-    applyThemeStage();
   }
 
   function applyVideoLocale() {
     const video = document.getElementById('demo-video');
     const source = document.getElementById('demo-video-source');
     const frame = document.getElementById('video-frame');
+    const posterImg = document.getElementById('video-poster-img');
     if (!video || !source) return;
 
     const nextSrc = `assets/kapsula-promo-${state.lang}.mp4`;
@@ -566,21 +426,34 @@
     const currentSrc = source.getAttribute('src');
 
     video.setAttribute('poster', nextPoster);
+    if (posterImg) {
+      posterImg.setAttribute('src', nextPoster);
+      posterImg.setAttribute(
+        'alt',
+        state.lang === 'ru' ? 'Превью ролика Kapsula за 30 секунд' : 'Kapsula walkthrough preview'
+      );
+    }
     if (currentSrc !== nextSrc) {
+      video.pause();
+      video.removeAttribute('controls');
       source.setAttribute('src', nextSrc);
       video.load();
-      if (frame) {
-        frame.setAttribute('data-playing', 'false');
-      }
+      if (frame) frame.setAttribute('data-playing', 'false');
     }
   }
 
   function applyLanguage(lang, persist = true) {
     state.lang = lang === 'ru' ? 'ru' : 'en';
     document.documentElement.setAttribute('lang', state.lang);
+
     if (persist) {
       try {
         localStorage.setItem('kapsula-docs-lang', state.lang);
+      } catch (e) {}
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('lang', state.lang);
+        window.history.replaceState(null, '', url.toString());
       } catch (e) {}
     }
 
@@ -611,7 +484,7 @@
     if (toggle) {
       toggle.setAttribute(
         'aria-label',
-        state.lang === 'ru' ? 'Переключить тему оформления' : 'Toggle theme'
+        state.lang === 'ru' ? 'Переключить светлую и тёмную тему' : 'Toggle color mode'
       );
     }
 
@@ -623,8 +496,10 @@
   function applyThemeMode(theme, persist = true) {
     state.theme = theme === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', state.theme);
+    state.bandTheme = state.theme === 'dark' ? 'light' : 'dark';
+
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', state.theme === 'light' ? '#faf9f6' : '#161614');
+    if (meta) meta.setAttribute('content', state.theme === 'light' ? '#f5f3ee' : '#111113');
 
     const toggle = document.getElementById('theme-toggle');
     if (toggle) toggle.setAttribute('aria-pressed', String(state.theme === 'dark'));
@@ -637,7 +512,7 @@
     applyAllLocalizedShots();
   }
 
-  function applyAccent(accent, persist = true) {
+  function applyGlobalAccent(accent, persist = true) {
     state.accent = ACCENT_META[accent] ? accent : 'terracotta';
     document.documentElement.setAttribute('data-accent', state.accent);
     if (persist) {
@@ -645,7 +520,6 @@
         localStorage.setItem('kapsula-docs-accent', state.accent);
       } catch (e) {}
     }
-    applyThemeStage();
   }
 
   function bindEvents() {
@@ -662,50 +536,57 @@
       });
     }
 
-    document.querySelectorAll('[data-theme-pick]').forEach((btn) => {
+    const heroTabs = Array.from(document.querySelectorAll('[data-hero-shot]'));
+    heroTabs.forEach((btn, index) => {
       btn.addEventListener('click', () => {
-        if (btn.dataset.themePick) applyThemeMode(btn.dataset.themePick, true);
+        if (btn.dataset.heroShot) {
+          state.heroShot = btn.dataset.heroShot;
+          applyHeroStage();
+        }
+      });
+      btn.addEventListener('keydown', (e) => {
+        let nextIndex = -1;
+        if (e.key === 'ArrowRight') nextIndex = (index + 1) % heroTabs.length;
+        else if (e.key === 'ArrowLeft') nextIndex = (index - 1 + heroTabs.length) % heroTabs.length;
+        else if (e.key === 'Home') nextIndex = 0;
+        else if (e.key === 'End') nextIndex = heroTabs.length - 1;
+        if (nextIndex >= 0) {
+          e.preventDefault();
+          const target = heroTabs[nextIndex];
+          if (target && target.dataset.heroShot) {
+            state.heroShot = target.dataset.heroShot;
+            applyHeroStage();
+            target.focus();
+          }
+        }
       });
     });
 
     document.querySelectorAll('[data-accent-preset]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (btn.dataset.accentPreset) {
-          state.themeView = 'workspace';
-          applyAccent(btn.dataset.accentPreset, true);
+        const accent = btn.dataset.accentPreset;
+        if (!accent) return;
+        state.bandAccent = accent;
+        state.bandView = 'workspace';
+        applyGlobalAccent(accent, true);
+        applyThemesBand();
+      });
+    });
+
+    document.querySelectorAll('[data-band-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.bandMode) {
+          state.bandTheme = btn.dataset.bandMode === 'dark' ? 'dark' : 'light';
+          applyThemesBand();
         }
       });
     });
 
     document.querySelectorAll('[data-theme-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.themeView = btn.dataset.themeView === 'settings' ? 'settings' : 'workspace';
-        applyThemeStage();
-      });
-    });
-
-    document.querySelectorAll('.subswitch-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const targetId = btn.dataset.beatTarget;
-        const shotBase = btn.dataset.shotBase;
-        if (!targetId || !shotBase) return;
-        const group = btn.closest('.story-subswitch');
-        if (group) {
-          group.querySelectorAll('.subswitch-btn').forEach((other) => {
-            other.setAttribute('aria-pressed', String(other === btn));
-          });
-        }
-        state.beatShots[targetId] = shotBase;
-        const img = document.getElementById(targetId);
-        if (img) img.src = shotPath(shotBase);
-      });
-    });
-
-    document.querySelectorAll('.tour-tab').forEach((tab) => {
-      tab.addEventListener('click', () => {
-        if (tab.dataset.tourId) {
-          state.tourId = tab.dataset.tourId;
-          applyTour(true);
+        if (btn.dataset.themeView) {
+          state.bandView = btn.dataset.themeView === 'settings' ? 'settings' : 'workspace';
+          applyThemesBand();
         }
       });
     });
@@ -715,13 +596,19 @@
     const playBtn = document.getElementById('video-play-btn');
     if (frame && video && playBtn) {
       const startPlay = () => {
+        video.setAttribute('controls', '');
         frame.setAttribute('data-playing', 'true');
         const promise = video.play();
         if (promise && typeof promise.catch === 'function') promise.catch(() => {});
       };
       playBtn.addEventListener('click', startPlay);
-      video.addEventListener('play', () => frame.setAttribute('data-playing', 'true'));
-      video.addEventListener('ended', () => frame.setAttribute('data-playing', 'false'));
+      video.addEventListener('play', () => {
+        video.setAttribute('controls', '');
+        frame.setAttribute('data-playing', 'true');
+      });
+      video.addEventListener('ended', () => {
+        frame.setAttribute('data-playing', 'false');
+      });
     }
   }
 
@@ -732,25 +619,33 @@
       const rel = await res.json();
       const rawTag = String(rel.tag_name || '').trim();
       const ver = rawTag.replace(/^v/i, '');
-      if (!ver || compareSemver(ver, DEFAULT_VERSION) <= 0) return;
+      if (!ver || compareSemver(ver, DEFAULT_VERSION) < 0) return;
 
       const assets = Array.isArray(rel.assets) ? rel.assets : [];
-      const findUrl = (re) => {
-        const hit = assets.find((a) => re.test(a.name || ''));
-        return hit && hit.browser_download_url ? hit.browser_download_url : null;
-      };
+      const findAsset = (re) => assets.find((a) => re.test(a.name || '')) || null;
 
-      const urls = {
-        win: findUrl(/Setup-.*\.exe$/i) || `${DOWNLOAD_BASE}${ver}/Kapsula-Setup-${ver}.exe`,
-        'mac-arm': findUrl(/arm64\.dmg$/i) || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-arm64.dmg`,
-        'mac-x64': findUrl(/-x64\.dmg$/i) || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-x64.dmg`,
-        android: findUrl(/android.*\.apk$/i) || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-android-release.apk`,
-      };
-      const names = {
-        win: `Kapsula-Setup-${ver}.exe`,
-        'mac-arm': `Kapsula-${ver}-arm64.dmg`,
-        'mac-x64': `Kapsula-${ver}-x64.dmg`,
-        android: `Kapsula-${ver}-android-release.apk`,
+      const winAsset = findAsset(/(-windows|Setup-).*\.exe$/i);
+      const macArmAsset = findAsset(/(-mac-apple-silicon|-arm64)\.dmg$/i);
+      const macX64Asset = findAsset(/(-mac-intel|-x64)\.dmg$/i);
+      const androidAsset = findAsset(/android.*\.apk$/i);
+
+      const resolved = {
+        win: {
+          url: winAsset?.browser_download_url || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-windows.exe`,
+          name: winAsset?.name || `Kapsula-${ver}-windows.exe`,
+        },
+        'mac-arm': {
+          url: macArmAsset?.browser_download_url || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-mac-apple-silicon.dmg`,
+          name: macArmAsset?.name || `Kapsula-${ver}-mac-apple-silicon.dmg`,
+        },
+        'mac-x64': {
+          url: macX64Asset?.browser_download_url || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-mac-intel.dmg`,
+          name: macX64Asset?.name || `Kapsula-${ver}-mac-intel.dmg`,
+        },
+        android: {
+          url: androidAsset?.browser_download_url || `${DOWNLOAD_BASE}${ver}/Kapsula-${ver}-android.apk`,
+          name: androidAsset?.name || `Kapsula-${ver}-android.apk`,
+        },
       };
 
       const vPill = document.getElementById('release-version');
@@ -758,19 +653,20 @@
       if (vPill) vPill.textContent = `v${ver}`;
       if (vFooter) vFooter.textContent = `v${ver}`;
 
-      Object.keys(urls).forEach((key) => {
-        const a = document.querySelector(`[data-dl="${key}"]`);
-        if (a && urls[key]) a.setAttribute('href', urls[key]);
-        const lbl = document.querySelector(`[data-file-label="${key}"]`);
-        if (lbl) lbl.textContent = names[key];
+      Object.keys(resolved).forEach((key) => {
+        state.filenames[key] = resolved[key].name;
+        const link = document.querySelector(`[data-dl="${key}"]`);
+        if (link) link.setAttribute('href', resolved[key].url);
+        const label = document.querySelector(`[data-file-label="${key}"]`);
+        if (label) label.textContent = resolved[key].name;
       });
       updateDownloadsAndPlatform();
     } catch (e) {}
   }
 
-  applyLanguage(state.lang, false);
   applyThemeMode(state.theme, false);
-  applyAccent(state.accent, false);
+  applyGlobalAccent(state.accent, false);
+  applyLanguage(state.lang, false);
   bindEvents();
   hydrateLatestRelease();
 })();

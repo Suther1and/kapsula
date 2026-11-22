@@ -61,8 +61,8 @@ jobs:
         run: |
           ls -lh release/*.dmg
           if [ "$TARGET_ARCH" = "both" ]; then
-            ls release/*-arm64.dmg >/dev/null
-            ls release/*-x64.dmg >/dev/null
+            ls release/*-mac-apple-silicon.dmg >/dev/null
+            ls release/*-mac-intel.dmg >/dev/null
           fi
 
       - name: Upload .dmg artifacts

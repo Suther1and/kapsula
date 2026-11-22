@@ -79,7 +79,7 @@ import { CopySlotPill } from '../components/ui/CopySlotPill';
 import { KapsulaEmblem } from '../components/ui/KapsulaEmblem';
 import { SectionIcon } from '../components/ui/SectionIcon';
 import { SegmentedControl } from '../components/ui/SegmentedControl';
-import { SelectMenu } from '../components/ui/SelectMenu';
+import { SectionPickerPopover } from '../components/ui/SectionPickerPopover';
 import { VoiceRecorderStudio } from '../components/ui/VoiceRecorderStudio';
 import { WaveformAudioPlayer } from '../components/ui/WaveformAudioPlayer';
 
@@ -407,6 +407,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   // Capture tab state
   const [draftText, setDraftText] = useState('');
   const [draftOrbit, setDraftOrbit] = useState('');
+  const [captureOrbitMenuOpen, setCaptureOrbitMenuOpen] = useState(false);
+  const captureOrbitMenuOpenRef = useRef(false);
   const [dismissedEventText, setDismissedEventText] = useState<string | null>(null);
   const [recordingVoice, setRecordingVoice] = useState(false);
   const [savingCapture, setSavingCapture] = useState(false);
@@ -805,6 +807,8 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         setSelectedValue('');
         searchRef.current = '';
         setRecordingVoice(false);
+        setCaptureOrbitMenuOpen(false);
+        captureOrbitMenuOpenRef.current = false;
         setHudPickingImage(false);
         setHudLightboxItem(null);
         void window.kapsula.setHudPreventClose(false);
@@ -910,6 +914,10 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         if (hudLightboxItem) {
           e.preventDefault();
           setHudLightboxItem(null);
+          return;
+        }
+        if (captureOrbitMenuOpenRef.current) {
+          e.preventDefault();
           return;
         }
         if (recordingVoice) {
@@ -1987,19 +1995,24 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     {t('hud.captureHeading')}
                   </div>
                   <div className="flex items-center gap-2">
-                    <SelectMenu
-                      size="sm"
+                    <SectionPickerPopover
+                      orbits={orbits}
                       value={draftOrbit}
                       onChange={setDraftOrbit}
-                      options={[
-                        { value: '', label: t('hud.autoByMeaning') },
-                        ...orbits.map((o) => ({
-                          value: o.id,
-                          label: o.name,
-                          dotColor: o.color,
-                        })),
-                      ]}
-                      className="min-w-[168px]"
+                      onOrbitCreated={(created) =>
+                        setOrbits((prev) =>
+                          prev.some((o) => o.id === created.id) ? prev : [...prev, created]
+                        )
+                      }
+                      onOpenChange={(next) => {
+                        captureOrbitMenuOpenRef.current = next;
+                        setCaptureOrbitMenuOpen(next);
+                      }}
+                      emptyOptionLabel={t('hud.autoByMeaning')}
+                      emptyOptionKind="auto"
+                      size="sm"
+                      align="end"
+                      data-testid="hud-capture-section-picker"
                     />
                   </div>
                 </div>
@@ -2041,6 +2054,11 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     value={draftText}
                     onChange={(e) => setDraftText(e.target.value)}
                     onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        void handleSaveCapture();
+                        return;
+                      }
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                         e.preventDefault();
                         void handleSaveCapture();
@@ -2116,12 +2134,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
 
                   <button
                     type="button"
+                    title={t('composer.enterHint')}
                     disabled={!draftText.trim() || savingCapture}
                     onClick={() => void handleSaveCapture()}
                     className="k-interactive inline-flex items-center gap-1.5 h-8 px-4 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default cursor-pointer"
                   >
                     <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />
-                    {t('hud.saveShortcutBtn', { shortcut: isMacPlatform(window.kapsula?.platform) ? '⌘+Enter' : 'Ctrl+Enter' })}
+                    {t('hud.saveShortcutBtn', { shortcut: 'Enter' })}
                   </button>
                 </div>
               </motion.div>

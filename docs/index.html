@@ -1,870 +1,425 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en" data-theme="dark" data-accent="terracotta">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#161614" />
-    <title>Kapsula — Quick notes, links, tasks, and encrypted sync</title>
-    <meta
-      name="description"
-      content="Kapsula captures notes, links, screenshots, voice memos, tasks, and 2FA secrets in one local-first workspace for Windows, macOS, and Android with end-to-end encrypted sync."
-    />
-    <meta property="og:title" content="Kapsula v1.0.2 — Simple start, deep workspace" />
-    <meta
-      property="og:description"
-      content="Starts with a single capture shortcut (Alt + Space). Grows into Kanban tasks, 2FA Vault, custom themes, and encrypted cloud sync across Windows, macOS, and Android."
-    />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="assets/hud-capture-en-dark.png" />
-    <link rel="icon" type="image/png" href="assets/kapsula-icon.png" />
-    <script>
-      (function () {
-        try {
-          var theme = localStorage.getItem('kapsula-docs-theme');
-          if (theme === 'light' || theme === 'dark') {
-            document.documentElement.setAttribute('data-theme', theme);
-          }
-          var accent = localStorage.getItem('kapsula-docs-accent');
-          if (
-            accent === 'terracotta' ||
-            accent === 'emerald' ||
-            accent === 'cobalt' ||
-            accent === 'amethyst'
-          ) {
-            document.documentElement.setAttribute('data-accent', accent);
-          }
-          var params = new URLSearchParams(window.location.search);
-          var urlLang = params.get('lang');
-          var savedLang = localStorage.getItem('kapsula-docs-lang');
-          var navLang = String(navigator.language || 'en').toLowerCase();
-          var lang =
-            urlLang === 'ru' || urlLang === 'en'
-              ? urlLang
-              : savedLang === 'ru' || savedLang === 'en'
-                ? savedLang
-                : navLang.indexOf('ru') === 0
-                  ? 'ru'
-                  : 'en';
-          document.documentElement.setAttribute('lang', lang);
-          var metaTheme = document.querySelector('meta[name="theme-color"]');
-          if (metaTheme) {
-            metaTheme.setAttribute('content', theme === 'light' ? '#faf9f6' : '#161614');
-          }
-        } catch (e) {}
-      })();
-    </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <header class="site-header">
-      <div class="container header-inner">
-        <a class="brand" href="#top">
-          <img
-            class="brand-icon"
-            src="assets/kapsula-icon.png"
-            alt="Kapsula"
-            width="28"
-            height="28"
-          />
-          <span>Kapsula</span>
-        </a>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kapsula — Notes, links, tasks, and encrypted vault</title>
+  <meta name="description" content="Kapsula keeps notes, web captures, tasks, voice memos, 2FA secrets, and encrypted cloud sync across Windows, macOS, and Android." />
+  <meta name="theme-color" content="#111113" />
+  <meta property="og:title" content="Kapsula — Private-first notes, tasks & encrypted vault" />
+  <meta property="og:description" content="Instant capture with Ctrl+Space, rich link extraction, task boards, 2FA Vault, and zero-knowledge sync on Windows, macOS, and Android." />
+  <meta property="og:image" content="assets/theme-terracotta-en-dark.png" />
+  <link rel="icon" type="image/png" href="assets/kapsula-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Onest:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    (function () {
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var qLang = params.get('lang');
+        var storedLang = localStorage.getItem('kapsula-docs-lang');
+        var navLang = (navigator.language || 'en').toLowerCase();
+        var lang = (qLang === 'ru' || qLang === 'en')
+          ? qLang
+          : (storedLang === 'ru' || storedLang === 'en')
+            ? storedLang
+            : (navLang.indexOf('ru') === 0 ? 'ru' : 'en');
+        var storedTheme = localStorage.getItem('kapsula-docs-theme');
+        var theme = (storedTheme === 'light' || storedTheme === 'dark') ? storedTheme : 'dark';
+        var storedAccent = localStorage.getItem('kapsula-docs-accent');
+        var validAccents = { terracotta: 1, emerald: 1, cobalt: 1, amethyst: 1 };
+        var accent = validAccents[storedAccent] ? storedAccent : 'terracotta';
+        document.documentElement.setAttribute('lang', lang);
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-accent', accent);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!--
+Direction Contract:
+- Product: Kapsula v1.0.2 — private-first workspace for notes, rich web/Telegram captures, tasks, 2FA vault, and E2EE sync across Windows, macOS, and Android.
+- Core layout: 5 crisp asymmetric editorial bands (target <= 4,500px desktop height at 1440px), full unclipped product showcase in Band 1 first viewport, zero duplicate screenshots across default band views, inverted architectural contrast Themes band (#f3f1eb on dark, #141417 on light).
+- Palette: Obsidian #111113, Hairline rgba(244,242,237,0.10), Porcelain #f3f1eb, Warm Sand #f4f2ed, Primary Terracotta #d95826 (with live accent presets: Emerald #168055, Cobalt #4f86f7, Amethyst #9a75f5).
+- Typography: Onest (display 500–700 tight tracking -0.028em), Golos Text (body 400–600 tabular-nums), JetBrains Mono (shortcuts & installer filenames only).
+- Anti-patterns banned (craft-floor): NO eyebrows/kickers above headings, NO hero badge above H1, NO 01/02/03 numeric step markers, NO nested wrapper cards around screenshots, NO repeated screenshots across bands, NO unrequested controls bars on resting poster video.
+-->
+  <a class="skip-link" href="#main" data-i18n="skip">Skip to content</a>
 
-        <nav class="header-nav" aria-label="Primary navigation">
-          <a href="#demo" data-i18n="nav.demo">Overview</a>
-          <a href="#workflow" data-i18n="nav.workflow">Workflow</a>
-          <a href="#themes" data-i18n="nav.themes">Themes</a>
-          <a href="#sync" data-i18n="nav.sync">Cloud Sync</a>
-          <a href="#download" data-i18n="nav.download">Download</a>
-        </nav>
+  <header class="site-header" id="top">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="Kapsula">
+        <img src="assets/kapsula-icon.png" alt="" width="28" height="28" class="brand-mark" />
+        <span class="brand-word">Kapsula</span>
+      </a>
 
-        <div class="header-actions">
-          <div class="lang-switch" role="group" aria-label="Language">
-            <button
-              class="lang-btn"
-              type="button"
-              data-lang="en"
-              aria-pressed="true"
-            >
-              EN
-            </button>
-            <button
-              class="lang-btn"
-              type="button"
-              data-lang="ru"
-              aria-pressed="false"
-            >
-              RU
-            </button>
+      <nav class="main-nav" aria-label="Primary">
+        <a href="#overview" data-i18n="nav.overview">Overview</a>
+        <a href="#themes" data-i18n="nav.themes">Themes</a>
+        <a href="#sync" data-i18n="nav.sync">Sync &amp; Vault</a>
+        <a href="#download" data-i18n="nav.download">Download</a>
+      </nav>
+
+      <div class="header-tools">
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-btn" data-lang="en" aria-pressed="true">EN</button>
+          <button type="button" class="lang-btn" data-lang="ru" aria-pressed="false">RU</button>
+        </div>
+
+        <button type="button" class="icon-toggle" id="theme-toggle" aria-label="Toggle color mode" aria-pressed="true">
+          <svg class="ico-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+          <svg class="ico-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>
+          </svg>
+        </button>
+
+        <a class="nav-cta" href="#download" data-i18n="nav.cta">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Band 1: First-Viewport Asymmetric Hero -->
+    <section class="hero-band">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <h1 data-i18n="hero.title">Notes, links, and secrets — held in one place</h1>
+          <p class="hero-lead" data-i18n-html="hero.lead">
+            Press <kbd>Ctrl+Space</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn-primary" id="hero-download-btn" href="#download">
+              <span id="hero-download-label">Download for Windows</span>
+            </a>
+            <a class="btn-ghost" id="hero-watch-btn" href="#overview" data-i18n="hero.secondaryCta">Watch 30s walkthrough</a>
           </div>
 
-          <button
-            class="icon-btn"
-            id="theme-toggle"
-            type="button"
-            aria-label="Toggle theme"
-            aria-pressed="true"
-          >
-            <svg
-              class="icon-sun"
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="4" />
-              <path
-                d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"
-              />
-            </svg>
-            <svg
-              class="icon-moon"
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z" />
-            </svg>
-          </button>
+          <p class="hero-meta" id="hero-meta-line">
+            <span id="release-version">v1.0.2</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span data-i18n="hero.metaPlatforms">Windows, macOS &amp; Android</span>
+            <span class="meta-sep" id="hero-file-sep" aria-hidden="true">·</span>
+            <code class="meta-file" id="hero-file-name">Kapsula-1.0.2-windows.exe</code>
+          </p>
+        </div>
 
-          <a
-            class="github-link"
-            href="https://github.com/Suther1and/kapsula"
-            target="_blank"
-            rel="noopener"
-            aria-label="GitHub repository"
+        <div class="hero-stage">
+          <div class="stage-bar">
+            <div class="view-tabs" role="tablist" aria-label="Workspace modes">
+              <button type="button" class="view-tab" id="hero-tab-feed" role="tab" aria-selected="true" aria-controls="hero-panel" tabindex="0" data-hero-shot="theme-terracotta" data-i18n="hero.tabFeed">Workspace</button>
+              <button type="button" class="view-tab" id="hero-tab-hud" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="hud-search" data-i18n="hero.tabHud">Quick HUD</button>
+              <button type="button" class="view-tab" id="hero-tab-studio" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="note-studio" data-i18n="hero.tabStudio">Link Studio</button>
+              <button type="button" class="view-tab" id="hero-tab-tasks" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="tasks-kanban" data-i18n="hero.tabTasks">Task Board</button>
+            </div>
+          </div>
+
+          <div class="hero-stage-panel" id="hero-panel" role="tabpanel" aria-labelledby="hero-tab-feed">
+            <img
+              id="hero-stage-img"
+              class="shot-surface hero-shot"
+              src="assets/theme-terracotta-en-dark.png"
+              alt="Kapsula desktop workspace"
+              loading="eager"
+              decoding="async"
+            />
+          </div>
+          <span class="stage-note" id="hero-stage-note" data-i18n="hero.noteFeed">All notes, pinned items, and folders</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Band 2: Video Walkthrough + 3-Column Hairline Capabilities Strip -->
+    <section class="overview-band" id="overview">
+      <div class="wrap">
+        <div class="band-head">
+          <h2 data-i18n="overview.title">From quick capture to a structured archive</h2>
+          <p class="band-lead" data-i18n="overview.sub">
+            Start with one plain text box. Add folders, task boards, AI cleanup, and multi-device sync at your own pace.
+          </p>
+        </div>
+
+        <div class="video-stage" id="video-frame" data-playing="false">
+          <video
+            id="demo-video"
+            poster="assets/kapsula-promo-en-poster.jpg"
+            playsinline
+            preload="none"
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path
-                d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z"
-              />
+            <source id="demo-video-source" src="assets/kapsula-promo-en.mp4" type="video/mp4" />
+          </video>
+
+          <img
+            id="video-poster-img"
+            class="video-poster"
+            src="assets/kapsula-promo-en-poster.jpg"
+            alt="Kapsula walkthrough preview"
+            loading="eager"
+            decoding="async"
+          />
+
+          <button type="button" class="play-pill" id="video-play-btn" aria-label="Play walkthrough video">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M4.2 2.6a.7.7 0 0 1 1.05-.6l8.1 5.4a.7.7 0 0 1 0 1.2l-8.1 5.4a.7.7 0 0 1-1.05-.6V2.6Z"/>
             </svg>
+            <span data-i18n="overview.playLabel">Play 30s walkthrough</span>
+          </button>
+        </div>
+
+        <div class="pillars-grid">
+          <article class="pillar">
+            <h3 data-i18n="pillar1.title">Instant Command HUD</h3>
+            <p data-i18n="pillar1.desc">
+              Pull up Ctrl+Space anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.
+            </p>
+          </article>
+          <article class="pillar">
+            <h3 data-i18n="pillar2.title">Clean Link &amp; Task Extraction</h3>
+            <p data-i18n="pillar2.desc">
+              Telegram posts, YouTube, X, and GitHub URLs keep full text, code blocks, and previews. Checklists flow into boards and Google Calendar.
+            </p>
+          </article>
+          <article class="pillar">
+            <h3 data-i18n="pillar3.title">Optional BYOK AI</h3>
+            <p data-i18n="pillar3.desc">
+              Add your own OpenAI, OpenRouter, or Gemini key to merge scattered drafts, sort unfiled items, or transcribe voice notes.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Band 3: Contrasting Architectural Themes Band (Porcelain #f3f1eb in Dark mode, Obsidian #141417 in Light mode) -->
+    <section class="themes-band" id="themes">
+      <div class="wrap themes-layout">
+        <div class="themes-controls">
+          <h2 data-i18n="themes.title">Built for late nights and daylight desks</h2>
+          <p class="themes-lead" data-i18n="themes.sub">
+            Pick between obsidian dark and warm porcelain light, swap signature accent palettes, and customize 24+ folder colors.
+          </p>
+
+          <div class="control-row">
+            <div class="control-line">
+              <div class="swatch-group" role="group" aria-label="Color accents">
+                <button type="button" class="swatch-ring" data-accent-preset="terracotta" aria-label="Terracotta" aria-pressed="false" style="--sw:#d95826"></button>
+                <button type="button" class="swatch-ring" data-accent-preset="emerald" aria-label="Emerald" aria-pressed="true" style="--sw:#168055"></button>
+                <button type="button" class="swatch-ring" data-accent-preset="cobalt" aria-label="Cobalt" aria-pressed="false" style="--sw:#4f86f7"></button>
+                <button type="button" class="swatch-ring" data-accent-preset="amethyst" aria-label="Amethyst" aria-pressed="false" style="--sw:#9a75f5"></button>
+              </div>
+
+              <div class="segmented" role="group" aria-label="Theme preview polarity">
+                <button type="button" class="seg-btn" data-band-mode="light" aria-pressed="true" data-i18n="themes.light">Light</button>
+                <button type="button" class="seg-btn" data-band-mode="dark" aria-pressed="false" data-i18n="themes.dark">Dark</button>
+              </div>
+            </div>
+
+            <div class="segmented" role="group" aria-label="Theme preview screen">
+              <button type="button" class="seg-btn" data-theme-view="workspace" aria-pressed="true" data-i18n="themes.viewApp">Workspace</button>
+              <button type="button" class="seg-btn" data-theme-view="settings" aria-pressed="false" data-i18n="themes.viewSettings">Settings</button>
+            </div>
+          </div>
+
+          <div class="theme-readout">
+            <code class="token-chip" id="theme-stage-tokens">#168055 · Sage</code>
+            <p class="theme-caption" id="theme-stage-caption">Emerald green accent paired with calm Pine dark and soft Sage surfaces.</p>
+          </div>
+        </div>
+
+        <div class="themes-visual">
+          <img
+            id="theme-preview-img"
+            class="shot-surface contrast-shot"
+            src="assets/theme-emerald-en-light.png"
+            alt="Kapsula appearance theme preview"
+            loading="eager"
+            decoding="async"
+          />
+        </div>
+      </div>
+    </section>
+
+    <!-- Band 4: Encrypted Cloud Sync + 2FA Vault & Foldable Companion -->
+    <section class="sync-band" id="sync">
+      <div class="wrap">
+        <div class="sync-top">
+          <div class="sync-copy">
+            <h2 data-i18n="sync.title">Encrypted cloud where only you hold the key</h2>
+            <p class="band-lead" data-i18n="sync.sub">
+              Records and media encrypt locally before leaving your machine. Sync Windows, macOS, and Android automatically — or keep everything offline.
+            </p>
+
+            <dl class="spec-list">
+              <div class="spec-row">
+                <dt data-i18n="sync.k1">Local cipher</dt>
+                <dd>XChaCha20-Poly1305</dd>
+              </div>
+              <div class="spec-row">
+                <dt data-i18n="sync.k2">Key derivation</dt>
+                <dd>Argon2id + OS Keychain</dd>
+              </div>
+              <div class="spec-row">
+                <dt data-i18n="sync.k3">Cross-platform</dt>
+                <dd>Windows · macOS · Android</dd>
+              </div>
+              <div class="spec-row">
+                <dt data-i18n="sync.k4">Portability</dt>
+                <dd data-i18n="sync.v4">One-click JSON &amp; Markdown export</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="sync-pair">
+            <img
+              class="shot-surface sync-desktop-img"
+              data-shot-base="sync-desktop"
+              src="assets/sync-desktop-en-dark.png"
+              alt="Kapsula encrypted sync status on desktop"
+              loading="eager"
+              decoding="async"
+            />
+            <img
+              class="shot-surface sync-mobile-img"
+              data-shot-base="sync-mobile"
+              src="assets/sync-mobile-en-dark.png"
+              alt="Kapsula encrypted sync on Android"
+              loading="eager"
+              decoding="async"
+            />
+          </div>
+        </div>
+
+        <div class="duo-grid">
+          <figure class="duo-item">
+            <img
+              class="shot-surface"
+              data-shot-base="vault-2fa"
+              src="assets/vault-2fa-en-dark.png"
+              alt="Kapsula 2FA codes and secrets vault"
+              loading="eager"
+              decoding="async"
+            />
+            <figcaption>
+              <strong data-i18n="duo1.title">Passwords, Cards &amp; 2FA Vault</strong>
+              <span data-i18n="duo1.desc">Store logins, cards, and live TOTP codes locked behind biometrics or your system keychain.</span>
+            </figcaption>
+          </figure>
+
+          <figure class="duo-item">
+            <img
+              class="shot-surface"
+              data-shot-base="mobile-fold"
+              src="assets/mobile-fold-en-dark.png"
+              alt="Kapsula adaptive layout on Android Fold"
+              loading="eager"
+              decoding="async"
+            />
+            <figcaption>
+              <strong data-i18n="duo2.title">Phones &amp; Foldable Tablets</strong>
+              <span data-i18n="duo2.desc">One-handed bottom bar on phones and an automatic two-pane workspace on Android foldables.</span>
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- Band 5: Download Dock + Compact Footer -->
+    <section class="download-band" id="download">
+      <div class="wrap">
+        <div class="dl-head">
+          <div>
+            <h2 data-i18n="dl.title">Download Kapsula v1.0.2</h2>
+            <p class="band-lead" data-i18n="dl.sub">
+              Free desktop and Android installers with clean, human-readable filenames. Updates preserve your local vault.
+            </p>
+          </div>
+          <a class="release-link" href="https://github.com/Suther1and/kapsula/releases/tag/v1.0.2" target="_blank" rel="noopener noreferrer" data-i18n="dl.allReleases">
+            Release notes on GitHub ↗
           </a>
         </div>
+
+        <div class="dl-grid">
+          <div class="dl-item" data-platform="win">
+            <div class="dl-top">
+              <span class="dl-os">Windows</span>
+              <span class="dl-badge" data-i18n="dl.recommended">Your OS</span>
+            </div>
+            <p class="dl-req" data-i18n="dl.winReq">Windows 10 / 11 (x64 installer)</p>
+            <code class="dl-file" data-file-label="win">Kapsula-1.0.2-windows.exe</code>
+            <a class="dl-btn" data-dl="win" href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-windows.exe" data-i18n="dl.btn">Download</a>
+          </div>
+
+          <div class="dl-item" data-platform="mac-arm">
+            <div class="dl-top">
+              <span class="dl-os">macOS · Apple Silicon</span>
+              <span class="dl-badge" data-i18n="dl.recommended">Your OS</span>
+            </div>
+            <p class="dl-req" data-i18n="dl.macArmReq">M1, M2, M3 &amp; M4 Macs (.dmg)</p>
+            <code class="dl-file" data-file-label="mac-arm">Kapsula-1.0.2-mac-apple-silicon.dmg</code>
+            <a class="dl-btn" data-dl="mac-arm" href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-mac-apple-silicon.dmg" data-i18n="dl.btn">Download</a>
+          </div>
+
+          <div class="dl-item" data-platform="mac-x64">
+            <div class="dl-top">
+              <span class="dl-os">macOS · Intel</span>
+              <span class="dl-badge" data-i18n="dl.recommended">Your OS</span>
+            </div>
+            <p class="dl-req" data-i18n="dl.macIntelReq">Intel x64 Macs (.dmg)</p>
+            <code class="dl-file" data-file-label="mac-x64">Kapsula-1.0.2-mac-intel.dmg</code>
+            <a class="dl-btn" data-dl="mac-x64" href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-mac-intel.dmg" data-i18n="dl.btn">Download</a>
+          </div>
+
+          <div class="dl-item" data-platform="android">
+            <div class="dl-top">
+              <span class="dl-os">Android</span>
+              <span class="dl-badge" data-i18n="dl.recommended">Your OS</span>
+            </div>
+            <p class="dl-req" data-i18n="dl.androidReq">Android 8.0+ phones &amp; Fold (.apk)</p>
+            <code class="dl-file" data-file-label="android">Kapsula-1.0.2-android.apk</code>
+            <a class="dl-btn" data-dl="android" href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-android.apk" data-i18n="dl.btn">Download</a>
+          </div>
+        </div>
+
+        <details class="first-run-details">
+          <summary data-i18n="dl.helpSummary">First-run instructions (SmartScreen, macOS Gatekeeper, Android APK)</summary>
+          <div class="first-run-body">
+            <p data-i18n-html="dl.helpWin">
+              <strong>Windows:</strong> Open-source preview builds do not yet include a paid EV Authenticode certificate. If Microsoft SmartScreen appears once, click <em>More info → Run anyway</em>.
+            </p>
+            <p data-i18n-html="dl.helpMac">
+              <strong>macOS:</strong> Drag Kapsula.app to Applications. If Gatekeeper blocks an unnotarized build, run once in Terminal: <code>xattr -cr /Applications/Kapsula.app</code>
+            </p>
+            <p data-i18n-html="dl.helpAndroid">
+              <strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v1.0.2.
+            </p>
+          </div>
+        </details>
       </div>
-    </header>
+    </section>
+  </main>
 
-    <main id="top">
-      <!-- Stage 1: Simple Start -->
-      <section class="hero">
-        <div class="container">
-          <div class="hero-copy">
-            <div class="hero-kicker">
-              <span class="hero-kicker-dot" aria-hidden="true"></span>
-              <span data-i18n="hero.kicker">v1.0.2 · Windows · macOS · Android</span>
-            </div>
-
-            <h1 data-i18n-html="hero.title">
-              One box for notes, links, and tasks&nbsp;— before they scatter
-            </h1>
-
-            <p class="hero-lead" data-i18n-html="hero.lead">
-              Press <span class="kbd-pill">Alt + Space</span> from any window to save a thought, paste a link, or look something up. It starts as one simple input box and expands into boards, themes, a 2FA Vault, and encrypted cloud sync when you want it.
-            </p>
-
-            <div class="hero-cta-row">
-              <a
-                class="btn btn-primary"
-                id="hero-download-btn"
-                href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-Setup-1.0.2.exe"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                <span id="hero-download-label">Download for Windows</span>
-              </a>
-
-              <a class="btn btn-secondary" href="#workflow" data-i18n="hero.secondaryCta">
-                See how it works
-              </a>
-            </div>
-
-            <p class="hero-meta">
-              <span class="version-pill mono" id="release-version">v1.0.2</span>
-              <span class="meta-dot" aria-hidden="true">·</span>
-              <span data-i18n-html="hero.metaPlatforms">Free &amp; local-first · Sync is optional</span>
-            </p>
-          </div>
-
-          <div class="hero-stage">
-            <div class="hud-showcase-frame">
-              <img
-                id="hero-hud-img"
-                src="assets/hud-capture-en-dark.png"
-                data-shot-base="hud-capture"
-                alt="Kapsula quick capture bar triggered with Alt + Space"
-                width="920"
-                height="620"
-              />
-            </div>
-            <p class="hero-stage-caption">
-              <span class="kbd-pill">Alt + Space</span>
-              <span data-i18n-html="hero.stageCaption">
-                Appears over any app, detects dates automatically, and saves right away with <span class="kbd-pill">Ctrl+Enter</span>.
-              </span>
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <!-- Stage 2: 60-second Video Overview -->
-      <section class="section" id="demo">
-        <div class="container">
-          <div class="section-head">
-            <span class="section-eyebrow" data-i18n="demo.eyebrow">Overview</span>
-            <h2 data-i18n-html="demo.title">From one shortcut to a structured workspace</h2>
-            <p class="section-sub" data-i18n-html="demo.sub">
-              A quick walkthrough of capture, note linking, Kanban boards, theme presets, 2FA Vault, and sync on Windows, macOS, and Android.
-            </p>
-          </div>
-
-          <div class="video-frame" id="video-frame" data-playing="false">
-            <video
-              id="demo-video"
-              class="demo-video"
-              controls
-              playsinline
-              preload="metadata"
-              poster="assets/kapsula-promo-en-poster.jpg"
-            >
-              <source
-                id="demo-video-source"
-                src="assets/kapsula-promo-en.mp4"
-                type="video/mp4"
-              />
-            </video>
-            <button
-              class="video-play-overlay"
-              id="video-play-btn"
-              type="button"
-              aria-label="Play overview video"
-            >
-              <span class="video-play-circle" aria-hidden="true">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="7 4 20 12 7 20 7 4" />
-                </svg>
-              </span>
-              <span class="video-play-caption" data-i18n="demo.playLabel">
-                Play 30-sec walkthrough
-              </span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Stage 3: Simple-First Progressive Immersion -->
-      <section class="section" id="workflow">
-        <div class="container">
-          <div class="section-head">
-            <span class="section-eyebrow" data-i18n="workflow.eyebrow">Progressive depth</span>
-            <h2 data-i18n-html="workflow.title">Start with a single note. Turn on more only when you need it.</h2>
-            <p class="section-sub" data-i18n-html="workflow.sub">
-              Kapsula never forces you into folders or templates on day one. Capture first — organize into boards, checklists, and protected secrets at your own pace.
-            </p>
-          </div>
-
-          <div class="story-stack">
-            <!-- Beat 1: Capture & Search -->
-            <article class="story-beat">
-              <div class="story-copy">
-                <span class="story-step-tag" data-i18n="beat1.tag">01 · Instant HUD</span>
-                <h3 data-i18n-html="beat1.title">Drop a note or search without switching windows</h3>
-                <p data-i18n-html="beat1.desc">
-                  Keep your focus in the game engine, browser, or terminal. Tap <span class="kbd-pill">Alt + Space</span> to save a link, record a voice memo, grab a screenshot, or find an older note in milliseconds.
-                </p>
-                <ul class="story-bullets">
-                  <li data-i18n-html="beat1.b1">Recognizes dates like “Friday 3pm” and queues reminders right as you type</li>
-                  <li data-i18n-html="beat1.b2">Instant full-text search across titles, checkboxes, links, and 2FA entries</li>
-                  <li data-i18n-html="beat1.b3">Paste results back into your active app with Ctrl+Enter</li>
-                </ul>
-                <div class="story-subswitch" role="group" aria-label="HUD mode">
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat1-img"
-                    data-shot-base="hud-capture"
-                    aria-pressed="true"
-                    data-i18n="beat1.btnCapture"
-                  >
-                    Quick capture
-                  </button>
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat1-img"
-                    data-shot-base="hud-search"
-                    aria-pressed="false"
-                    data-i18n="beat1.btnSearch"
-                  >
-                    Instant search
-                  </button>
-                </div>
-              </div>
-
-              <div class="story-visual is-hud">
-                <img
-                  id="beat1-img"
-                  src="assets/hud-capture-en-dark.png"
-                  data-shot-base="hud-capture"
-                  alt="Kapsula instant HUD window"
-                  loading="lazy"
-                />
-              </div>
-            </article>
-
-            <!-- Beat 2: Notes & Kanban Tasks -->
-            <article class="story-beat is-reversed">
-              <div class="story-copy">
-                <span class="story-step-tag" data-i18n="beat2.tag">02 · Notes &amp; Tasks</span>
-                <h3 data-i18n-html="beat2.title">Checklists inside notes become real task boards</h3>
-                <p data-i18n-html="beat2.desc">
-                  Write checklists naturally inside any note alongside diagrams, links, and screenshots. Everything flows straight into the Tasks hub — switch between a Kanban board or tasks grouped by note.
-                </p>
-                <ul class="story-bullets">
-                  <li data-i18n-html="beat2.b1">Custom columns, drag-and-drop priorities, and due-date filters</li>
-                  <li data-i18n-html="beat2.b2">Tick a task on the board or inside the note — both stay in sync</li>
-                  <li data-i18n-html="beat2.b3">Rich notes support embedded charts, screenshots, and [[note links]]</li>
-                </ul>
-                <div class="story-subswitch" role="group" aria-label="Notes and Tasks view">
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat2-img"
-                    data-shot-base="tasks-kanban"
-                    aria-pressed="true"
-                    data-i18n="beat2.btnBoard"
-                  >
-                    Kanban board
-                  </button>
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat2-img"
-                    data-shot-base="tasks-grouped"
-                    aria-pressed="false"
-                    data-i18n="beat2.btnGrouped"
-                  >
-                    Grouped by note
-                  </button>
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat2-img"
-                    data-shot-base="note-studio"
-                    aria-pressed="false"
-                    data-i18n="beat2.btnNote"
-                  >
-                    Note editor
-                  </button>
-                </div>
-              </div>
-
-              <div class="story-visual">
-                <img
-                  id="beat2-img"
-                  src="assets/tasks-kanban-en-dark.png"
-                  data-shot-base="tasks-kanban"
-                  alt="Kapsula Kanban board populated with tasks extracted from notes"
-                  loading="lazy"
-                />
-              </div>
-            </article>
-
-            <!-- Beat 3: Vault & Android -->
-            <article class="story-beat">
-              <div class="story-copy">
-                <span class="story-step-tag" data-i18n="beat3.tag">03 · 2FA Vault &amp; Mobile</span>
-                <h3 data-i18n-html="beat3.title">Passwords, 2FA codes, and your whole archive on Android</h3>
-                <p data-i18n-html="beat3.desc">
-                  Keep sensitive logins, API keys, bank cards, and live 2FA codes behind your Vault lock. Take the exact same notes, boards, and secrets onto Android phones and foldables like Galaxy Z Fold.
-                </p>
-                <ul class="story-bullets">
-                  <li data-i18n-html="beat3.b1">Live 2FA countdown timers with one-tap copy and 30-second clipboard wipe</li>
-                  <li data-i18n-html="beat3.b2">Two-pane adaptive layout on foldable screens and tablets</li>
-                  <li data-i18n-html="beat3.b3">Works completely offline on every platform</li>
-                </ul>
-                <div class="story-subswitch" role="group" aria-label="Vault and Android view">
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat3-img"
-                    data-shot-base="vault-2fa"
-                    aria-pressed="true"
-                    data-i18n="beat3.btnVault"
-                  >
-                    2FA Vault
-                  </button>
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat3-img"
-                    data-shot-base="mobile-fold"
-                    aria-pressed="false"
-                    data-i18n="beat3.btnFold"
-                  >
-                    Android Fold
-                  </button>
-                  <button
-                    class="subswitch-btn"
-                    type="button"
-                    data-beat-target="beat3-img"
-                    data-shot-base="mobile-phone"
-                    aria-pressed="false"
-                    data-i18n="beat3.btnPhone"
-                  >
-                    Phone
-                  </button>
-                </div>
-              </div>
-
-              <div class="story-visual">
-                <img
-                  id="beat3-img"
-                  src="assets/vault-2fa-en-dark.png"
-                  data-shot-base="vault-2fa"
-                  alt="Kapsula encrypted 2FA Vault and Secrets view"
-                  loading="lazy"
-                />
-              </div>
-            </article>
-          </div>
-
-          <!-- Interactive Workspace Tour -->
-          <div class="tour-block">
-            <div class="tour-block-head">
-              <h3 data-i18n="tour.heading">Explore every screen</h3>
-            </div>
-
-            <div class="tour-tabs-wrap">
-              <div class="tour-tabs" role="tablist" aria-label="Workspace screens">
-                <button class="tour-tab" type="button" role="tab" data-tour-id="feed" aria-selected="true" data-i18n="tour.tabFeed">
-                  Feed
-                </button>
-                <button class="tour-tab" type="button" role="tab" data-tour-id="note" aria-selected="false" data-i18n="tour.tabNote">
-                  Note Studio
-                </button>
-                <button class="tour-tab" type="button" role="tab" data-tour-id="board" aria-selected="false" data-i18n="tour.tabBoard">
-                  Kanban Board
-                </button>
-                <button class="tour-tab" type="button" role="tab" data-tour-id="vault" aria-selected="false" data-i18n="tour.tabVault">
-                  2FA Vault
-                </button>
-                <button class="tour-tab" type="button" role="tab" data-tour-id="fold" aria-selected="false" data-i18n="tour.tabFold">
-                  Android Fold
-                </button>
-                <button class="tour-tab" type="button" role="tab" data-tour-id="phone" aria-selected="false" data-i18n="tour.tabPhone">
-                  Android Phone
-                </button>
-              </div>
-            </div>
-
-            <div class="tour-stage">
-              <div class="tour-media-frame" id="tour-media-frame" data-mode="desktop">
-                <img
-                  id="tour-stage-img"
-                  src="assets/theme-terracotta-en-dark.png"
-                  alt="Kapsula workspace main feed"
-                  loading="lazy"
-                />
-              </div>
-              <div class="tour-caption-bar">
-                <div class="tour-caption-copy">
-                  <h4 id="tour-caption-title">Uncluttered Feed for every capture type</h4>
-                  <p id="tour-caption-desc">Notes, shader diagrams, voice memos, screenshots, and web articles sit cleanly side by side.</p>
-                </div>
-                <span class="tour-caption-meta mono" id="tour-caption-meta">Desktop · 1280×800</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Stage 4: Live Interactive Themes & Accent Colors -->
-      <section class="section" id="themes">
-        <div class="container">
-          <div class="section-head">
-            <span class="section-eyebrow" data-i18n="themes.eyebrow">Themes &amp; Accent Colors</span>
-            <h2 data-i18n-html="themes.title">Make the workspace yours in one click</h2>
-            <p class="section-sub" data-i18n-html="themes.sub">
-              Pick Dark or Light mode, choose a background palette, or slide through any accent color — button text contrast recalculates automatically across the app.
-            </p>
-          </div>
-
-          <div class="theme-controls-bar">
-            <div class="preset-group" role="group" aria-label="Accent preset">
-              <button
-                class="preset-btn"
-                type="button"
-                data-accent-preset="terracotta"
-                aria-pressed="true"
-              >
-                <span class="preset-swatch" style="background: #d95826" aria-hidden="true"></span>
-                <span data-i18n="themes.presetTerracotta">Terracotta · Obsidian</span>
-              </button>
-              <button
-                class="preset-btn"
-                type="button"
-                data-accent-preset="emerald"
-                aria-pressed="false"
-              >
-                <span class="preset-swatch" style="background: #2db57d" aria-hidden="true"></span>
-                <span data-i18n="themes.presetEmerald">Emerald · Pine</span>
-              </button>
-              <button
-                class="preset-btn"
-                type="button"
-                data-accent-preset="cobalt"
-                aria-pressed="false"
-              >
-                <span class="preset-swatch" style="background: #4f86f7" aria-hidden="true"></span>
-                <span data-i18n="themes.presetCobalt">Cobalt · Midnight</span>
-              </button>
-              <button
-                class="preset-btn"
-                type="button"
-                data-accent-preset="amethyst"
-                aria-pressed="false"
-              >
-                <span class="preset-swatch" style="background: #9a75f5" aria-hidden="true"></span>
-                <span data-i18n="themes.presetAmethyst">Amethyst · Graphite</span>
-              </button>
-            </div>
-
-            <div class="theme-right-controls">
-              <div class="segmented-pill" role="group" aria-label="Theme mode">
-                <button
-                  class="seg-btn"
-                  type="button"
-                  data-theme-pick="dark"
-                  aria-pressed="true"
-                  data-i18n="themes.modeDark"
-                >
-                  Dark
-                </button>
-                <button
-                  class="seg-btn"
-                  type="button"
-                  data-theme-pick="light"
-                  aria-pressed="false"
-                  data-i18n="themes.modeLight"
-                >
-                  Light
-                </button>
-              </div>
-
-              <div class="segmented-pill" role="group" aria-label="Preview screen">
-                <button
-                  class="seg-btn"
-                  type="button"
-                  data-theme-view="workspace"
-                  aria-pressed="true"
-                  data-i18n="themes.viewWorkspace"
-                >
-                  Live feed
-                </button>
-                <button
-                  class="seg-btn"
-                  type="button"
-                  data-theme-view="settings"
-                  aria-pressed="false"
-                  data-i18n="themes.viewSettings"
-                >
-                  Theme picker
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="theme-stage">
-            <img
-              id="theme-preview-img"
-              src="assets/theme-terracotta-en-dark.png"
-              alt="Kapsula workspace with selected accent preset and theme"
-              loading="lazy"
-            />
-            <div class="theme-stage-footer">
-              <span id="theme-stage-caption">Terracotta accent with Obsidian dark / Porcelain light background surfaces.</span>
-              <span class="mono" id="theme-stage-tokens">#d95826 · Obsidian</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Stage 5: Encrypted Cloud Sync -->
-      <section class="section" id="sync">
-        <div class="container">
-          <div class="section-head">
-            <span class="section-eyebrow" data-i18n="sync.eyebrow">Encrypted Cloud Sync</span>
-            <h2 data-i18n-html="sync.title">Works offline on disk. Encrypted across your devices.</h2>
-            <p class="section-sub" data-i18n-html="sync.sub">
-              You never need an account to use Kapsula. Sign in with Google or email whenever you want notes, checklists, media, and Vault entries synced between Windows, macOS, and Android.
-            </p>
-          </div>
-
-          <dl class="spec-ledger">
-            <div class="spec-row">
-              <dt>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-                  <rect x="3" y="11" width="18" height="11" rx="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-                <span data-i18n="sync.s1Title">Encrypted on your device</span>
-              </dt>
-              <dd data-i18n-html="sync.s1Desc">
-                Notes, files, and Vault items are encrypted locally with AES-256-GCM before upload. Only scrambled data ever touches the server.
-              </dd>
-            </div>
-
-            <div class="spec-row">
-              <dt>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-                  <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9" />
-                </svg>
-                <span data-i18n="sync.s2Title">Cross-platform &amp; offline-ready</span>
-              </dt>
-              <dd data-i18n-html="sync.s2Desc">
-                Write offline on Windows, macOS, or Android; pending updates reconcile automatically as soon as any device comes back online.
-              </dd>
-            </div>
-
-            <div class="spec-row">
-              <dt>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777Zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4" />
-                </svg>
-                <span data-i18n="sync.s3Title">Printable recovery key</span>
-              </dt>
-              <dd data-i18n-html="sync.s3Desc">
-                Save one personal recovery phrase to restore your entire archive if you switch laptops or wipe your phone — with optional custom sync server support.
-              </dd>
-            </div>
-
-            <div class="spec-row">
-              <dt>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
-                </svg>
-                <span data-i18n="sync.s4Title">Clipboard &amp; Vault safety</span>
-              </dt>
-              <dd data-i18n-html="sync.s4Desc">
-                Lock secrets behind a PIN or biometrics. Any password, card number, or 2FA code you copy wipes itself from the clipboard after 30 seconds.
-              </dd>
-            </div>
-          </dl>
-
-          <div class="sync-proof-grid">
-            <figure class="sync-proof-card">
-              <div class="sync-proof-media">
-                <img
-                  id="sync-desktop-img"
-                  src="assets/sync-desktop-en-dark.png"
-                  data-shot-base="sync-desktop"
-                  alt="Kapsula desktop Cloud Sync panel listing connected Windows, macOS, and Android devices"
-                  loading="lazy"
-                />
-              </div>
-              <figcaption class="sync-proof-caption">
-                <strong data-i18n="sync.capDesktopTitle">Desktop · Sync status &amp; connected devices</strong>
-                <span data-i18n-html="sync.capDesktopDesc">Real-time status, device list, recovery key export, and one-click reconcile.</span>
-              </figcaption>
-            </figure>
-
-            <figure class="sync-proof-card">
-              <div class="sync-proof-media sync-proof-media--mobile">
-                <img
-                  id="sync-mobile-img"
-                  src="assets/sync-mobile-en-dark.png"
-                  data-shot-base="sync-mobile"
-                  alt="Kapsula Android Cloud Sync sheet showing encrypted sync and connected devices"
-                  loading="lazy"
-                />
-              </div>
-              <figcaption class="sync-proof-caption">
-                <strong data-i18n="sync.capMobileTitle">Android · Encrypted mobile sync</strong>
-                <span data-i18n-html="sync.capMobileDesc">Instant sync with desktop, share-sheet capture, and offline queue.</span>
-              </figcaption>
-            </figure>
-          </div>
-        </div>
-      </section>
-
-      <!-- Stage 6: Direct v1.0.2 Downloads -->
-      <section class="section" id="download">
-        <div class="container">
-          <div class="section-head">
-            <span class="section-eyebrow" data-i18n="dl.eyebrow">Download v1.0.2</span>
-            <h2 data-i18n="dl.title">Ready on all your devices</h2>
-            <p class="section-sub" data-i18n-html="dl.sub">
-              Direct installers from the official GitHub release. Everything runs offline from minute one.
-            </p>
-          </div>
-
-          <div class="download-grid">
-            <div class="dl-card" data-platform="win">
-              <div class="dl-top">
-                <div class="dl-icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M3 5.5 10.5 4.4v7.1H3V5.5Zm8.5-1.3L21 2.8v8.7h-9.5V4.2ZM3 12.5h7.5v7.1L3 18.5v-6Zm8.5 0H21v8.7l-9.5-1.4v-7.3Z" />
-                  </svg>
-                </div>
-                <span class="dl-match-badge" data-i18n="dl.recommended">Your device</span>
-              </div>
-              <h3>Windows 10 / 11</h3>
-              <p class="dl-desc" data-i18n="dl.winDesc">64-bit desktop installer (.exe)</p>
-              <p class="dl-file mono" data-file-label="win">Kapsula-Setup-1.0.2.exe</p>
-              <a
-                class="btn btn-card"
-                data-dl="win"
-                href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-Setup-1.0.2.exe"
-                data-i18n="dl.btnExe"
-              >
-                Download .exe
-              </a>
-            </div>
-
-            <div class="dl-card" data-platform="mac-arm">
-              <div class="dl-top">
-                <div class="dl-icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43Zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45Z" />
-                  </svg>
-                </div>
-                <span class="dl-match-badge" data-i18n="dl.recommended">Your device</span>
-              </div>
-              <h3>macOS Apple Silicon</h3>
-              <p class="dl-desc" data-i18n="dl.macArmDesc">M1 / M2 / M3 / M4 image (.dmg)</p>
-              <p class="dl-file mono" data-file-label="mac-arm">Kapsula-1.0.2-arm64.dmg</p>
-              <a
-                class="btn btn-card"
-                data-dl="mac-arm"
-                href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-arm64.dmg"
-                data-i18n="dl.btnDmg"
-              >
-                Download .dmg
-              </a>
-            </div>
-
-            <div class="dl-card" data-platform="mac-x64">
-              <div class="dl-top">
-                <div class="dl-icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43Zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45Z" />
-                  </svg>
-                </div>
-                <span class="dl-match-badge" data-i18n="dl.recommended">Your device</span>
-              </div>
-              <h3>macOS Intel</h3>
-              <p class="dl-desc" data-i18n="dl.macX64Desc">x86_64 Mac image (.dmg)</p>
-              <p class="dl-file mono" data-file-label="mac-x64">Kapsula-1.0.2-x64.dmg</p>
-              <a
-                class="btn btn-card"
-                data-dl="mac-x64"
-                href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-x64.dmg"
-                data-i18n="dl.btnDmg"
-              >
-                Download .dmg
-              </a>
-            </div>
-
-            <div class="dl-card" data-platform="android">
-              <div class="dl-top">
-                <div class="dl-icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17.6 9.48 19.44 6.3a.63.63 0 0 0-.23-.85.62.62 0 0 0-.85.22L16.5 8.88A10.67 10.67 0 0 0 12 7.89c-1.63 0-3.16.36-4.5.99L5.64 5.67a.62.62 0 0 0-.85-.22.63.63 0 0 0-.23.85l1.84 3.18A9.85 9.85 0 0 0 2 17.5h20a9.85 9.85 0 0 0-4.4-8.02ZM8.5 14.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm7 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" />
-                  </svg>
-                </div>
-                <span class="dl-match-badge" data-i18n="dl.recommended">Your device</span>
-              </div>
-              <h3>Android</h3>
-              <p class="dl-desc" data-i18n="dl.androidDesc">Phones, tablets &amp; Galaxy Z Fold (.apk)</p>
-              <p class="dl-file mono" data-file-label="android">Kapsula-1.0.2-android-release.apk</p>
-              <a
-                class="btn btn-card"
-                data-dl="android"
-                href="https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-android-release.apk"
-                data-i18n="dl.btnApk"
-              >
-                Download .apk
-              </a>
-            </div>
-          </div>
-
-          <details class="first-run-note">
-            <summary>
-              <span data-i18n="dl.firstRunTitle">Note on first launch (Windows SmartScreen &amp; macOS)</span>
-              <svg
-                class="chevron"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                aria-hidden="true"
-              >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </summary>
-            <div class="first-run-body">
-              <p data-i18n-html="dl.firstRunWin">
-                <strong>Windows:</strong> builds are independent open-source releases without a paid EV certificate. If SmartScreen appears, click <em>More info</em> → <em>Run anyway</em>.
-              </p>
-              <p data-i18n-html="dl.firstRunMac">
-                <strong>macOS:</strong> if Gatekeeper marks the downloaded build as unverified, right-click the app in Applications and choose <em>Open</em>, or run <code>xattr -dr com.apple.quarantine /Applications/Kapsula.app</code>.
-              </p>
-            </div>
-          </details>
-        </div>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <div class="container footer-inner">
-        <div class="footer-brand">
-          <img src="assets/kapsula-icon.png" alt="Kapsula" width="22" height="22" />
-          <span>Kapsula</span>
-          <span class="footer-sep">·</span>
-          <span class="mono" id="footer-version">v1.0.2</span>
-        </div>
-
-        <nav class="footer-links" aria-label="Footer links">
-          <a href="https://github.com/Suther1and/kapsula" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://github.com/Suther1and/kapsula/releases" target="_blank" rel="noopener" data-i18n="footer.releases">Releases</a>
-          <a href="https://github.com/Suther1and/kapsula/blob/main/README.md" target="_blank" rel="noopener">README (EN)</a>
-          <a href="https://github.com/Suther1and/kapsula/blob/main/README.ru.md" target="_blank" rel="noopener">README (RU)</a>
-          <a href="https://github.com/Suther1and/kapsula/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issues</a>
-        </nav>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <img src="assets/kapsula-icon.png" alt="" width="20" height="20" />
+        <span>Kapsula</span>
+        <span id="footer-version">v1.0.2</span>
+        <span>·</span>
+        <span>MIT</span>
       </div>
-    </footer>
+      <div class="footer-links">
+        <a href="https://github.com/Suther1and/kapsula" target="_blank" rel="noopener noreferrer" data-i18n="footer.repo">GitHub</a>
+        <a href="https://github.com/Suther1and/kapsula/releases" target="_blank" rel="noopener noreferrer" data-i18n="footer.releases">Releases</a>
+        <a href="https://github.com/Suther1and/kapsula/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-i18n="footer.license">License</a>
+      </div>
+    </div>
+  </footer>
 
-    <script src="app.js" defer></script>
-  </body>
+  <script src="app.js"></script>
+</body>
 </html>

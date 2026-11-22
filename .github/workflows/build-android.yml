@@ -113,7 +113,10 @@ jobs:
 
           const releaseDir = path.resolve('release');
           const apks = fs.readdirSync(releaseDir).filter((f) => f.endsWith('.apk')).sort();
-          const fileName = apks.find((f) => f.includes('-release.apk')) || apks[0];
+          const fileName =
+            apks.find((f) => /-android\.apk$/i.test(f)) ||
+            apks.find((f) => f.includes('-release.apk')) ||
+            apks[0];
           if (!fileName) {
             throw new Error('No .apk found in release/');
           }

@@ -46,6 +46,7 @@ interface NotesHubViewProps {
   onDraftPersisted: (created: VaultItem) => void;
   onDeleteItem: (id: string) => void;
   onTogglePin: (item: VaultItem) => void;
+  onToggleNotesHub?: (item: VaultItem, inNotesHub: boolean) => void;
   onMoveToOrbit: (itemId: string, orbitId: string) => void;
   onMoveToBoard: (itemId: string, boardId: string | null) => void;
   onDuplicateItem: (itemId: string) => void;
@@ -74,7 +75,7 @@ function makeInlineDraftItem(): VaultItem {
     mediaPath: null,
     mediaType: null,
     mediaDurationSec: null,
-    mediaMeta: null,
+    mediaMeta: { inNotesHub: true },
     ogImageUrl: null,
     ocrText: '',
     extractedActions: [],
@@ -118,6 +119,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   onDraftPersisted,
   onDeleteItem,
   onTogglePin,
+  onToggleNotesHub,
   onMoveToOrbit,
   onMoveToBoard,
   onDuplicateItem,
@@ -213,6 +215,22 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
         onSelect: () => onTogglePin(note),
       },
     ];
+
+    if (note.dna === 'note' || note.dna === 'snippet') {
+      const inNotes = isDedicatedNote(note);
+      entries.push({
+        type: 'item',
+        id: 'toggle-notes-hub',
+        label: inNotes ? t('notes.hub.removeFromNotes') : t('notes.hub.addToNotes'),
+        icon: <NotePencil className="w-3.5 h-3.5" />,
+        onSelect: () => {
+          if (inNotes && scope === 'dedicated' && selectedNoteId === note.id) {
+            setSelectedNoteId(null);
+          }
+          onToggleNotesHub?.(note, !inNotes);
+        },
+      });
+    }
 
     if (orbits.length > 0) {
       entries.push({

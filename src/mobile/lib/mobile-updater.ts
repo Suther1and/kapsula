@@ -110,7 +110,7 @@ function pickAndroidApkAsset(
     if (exact) return exact;
   }
   const releaseApk = assets.find(
-    (a) => typeof a.name === 'string' && /^kapsula-.*-android-release\.apk$/i.test(a.name)
+    (a) => typeof a.name === 'string' && /^kapsula-.*-android(?:-release)?\.apk$/i.test(a.name)
   );
   if (releaseApk) return releaseApk;
 

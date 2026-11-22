@@ -8,7 +8,7 @@ const afterPackMac = require('./after-pack-mac.cjs');
  * - On macOS (`darwin`), delegates cleanly to `scripts/after-pack-mac.cjs` (ad-hoc codesign + Apple Vision OCR +x).
  * - On Windows (`win32`), embeds `build/icon.ico` and Russian product metadata into `Kapsula.exe`
  *   BEFORE NSIS wraps `win-unpacked`, so both portable `win-unpacked/Kapsula.exe` and
- *   `Kapsula-Setup-<version>.exe` carry the crisp Kapsula icon even with `signAndEditExecutable=false`.
+ *   `Kapsula-<version>-windows.exe` carry the crisp Kapsula icon even with `signAndEditExecutable=false`.
  */
 module.exports = async function afterPackUnified(context) {
   if (context.electronPlatformName === 'darwin') {

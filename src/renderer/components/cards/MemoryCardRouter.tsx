@@ -9,6 +9,7 @@ import {
   Files,
   FileText,
   FolderSimple,
+  NotePencil,
   PencilSimple,
   Plus,
   PushPin,
@@ -17,7 +18,7 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
-import { getRedundantCardTags } from '@shared/item-helpers';
+import { getRedundantCardTags, isDedicatedNote } from '@shared/item-helpers';
 import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, formatReminderStamp } from '../../lib/format';
 import { type ContextMenuEntry, ContextMenuSurface } from '../ui/ContextMenuSurface';
@@ -51,6 +52,7 @@ interface MemoryCardRouterProps {
   onDelete: (id: string) => void;
   onRestore?: (id: string) => void;
   onTogglePin: (item: VaultItem) => void;
+  onToggleNotesHub?: (item: VaultItem, inNotesHub: boolean) => void;
   onMoveToOrbit?: (itemId: string, orbitId: string) => void;
   onMoveToBoard?: (itemId: string, boardId: string | null) => void;
   onDuplicate?: (itemId: string) => void;
@@ -79,6 +81,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
   onDelete,
   onRestore,
   onTogglePin,
+  onToggleNotesHub,
   onMoveToOrbit,
   onMoveToBoard,
   onDuplicate,
@@ -133,6 +136,17 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
         label: selected ? t('cards.ctx.unselect') : t('cards.ctx.selectMulti'),
         icon: <CheckSquareOffset className="w-3.5 h-3.5" />,
         onSelect: () => onToggleSelect(item, false),
+      });
+    }
+
+    if ((item.dna === 'note' || item.dna === 'snippet') && !item.deletedAt && !item.isArchived && onToggleNotesHub) {
+      const inNotes = isDedicatedNote(item);
+      entries.push({
+        type: 'item',
+        id: 'toggle-notes-hub',
+        label: inNotes ? t('notes.hub.removeFromNotes') : t('notes.hub.addToNotes'),
+        icon: <NotePencil className="w-3.5 h-3.5" />,
+        onSelect: () => onToggleNotesHub(item, !inNotes),
       });
     }
 
@@ -275,6 +289,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
           draggable
           onDragStart={(e) => {
             e.dataTransfer.setData('text/kapsula-item-id', item.id);
+            e.dataTransfer.setData('text/kapsula-item-non-note', '1');
             e.dataTransfer.effectAllowed = 'move';
           }}
         >
@@ -352,6 +367,11 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
         onMouseLeave={() => onHoverItem?.(null)}
         onDragStart={(e) => {
           e.dataTransfer.setData('text/kapsula-item-id', item.id);
+          if (item.dna === 'note' || item.dna === 'snippet') {
+            e.dataTransfer.setData('text/kapsula-item-note', '1');
+          } else {
+            e.dataTransfer.setData('text/kapsula-item-non-note', '1');
+          }
           e.dataTransfer.effectAllowed = 'move';
         }}
         onClick={(e) => {

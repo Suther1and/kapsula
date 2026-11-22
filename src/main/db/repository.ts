@@ -912,7 +912,7 @@ export class VaultRepository {
     ) {
       const lastRev = this.db
         .prepare(
-          `SELECT id, title, content, content_hash, created_at
+          `SELECT id, title, content, source, content_hash, created_at
            FROM item_revisions
            WHERE item_id = ? AND deleted_at IS NULL
            ORDER BY created_at DESC, rowid DESC
@@ -923,6 +923,7 @@ export class VaultRepository {
             id: string;
             title: string | null;
             content: string;
+            source: ItemRevisionSource;
             content_hash: string | null;
             created_at: number;
           }
@@ -939,6 +940,12 @@ export class VaultRepository {
           (lastRev ? computeRevisionHash(lastRev.title, lastRev.content) : null);
         const prevHash = computeRevisionHash(current.title, current.body);
         const nextHash = computeRevisionHash(nextTitle, nextBody);
+        const isRecentSpecialRev =
+          Boolean(lastRev) &&
+          (lastRev!.source === 'beautify' ||
+            lastRev!.source === 'voice' ||
+            lastRev!.source === 'restore') &&
+          now - lastRev!.created_at < 5000;
 
         if ((current.body.trim().length > 0 || current.title.trim().length > 0) && prevHash !== lastHash) {
           this.saveItemRevision(
@@ -950,7 +957,7 @@ export class VaultRepository {
             },
             { skipDirty: current.is_demo === 1 }
           );
-        } else if (nextBody.trim().length > 0 && nextHash !== lastHash) {
+        } else if (nextBody.trim().length > 0 && nextHash !== lastHash && !isRecentSpecialRev) {
           this.saveItemRevision(
             {
               itemId: id,
@@ -3561,7 +3568,14 @@ export class VaultRepository {
     if (!target || target.dna === 'secret') return [];
 
     const sourceText = `${target.title} ${target.summary} ${target.body.slice(0, 600)} ${target.tags.join(' ')}`;
-    const groups = expandBilingualQuery(sourceText);
+    const seenPrimary = new Set<string>();
+    const groups = expandBilingualQuery(sourceText).filter((grp) => {
+      if (grp.primary.length < 3) return false;
+      const key = grp.primary.toLowerCase();
+      if (seenPrimary.has(key)) return false;
+      seenPrimary.add(key);
+      return true;
+    });
     const targetTags = new Set(target.tags.map((t) => t.toLowerCase()));
     const targetLinks = new Set(target.linksOut);
 

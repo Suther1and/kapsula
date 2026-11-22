@@ -87,34 +87,34 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
   it('selects matching release assets per OS/arch and rejects untrusted hosts', () => {
     const assets = [
       {
-        name: 'Kapsula-Setup-1.0.2.exe',
+        name: 'Kapsula-1.0.2-windows.exe',
         browser_download_url:
-          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-Setup-1.0.2.exe',
+          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-windows.exe',
       },
       {
-        name: 'Kapsula-Setup-1.0.2.exe.blockmap',
+        name: 'Kapsula-1.0.2-windows.exe.blockmap',
         browser_download_url:
-          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-Setup-1.0.2.exe.blockmap',
+          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-windows.exe.blockmap',
       },
       {
-        name: 'Kapsula-1.0.2-arm64.dmg',
+        name: 'Kapsula-1.0.2-mac-apple-silicon.dmg',
         browser_download_url:
-          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-arm64.dmg',
+          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-mac-apple-silicon.dmg',
       },
       {
-        name: 'Kapsula-1.0.2-x64.dmg',
+        name: 'Kapsula-1.0.2-mac-intel.dmg',
         browser_download_url:
-          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-x64.dmg',
+          'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-mac-intel.dmg',
       },
       {
         name: 'Kapsula-1.0.2-evil.dmg',
-        browser_download_url: 'https://evil.example.com/Kapsula-1.0.2-arm64.dmg',
+        browser_download_url: 'https://evil.example.com/Kapsula-1.0.2-mac-apple-silicon.dmg',
       },
     ];
 
-    expect(selectReleaseAsset(assets, 'darwin', 'arm64')?.name).toBe('Kapsula-1.0.2-arm64.dmg');
-    expect(selectReleaseAsset(assets, 'darwin', 'x64')?.name).toBe('Kapsula-1.0.2-x64.dmg');
-    expect(selectReleaseAsset(assets, 'win32', 'x64')?.name).toBe('Kapsula-Setup-1.0.2.exe');
+    expect(selectReleaseAsset(assets, 'darwin', 'arm64')?.name).toBe('Kapsula-1.0.2-mac-apple-silicon.dmg');
+    expect(selectReleaseAsset(assets, 'darwin', 'x64')?.name).toBe('Kapsula-1.0.2-mac-intel.dmg');
+    expect(selectReleaseAsset(assets, 'win32', 'x64')?.name).toBe('Kapsula-1.0.2-windows.exe');
     expect(isAllowedDownloadUrl('https://evil.example.com/Kapsula.exe')).toBe(false);
     expect(
       isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset/foo')
@@ -122,6 +122,26 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
     expect(
       selectReleaseAsset([assets[4]!], 'darwin', 'arm64')
     ).toBeNull();
+
+    // Legacy release names remain supported for backward compatibility
+    expect(
+      selectReleaseAsset(
+        [
+          {
+            name: 'Kapsula-Setup-1.0.1.exe',
+            browser_download_url:
+              'https://github.com/Suther1and/kapsula/releases/download/v1.0.1/Kapsula-Setup-1.0.1.exe',
+          },
+          {
+            name: 'Kapsula-1.0.1-arm64.dmg',
+            browser_download_url:
+              'https://github.com/Suther1and/kapsula/releases/download/v1.0.1/Kapsula-1.0.1-arm64.dmg',
+          },
+        ],
+        'win32',
+        'x64'
+      )?.name
+    ).toBe('Kapsula-Setup-1.0.1.exe');
   });
 
   it('runs macOS manual-download GitHub release check and opens matching .dmg', async () => {
@@ -135,9 +155,9 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
           html_url: 'https://github.com/Suther1and/kapsula/releases/tag/v1.0.2',
           assets: [
             {
-              name: 'Kapsula-1.0.2-arm64.dmg',
+              name: 'Kapsula-1.0.2-mac-apple-silicon.dmg',
               browser_download_url:
-                'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-arm64.dmg',
+                'https://github.com/Suther1and/kapsula/releases/download/v1.0.2/Kapsula-1.0.2-mac-apple-silicon.dmg',
             },
           ],
         }),
@@ -164,10 +184,10 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
     expect(st.status).toBe('available');
     expect(st.mode).toBe('manual-download');
     expect(st.latestVersion).toBe('1.0.2');
-    expect(st.downloadUrl).toContain('Kapsula-1.0.2-arm64.dmg');
+    expect(st.downloadUrl).toContain('Kapsula-1.0.2-mac-apple-silicon.dmg');
 
     await updater.downloadUpdate();
-    expect(openedUrls[0]).toContain('Kapsula-1.0.2-arm64.dmg');
+    expect(openedUrls[0]).toContain('Kapsula-1.0.2-mac-apple-silicon.dmg');
 
     updater.dismissUpdate('1.0.2');
     expect(updater.getState().dismissedVersion).toBe('1.0.2');
@@ -237,9 +257,9 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
             tag_name: 'v1.0.4',
             assets: [
               {
-                name: 'Kapsula-Setup-1.0.4.exe',
+                name: 'Kapsula-1.0.4-windows.exe',
                 browser_download_url:
-                  'https://github.com/Suther1and/kapsula/releases/download/v1.0.4/Kapsula-Setup-1.0.4.exe',
+                  'https://github.com/Suther1and/kapsula/releases/download/v1.0.4/Kapsula-1.0.4-windows.exe',
               },
             ],
           }),
@@ -250,7 +270,7 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
     const fb = await fallbackUpdater.checkForUpdates({ silent: false });
     expect(fb.status).toBe('available');
     expect(fb.mode).toBe('manual-download');
-    expect(fb.downloadUrl).toContain('Kapsula-Setup-1.0.4.exe');
+    expect(fb.downloadUrl).toContain('Kapsula-1.0.4-windows.exe');
   });
 
   it('keeps silent startup errors quiet while manual errors show friendly Russian text', async () => {
@@ -368,7 +388,7 @@ describe('Shared Cloud AI Proxy Routing Priority, 429 Quota & Secret Shield', ()
       apiKey: null,
       cloudProxy: mockProxy,
       contentHash: 'hash-proxy-1',
-      rawText: 'Подготовить план спринта на понедельник',
+      rawText: 'Подготовить план спринта по проекту',
       domain: null,
       hasImage: false,
       orbits: SAMPLE_ORBITS,
@@ -760,7 +780,7 @@ describe('Packaging Config & Unified Windows/macOS afterPack Hook', () => {
     expect(pkg.build.win.target).toContain('nsis');
     expect(pkg.build.win.target).toContain('dir');
     expect(pkg.build.nsis.oneClick).toBe(false);
-    expect(pkg.build.nsis.artifactName).toBe('Kapsula-Setup-${version}.${ext}');
+    expect(pkg.build.nsis.artifactName).toBe('Kapsula-${version}-windows.${ext}');
 
     const req = createRequire(import.meta.url);
     const afterPackWin = req(path.join(ROOT, 'scripts', 'after-pack-win.cjs')) as (ctx: {

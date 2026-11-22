@@ -80,33 +80,15 @@ export type MediaCategory = 'photo' | 'video' | 'audio' | 'link_visual';
 
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|m4v|mkv)$/i;
 const AUDIO_EXT_RE = /\.(?:wav|ogg|oga|mp3|m4a|flac|aac)$/i;
-const EXTERNAL_CHATTER_SOURCES = new Set<VaultItem['source']>([
-  'telegram_saved',
-  'telegram_bot',
-  'archive_import',
-]);
-
 /**
- * Determines whether an item belongs in the dedicated 2-pane `Заметки` studio by default.
- * - Notes/snippets authored directly in Kapsula (`vault_ui`, `hud`, etc.) always qualify.
- * - Short 1-line Telegram / archive imports stay in `Все записи` (and remain accessible via
- *   the secondary `Все тексты` toggle in `Заметки`) unless they have real document structure
- *   or substantial length (>= 240 chars, headings, checklists, code blocks, or 3+ paragraphs).
+ * Determines whether an item belongs in the curated `Заметки` studio by default.
+ * Only notes/snippets explicitly created in Notes Hub or added via `mediaMeta.inNotesHub === true`
+ * appear here; quick captures stay in `Все записи` (and remain visible under `Все тексты`).
  */
 export function isDedicatedNote(item: VaultItem): boolean {
   if (item.isArchived) return false;
   if (item.dna !== 'note' && item.dna !== 'snippet') return false;
-  if (!EXTERNAL_CHATTER_SOURCES.has(item.source)) return true;
-  if (item.isPinned) return true;
-
-  const body = (item.body || '').trim();
-  const hasRichStructure =
-    /^#{1,3}\s+/m.test(body) ||
-    /^[-*]\s+\[[ xX]\]\s+/m.test(body) ||
-    /```/.test(body) ||
-    body.split(/\n\s*\n/).filter((p) => p.trim().length > 0).length >= 3;
-
-  return hasRichStructure || body.length >= 240;
+  return item.mediaMeta?.inNotesHub === true;
 }
 
 /**

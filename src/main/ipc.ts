@@ -34,6 +34,7 @@ import type {
   TaskBoardColumn,
   TaskPriority,
   TextTransformInput,
+  TextTransformPreset,
   TriageApplyInput,
   VaultItem,
   VaultQuery,
@@ -390,6 +391,12 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
     }
     const cleanPatch = sanitizeUpdateItemPatch(patch);
+    const skipAutoRevision = Boolean(
+      patch &&
+        typeof patch === 'object' &&
+        !Array.isArray(patch) &&
+        (patch as Record<string, unknown>).skipAutoRevision === true
+    );
     const effectivePatch: UpdateItemPatch = { ...cleanPatch };
     if (existing.dna === 'secret' && typeof cleanPatch.title === 'string' && cleanPatch.title.trim()) {
       const nextService = cleanPatch.title.trim();
@@ -409,7 +416,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         }
       }
     }
-    const updated = svc.repo.updateItem(id, effectivePatch);
+    const updated = svc.repo.updateItem(id, effectivePatch, { skipAutoRevision });
     if (updated) {
       svc.windows.broadcast('vault:item-upserted', updated);
       if (
@@ -1270,10 +1277,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('ai:transform-text', async (_e, input: TextTransformInput) => {
     const text = typeof input?.text === 'string' ? input.text : '';
-    const preset = input?.preset ?? 'structure';
+    const presets: TextTransformPreset[] =
+      Array.isArray(input?.presets) && input.presets.length > 0
+        ? input.presets
+        : [input?.preset ?? 'structure'];
     const locale = getLocale();
+    let existing: VaultItem | null = null;
     if (typeof input?.itemId === 'string' && input.itemId) {
-      const existing = svc.repo.getItemById(input.itemId);
+      existing = svc.repo.getItemById(input.itemId);
       if (existing?.dna === 'secret') {
         throw new Error(
           locale === 'en'
@@ -1281,19 +1292,12 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
             : 'Записи Сейфа не отправляются в ИИ-обработку'
         );
       }
-      if (existing && text.trim()) {
-        svc.repo.saveItemRevision({
-          itemId: existing.id,
-          title: existing.title,
-          content: text,
-          source: 'beautify',
-        });
-      }
     }
     const s = svc.getSettingsState();
-    return transformNoteText({
+    const result = await transformNoteText({
       text,
-      preset,
+      preset: presets[0],
+      presets,
       provider: s.aiProvider,
       apiKey: svc.getApiKeyForProvider(s.aiProvider),
       googleAiKey: svc.getApiKeyForProvider('google_ai_studio'),
@@ -1303,6 +1307,17 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       repo: svc.repo,
       locale,
     });
+    const didChange = result.changed ?? result.formattedText.trim() !== text.trim();
+    if (existing && text.trim() && didChange) {
+      const rev = svc.repo.saveItemRevision({
+        itemId: existing.id,
+        title: existing.title,
+        content: text,
+        source: 'beautify',
+      });
+      return { ...result, changed: didChange, preRevisionId: rev.id };
+    }
+    return { ...result, changed: didChange, preRevisionId: null };
   });
 
   handleTrusted(

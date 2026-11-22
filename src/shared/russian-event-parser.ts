@@ -60,18 +60,18 @@ export function recoverBankCardExpiry(expiry?: string | null, notes?: string | n
 }
 
 const MONTH_STEMS: Array<{ stem: RegExp; month: number }> = [
-  { stem: /январ\p{L}*/iu, month: 0 },
-  { stem: /феврал\p{L}*/iu, month: 1 },
-  { stem: /март\p{L}*/iu, month: 2 },
-  { stem: /апрел\p{L}*/iu, month: 3 },
-  { stem: /ма[йя](?=$|[^\p{L}])/iu, month: 4 },
-  { stem: /июн\p{L}*/iu, month: 5 },
-  { stem: /июл\p{L}*/iu, month: 6 },
-  { stem: /август\p{L}*/iu, month: 7 },
-  { stem: /сентябр\p{L}*/iu, month: 8 },
-  { stem: /октябр\p{L}*/iu, month: 9 },
-  { stem: /ноябр\p{L}*/iu, month: 10 },
-  { stem: /декабр\p{L}*/iu, month: 11 },
+  { stem: /^(?:январ(?:[ьяеюа]|ем|ём)?|янва[яеюь])$/iu, month: 0 },
+  { stem: /^(?:феврал(?:[ьяеюа]|ем|ём)?|февра[яеюь])$/iu, month: 1 },
+  { stem: /^март(?:ом|[аеуо])?$/iu, month: 2 },
+  { stem: /^(?:апрел(?:[ьяеюа]|ем|ём)?|апре[яеюь])$/iu, month: 3 },
+  { stem: /^ма[йяе]$/iu, month: 4 },
+  { stem: /^июн(?:[ьяеюа]|ем)?$/iu, month: 5 },
+  { stem: /^июл(?:[ьяеюа]|ем)?$/iu, month: 6 },
+  { stem: /^(?:август(?:ом|[аеуо])?|авгус[аеу]?|авгут[аеу]?)$/iu, month: 7 },
+  { stem: /^(?:сентябр(?:[ьяеюа]|ем|ём)?|сентяб[яеюь]|сентяр[яеюь])$/iu, month: 8 },
+  { stem: /^(?:октябр(?:[ьяеюа]|ем|ём)?|октяб[яеюь]|октяр[яеюь])$/iu, month: 9 },
+  { stem: /^(?:ноябр(?:[ьяеюа]|ем|ём)?|нояб[яеюь]|нояр[яеюь])$/iu, month: 10 },
+  { stem: /^(?:декабр(?:[ьяеюа]|ем|ём)?|декаб[яеюь]|декар[яеюь])$/iu, month: 11 },
   { stem: /^jan/i, month: 0 },
   { stem: /^feb/i, month: 1 },
   { stem: /^mar/i, month: 2 },
@@ -211,6 +211,7 @@ export function parseRussianEvent(
   let resolvedDate: Date | null = null;
   let isRelativeOffset = false;
   let isNamedDay = false;
+  let isWeekday = false;
 
   // 1. Extract explicit call/meeting URL first so digits inside URL aren't parsed as times/dates
   let location = '';
@@ -374,6 +375,7 @@ export function parseRussianEvent(
         dow = SHORT_DOW[m[1].toLowerCase()] ?? -1;
       }
       if (dow >= 0) {
+        isWeekday = true;
         const currentDow = base.getDay();
         let delta = (dow - currentDow + 7) % 7;
         const explicitNext = /следующ|next/iu.test(m[0]);
@@ -394,8 +396,8 @@ export function parseRussianEvent(
   // 7. Month names (`19 ноября`, `19 нояб.`, `3 дек 2026`, `Nov 19`, `19 Nov 2026`)
   if (!resolvedDate) {
     const monthMatch =
-      remaining.match(/(?:^|[^\d])([12]?\d|3[01])\s+([а-яёa-z]{3,10})\.?(?:\s*(20\d{2}))?(?=$|[^\p{L}\d])/iu) ||
-      remaining.match(/\b([a-z]{3,9})\.?\s+([12]?\d|3[01])(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?(?=$|[^\p{L}\d])/iu);
+      remaining.match(/(?:^|[^\d])([12]?\d|3[01])\s+([а-яёa-z]{3,10})\.?(?:\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu) ||
+      remaining.match(/\b([a-z]{3,9})\.?\s+([12]?\d|3[01])(?:st|nd|rd|th)?(?:,?\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu);
     if (monthMatch) {
       const isMonthFirst = /^[a-z]+$/i.test(monthMatch[1] || '');
       const rawDay = isMonthFirst ? monthMatch[2] : monthMatch[1];
@@ -424,10 +426,10 @@ export function parseRussianEvent(
 
   // 8. Numeric dates (`21.11.2026`, `21.11`, `21/11/2026`, `2026-11-21`)
   if (!resolvedDate && explicitMonth === null) {
-    const isoMatch = remaining.match(/\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+    const isoMatch = remaining.match(/\b((?:19|20)\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
     const dmyMatch = !isoMatch
       ? remaining.match(
-          /(?:^|[^\d.])(0?[1-9]|[12]\d|3[01])[./](0?[1-9]|1[0-2])(?:[./](20\d{2}|\d{2}))?(?=$|[^\d.])/
+          /(?:^|[^\d.])(0?[1-9]|[12]\d|3[01])([./])(0?[1-9]|1[0-2])(?:[./]((?:19|20)\d{2}|\d{2}))?(?=$|[^\d.])/
         )
       : null;
     if (isoMatch) {
@@ -435,16 +437,21 @@ export function parseRussianEvent(
       explicitMonth = Number(isoMatch[2]) - 1;
       explicitDay = Number(isoMatch[3]);
       remaining = removeSpan(remaining, isoMatch);
-    } else if (dmyMatch) {
+    } else if (dmyMatch && dmyMatch[1] && dmyMatch[3]) {
       const d = Number(dmyMatch[1]);
-      const m = Number(dmyMatch[2]) - 1;
-      const rawY = dmyMatch[3];
-      explicitDay = d;
-      explicitMonth = m;
-      if (rawY) {
-        explicitYear = rawY.length === 2 ? 2000 + Number(rawY) : Number(rawY);
+      const sep = dmyMatch[2];
+      const rawMonth = dmyMatch[3];
+      const m = Number(rawMonth) - 1;
+      const rawY = dmyMatch[4];
+      const isBareDecimal = sep === '.' && !rawY && rawMonth.length === 1;
+      if (!isBareDecimal) {
+        explicitDay = d;
+        explicitMonth = m;
+        if (rawY) {
+          explicitYear = rawY.length === 2 ? 2000 + Number(rawY) : Number(rawY);
+        }
+        remaining = removeSpan(remaining, dmyMatch);
       }
-      remaining = removeSpan(remaining, dmyMatch);
     }
   }
 
@@ -517,8 +524,11 @@ export function parseRussianEvent(
     endAt = startAt + durationMin * 60_000;
   }
 
-  const title = cleanExtractedTitle(remaining) || (locale === 'en' ? 'Event' : 'Событие');
+  const extractedTitle = cleanExtractedTitle(remaining);
+  const title = extractedTitle || (locale === 'en' ? 'Event' : 'Событие');
   const hasActionCue = ACTION_EVENT_CUE_RE.test(input);
+  const hasExplicitDate = explicitMonth !== null && explicitDay !== null;
+  const hasValidYear = explicitYear === null || explicitYear >= base.getFullYear();
   const looksLikeNewsOrArticle =
     input.length > 420 ||
     /(?:опубликовано|подписаться|читать далее|выш(?:ел|ла|ли)|выпустил\p{L}*|анонсировал\p{L}*|состоял(?:ся|ась|ось)|http\S+.*\n.*http)/iu.test(
@@ -526,9 +536,14 @@ export function parseRussianEvent(
     );
   const isEventIntent =
     !looksLikeNewsOrArticle &&
+    hasValidYear &&
     (isRelativeOffset ||
       fallbackDayMs !== undefined ||
-      (input.length <= 240 && (isNamedDay || hasExplicitTime || hasActionCue)));
+      (input.length <= 240 &&
+        (isNamedDay ||
+          hasExplicitTime ||
+          hasActionCue ||
+          ((hasExplicitDate || isWeekday) && extractedTitle.length >= 2))));
 
   const datePart = startDate.toLocaleDateString(locale === 'en' ? 'en-US' : 'ru-RU', {
     day: 'numeric',

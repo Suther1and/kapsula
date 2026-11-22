@@ -27,7 +27,6 @@ import {
   DotsThree,
   FileText,
   FolderOpen,
-  FolderSimple,
   Highlighter,
   ImageSquare,
   Lightbulb,
@@ -38,6 +37,7 @@ import {
   ListNumbers,
   Microphone,
   Minus,
+  NotePencil,
   Plus,
   Quotes,
   RocketLaunch,
@@ -92,7 +92,7 @@ import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
 import { InlineTagEditor } from '../ui/InlineTagEditor';
 import { PopoverSurface } from '../ui/PopoverSurface';
 import { ReminderPopover } from '../ui/ReminderPopover';
-import { SectionIcon } from '../ui/SectionIcon';
+import { SectionPickerPopover } from '../ui/SectionPickerPopover';
 import { SelectMenu } from '../ui/SelectMenu';
 import { VoiceRecorderStudio } from '../ui/VoiceRecorderStudio';
 import { WaveformAudioPlayer } from '../ui/WaveformAudioPlayer';
@@ -333,8 +333,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [extractingVoiceTasks, setExtractingVoiceTasks] = useState(false);
   const [insertingImage, setInsertingImage] = useState(false);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
-  const [activePreset, setActivePreset] = useState<TextTransformPreset>('structure');
-  const [orbitMenuOpen, setOrbitMenuOpen] = useState(false);
+  const [selectedPresets, setSelectedPresets] = useState<TextTransformPreset[]>(['structure']);
+  const [createdOrbits, setCreatedOrbits] = useState<OrbitDef[]>([]);
   const [insertMenuOpen, setInsertMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [bubbleLinkEditing, setBubbleLinkEditing] = useState(false);
@@ -363,6 +363,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [restoringRevId, setRestoringRevId] = useState<string | null>(null);
   const [quickRevertRevId, setQuickRevertRevId] = useState<string | null>(null);
+  const [quickRevertSnapshot, setQuickRevertSnapshot] = useState<{
+    title: string;
+    body: string;
+  } | null>(null);
   const [inlineLightboxItem, setInlineLightboxItem] = useState<VaultItem | null>(null);
   const [relatedState, setRelatedState] = useState<{
     related: Array<{ item: VaultItem; reason: string; score: number }>;
@@ -821,6 +825,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             focusBoardId: boardVal,
             remindAt: remindVal,
             tags: draftTags,
+            ...(itemRef.current.mediaMeta ? { mediaMeta: itemRef.current.mediaMeta } : {}),
             source: 'vault_ui',
           })
           .catch(() => null);
@@ -947,11 +952,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setSlashQuery(null);
       setWikiQuery(null);
       setQuickRevertRevId(null);
+      setQuickRevertSnapshot(null);
       setHistoryOpen(false);
       setInlineLightboxItem(null);
       setBubbleLinkEditing(false);
       setBubbleLinkUrl('');
-      setOrbitMenuOpen(false);
       setInsertMenuOpen(false);
       setMoreMenuOpen(false);
       const nextBody = item.body || '';
@@ -1133,13 +1138,34 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     setHistoryOpen(true);
   };
 
-  const handleBeautify = async (preset: TextTransformPreset = activePreset) => {
+  const togglePreset = (presetId: TextTransformPreset) => {
+    setSelectedPresets((prev) =>
+      prev.includes(presetId) ? prev.filter((p) => p !== presetId) : [...prev, presetId]
+    );
+  };
+
+  const handleBeautify = async (presetsArg?: TextTransformPreset[]) => {
     if (!editor || beautifying) return;
+    const presets: TextTransformPreset[] =
+      Array.isArray(presetsArg) && presetsArg.length > 0
+        ? presetsArg
+        : selectedPresets.length > 0
+          ? selectedPresets
+          : ['structure'];
+
     const rawMd = editor.getMarkdown().trim();
     if (!rawMd) {
       toast.info(t('note.studio.writeFirstToast'));
       return;
     }
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    const prevTitle = titleRef.current;
+    const prevBody = rawMd;
 
     if (isDraftRef.current && !persistedDraftIdRef.current) {
       dirtyRef.current = true;
@@ -1153,41 +1179,78 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       const res = await window.kapsula.transformText({
         itemId: effectiveId,
         text: rawMd,
-        preset,
+        preset: presets[0],
+        presets,
       });
 
-      if (res.formattedText && res.formattedText.trim()) {
-        loadingItemRef.current = true;
-        editor.commands.setContent(res.formattedText, { contentType: 'markdown' });
-        loadingItemRef.current = false;
+      const didChange =
+        res.changed !== undefined
+          ? res.changed
+          : Boolean(res.formattedText && res.formattedText.trim() !== rawMd.trim());
 
-        const nextMd = editor.getMarkdown();
-        bodyMarkdownRef.current = nextMd;
-        setLiveBody(nextMd);
-        const nextTitle =
-          isGenericDraftTitle(title) && res.titleSuggestion
-            ? res.titleSuggestion
-            : title.trim() || deriveTitleFromBody(nextMd, fallbackTitleRef.current);
-        if (nextTitle !== title) {
-          setTitle(nextTitle);
-          titleRef.current = nextTitle;
+      if (!didChange || !res.formattedText?.trim()) {
+        if (dirtyRef.current) {
+          void flushDraft(effectiveId);
         }
-
-        dirtyRef.current = false;
-        const updated = await window.kapsula.updateItem(effectiveId, {
-          title: nextTitle,
-          body: nextMd,
-          ...(res.summary ? { summary: res.summary } : {}),
-        });
-        if (updated) onItemUpdated(updated);
-
-        const revs = await refreshRevisions();
-        if (revs[0]) setQuickRevertRevId(revs[0].id);
-        playTactileTick(soundEnabled, 'success');
-        toast.success(t('note.studio.beautifiedToast'), {
-          description: res.usedCloud ? t('note.studio.beautifiedAiDesc') : t('note.studio.beautifiedLocalDesc'),
-        });
+        const reasonMsg =
+          res.fallbackReason === 'no_ai_key'
+            ? t('note.studio.ai.noChangesLocal')
+            : res.fallbackReason === 'cloud_error'
+              ? t('note.studio.ai.noChangesError')
+              : res.fallbackReason === 'secret_detected'
+                ? t('note.studio.ai.noChangesSecret')
+                : t('note.studio.ai.noChanges');
+        toast.info(reasonMsg);
+        return;
       }
+
+      if ((persistedDraftIdRef.current || itemRef.current.id) !== effectiveId) {
+        return;
+      }
+
+      loadingItemRef.current = true;
+      editor.commands.setContent(res.formattedText, {
+        contentType: 'markdown',
+        emitUpdate: false,
+      });
+      loadingItemRef.current = false;
+
+      const nextMd = editor.getMarkdown();
+      bodyMarkdownRef.current = nextMd;
+      setLiveBody(nextMd);
+      const nextTitle =
+        isGenericDraftTitle(titleRef.current) && res.titleSuggestion
+          ? res.titleSuggestion
+          : titleRef.current.trim() || deriveTitleFromBody(nextMd, fallbackTitleRef.current);
+      if (nextTitle !== titleRef.current) {
+        setTitle(nextTitle);
+        titleRef.current = nextTitle;
+      }
+
+      dirtyRef.current = false;
+      setSaveState('saved');
+      const updated = await window.kapsula.updateItem(effectiveId, {
+        title: nextTitle,
+        body: nextMd,
+        ...(res.summary ? { summary: res.summary } : {}),
+        skipAutoRevision: true,
+      });
+      if (updated) onItemUpdated(updated);
+
+      const revs = await refreshRevisions();
+      setQuickRevertSnapshot({ title: prevTitle, body: prevBody });
+      setQuickRevertRevId(
+        res.preRevisionId ??
+          revs.find((r) => r.source === 'beautify')?.id ??
+          revs[0]?.id ??
+          '__snapshot__'
+      );
+      playTactileTick(soundEnabled, 'success');
+      toast.success(t('note.studio.beautifiedToast'), {
+        description: res.usedCloud
+          ? t('note.studio.beautifiedAiDesc')
+          : t('note.studio.beautifiedLocalDesc'),
+      });
     } catch (err) {
       toast.error(friendlyErrorMessage(err, t('note.studio.beautifyFailed'), locale));
     } finally {
@@ -1216,7 +1279,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       if (!res.ok) {
         if (extractTasks && editor.getMarkdown().trim()) {
           // Graceful fallback: transform existing transcript text into a checklist
-          await handleBeautify('tasks');
+          await handleBeautify(['tasks']);
           return;
         }
         toast.error(
@@ -1275,11 +1338,54 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const handleQuickRevert = async (revisionId?: string) => {
     const effectiveId = persistedDraftIdRef.current || item.id;
-    const targetRevId = revisionId || quickRevertRevId || revisions[0]?.id;
+    const isQuickHeaderRevert = !revisionId;
+    const targetRevId =
+      revisionId ||
+      quickRevertRevId ||
+      revisions[0]?.id ||
+      (quickRevertSnapshot ? '__snapshot__' : undefined);
     if (!targetRevId || !editor) return;
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
     setRestoringRevId(targetRevId);
     try {
-      const reverted = await window.kapsula.revertRevision(effectiveId, targetRevId);
+      const snap = quickRevertSnapshot;
+      const currentBodyBefore = bodyMarkdownRef.current;
+      let reverted: VaultItem | null = null;
+
+      if (targetRevId !== '__snapshot__') {
+        try {
+          reverted = await window.kapsula.revertRevision(effectiveId, targetRevId);
+        } catch (err) {
+          if (!isQuickHeaderRevert || !snap) throw err;
+        }
+      }
+
+      const dbRevertMatchedCurrentOrFailed =
+        isQuickHeaderRevert &&
+        snap !== null &&
+        (!reverted ||
+          (reverted.body.trim() === currentBodyBefore.trim() &&
+            snap.body.trim() !== currentBodyBefore.trim()) ||
+          (snap.title.trim() !== '' && reverted.title !== snap.title));
+
+      if (targetRevId === '__snapshot__' || dbRevertMatchedCurrentOrFailed) {
+        if (snap) {
+          const fallbackTitle =
+            snap.title.trim() || deriveTitleFromBody(snap.body, fallbackTitleRef.current);
+          const patched = await window.kapsula.updateItem(effectiveId, {
+            title: fallbackTitle,
+            body: snap.body,
+            skipAutoRevision: true,
+          });
+          reverted = patched ?? { ...itemRef.current, title: fallbackTitle, body: snap.body };
+        }
+      }
+
       if (!reverted) return;
 
       const nextBody = reverted.body || '';
@@ -1291,7 +1397,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setTitle(reverted.title || '');
       titleRef.current = reverted.title || '';
       dirtyRef.current = false;
+      setSaveState('saved');
       setQuickRevertRevId(null);
+      setQuickRevertSnapshot(null);
       setHistoryOpen(false);
       onItemUpdated(reverted);
       await refreshRevisions();
@@ -1416,7 +1524,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         setShowVoiceStudio(true);
         break;
       case 'beautify':
-        void handleBeautify('structure');
+        void handleBeautify(selectedPresets.length > 0 ? selectedPresets : ['structure']);
         break;
     }
   };
@@ -1484,12 +1592,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       .map(([tag]) => tag);
   }, [availableTags, allItemsForLinks, dateLocale]);
 
+  const effectiveOrbits = useMemo(() => {
+    const extra = createdOrbits.filter((c) => !orbits.some((o) => o.id === c.id));
+    return extra.length > 0 ? [...orbits, ...extra] : orbits;
+  }, [orbits, createdOrbits]);
   const activeOrbitId = isDraft && !persistedDraftIdRef.current ? draftOrbit : item.orbit || '';
-  const activeOrbit = useMemo(
-    () => orbits.find((o) => o.id === activeOrbitId) ?? null,
-    [orbits, activeOrbitId]
-  );
   const activeRemindAt = isDraft && !persistedDraftIdRef.current ? draftRemindAt : item.remindAt;
+  const isInNotesHub = item.mediaMeta?.inNotesHub === true;
 
   const handleCopyNote = async () => {
     const cleanTitle = titleRef.current.trim();
@@ -1646,96 +1755,21 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             </>
           ) : null}
 
-          {/* Unmistakable Section Chip Selector (matches Feed Section chip 1:1) */}
-          <PopoverSurface
-            open={orbitMenuOpen}
-            onOpenChange={setOrbitMenuOpen}
-            align="start"
-            widthClass="w-56 !p-1.5"
-            trigger={
-              activeOrbit ? (
-                <button
-                  type="button"
-                  data-testid="note-studio-orbit-breadcrumb"
-                  title={t('cards.sectionChipTitle', { name: activeOrbit.name })}
-                  style={{
-                    backgroundColor: `color-mix(in srgb, ${activeOrbit.color} 13%, transparent)`,
-                    borderColor: `color-mix(in srgb, ${activeOrbit.color} 28%, transparent)`,
-                  }}
-                  className="k-interactive inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[7px] border text-[12px] font-medium text-[var(--k-ink-primary)] hover:brightness-105 cursor-pointer min-w-0 max-w-[200px]"
-                >
-                  <SectionIcon
-                    name={activeOrbit.icon}
-                    color={activeOrbit.color}
-                    className="w-3.5 h-3.5 shrink-0"
-                  />
-                  <span className="truncate">{activeOrbit.name}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  data-testid="note-studio-orbit-breadcrumb"
-                  title={t('note.studio.chooseSection')}
-                  className="k-interactive inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[7px] border border-dashed border-[var(--k-border-strong)]/70 bg-transparent text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]/70 cursor-pointer min-w-0 max-w-[180px]"
-                >
-                  <FolderSimple className="w-3.5 h-3.5 shrink-0 opacity-75" />
-                  <span className="truncate">{t('nav.noSection')}</span>
-                </button>
-              )
-            }
-          >
-            <div className="space-y-0.5 max-h-[240px] overflow-y-auto text-[12.5px]">
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                {t('cards.sectionChipEmpty')}
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setOrbitMenuOpen(false);
-                  void applyMetaPatch({ orbit: '' });
-                }}
-                className={`k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left cursor-pointer ${
-                  !activeOrbitId
-                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium'
-                    : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
-                }`}
-              >
-                <span className="inline-flex items-center gap-2 min-w-0">
-                  <FolderSimple className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                  <span>{t('nav.noSection')}</span>
-                </span>
-                {!activeOrbitId ? <Check weight="bold" className="w-3.5 h-3.5 shrink-0" /> : null}
-              </button>
-              {orbits.map((o) => {
-                const selected = activeOrbitId === o.id;
-                return (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() => {
-                      setOrbitMenuOpen(false);
-                      void applyMetaPatch({ orbit: o.id });
-                    }}
-                    className={`k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left cursor-pointer ${
-                      selected
-                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium'
-                        : 'text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
-                    }`}
-                  >
-                    <span className="inline-flex items-center gap-2 min-w-0">
-                      <SectionIcon
-                        name={o.icon}
-                        color={o.color}
-                        className="w-3.5 h-3.5 shrink-0"
-                      />
-                      <span className="truncate">{o.name}</span>
-                    </span>
-                    {selected ? <Check weight="bold" className="w-3.5 h-3.5 shrink-0" /> : null}
-                  </button>
-                );
-              })}
-            </div>
-          </PopoverSurface>
+          {/* Section Chip Selector with Inline Section Creation */}
+          <SectionPickerPopover
+            triggerVariant="chip"
+            orbits={effectiveOrbits}
+            value={activeOrbitId}
+            emptyOptionLabel={t('nav.noSection')}
+            emptyOptionKind="none"
+            onOrbitCreated={(created) => {
+              setCreatedOrbits((prev) =>
+                prev.some((o) => o.id === created.id) ? prev : [...prev, created]
+              );
+            }}
+            onChange={(val) => void applyMetaPatch({ orbit: val })}
+            data-testid="note-studio-orbit-breadcrumb"
+          />
 
           {/* Subtle Relative Date & Save Status */}
           <span className="text-[11.5px] text-[var(--k-ink-muted)]/85 k-tabular truncate hidden @[480px]:inline">
@@ -1749,11 +1783,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
         {/* Right: ONLY Compact Low-Contrast Icon Controls */}
         <div className="flex items-center gap-1 shrink-0 k-no-drag">
-          {quickRevertRevId ? (
+          {quickRevertRevId || quickRevertSnapshot ? (
             <button
               type="button"
               data-testid="studio-revert-original-btn"
-              onClick={() => void handleQuickRevert(quickRevertRevId)}
+              onClick={() => void handleQuickRevert()}
               title={t('note.studio.revertOriginal')}
               aria-label={t('note.studio.revertOriginal')}
               className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-accent)] hover:border-[var(--k-border-strong)] cursor-pointer mr-0.5"
@@ -1815,7 +1849,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             open={moreMenuOpen}
             onOpenChange={setMoreMenuOpen}
             align="end"
-            widthClass="w-60 !p-1.5"
+            widthClass="w-[292px] !p-2"
             trigger={
               <button
                 type="button"
@@ -1841,41 +1875,79 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 <span>{t('cards.ctx.copyText')}</span>
               </button>
 
+              <div className="h-px bg-[var(--k-border-hairline)] my-1" />
+
+              <div className="px-1.5 pt-0.5 pb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+                <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
+                <span>{t('note.studio.ai.heading')}</span>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                {presetOptions.map((opt) => {
+                  const checked = selectedPresets.includes(opt.id);
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      data-testid={`beautify-preset-${opt.id}`}
+                      disabled={beautifying}
+                      onClick={() => togglePreset(opt.id)}
+                      className={`k-interactive w-full flex items-start gap-2.5 rounded-xl px-2.5 py-1.5 text-left cursor-pointer border transition-colors ${
+                        checked
+                          ? 'bg-[var(--k-accent-soft)]/80 border-[var(--k-accent)]/35 text-[var(--k-ink-primary)]'
+                          : 'bg-transparent border-transparent hover:bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)]'
+                      } disabled:opacity-60`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-[5px] border shrink-0 transition-colors ${
+                          checked
+                            ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
+                            : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-transparent'
+                        }`}
+                      >
+                        <Check weight="bold" className="w-2.5 h-2.5" />
+                      </span>
+                      <span className="min-w-0 flex-1 flex flex-col gap-0.5">
+                        <span className="whitespace-normal leading-tight text-[12.5px] font-medium">
+                          {opt.label}
+                        </span>
+                        <span className="whitespace-normal leading-snug text-[11px] text-[var(--k-ink-muted)]">
+                          {opt.desc}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <button
                 type="button"
                 data-testid="studio-beautify-btn"
-                disabled={beautifying}
-                onClick={() => void handleBeautify(activePreset)}
-                className="k-interactive w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-accent-soft)] text-left cursor-pointer disabled:opacity-60"
+                disabled={beautifying || selectedPresets.length === 0}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  void handleBeautify(selectedPresets);
+                }}
+                className={`mt-1.5 k-interactive w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium hover:brightness-105 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                  beautifying ? 'k-beautify-shimmer' : ''
+                }`}
               >
-                <span className="inline-flex items-center gap-2">
-                  <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
-                  <span>{beautifying ? t('note.studio.beautifying') : t('note.studio.beautifyWithAi')}</span>
+                {beautifying ? (
+                  <CircleNotch weight="bold" className="w-3.5 h-3.5 animate-spin shrink-0" />
+                ) : (
+                  <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>
+                  {beautifying
+                    ? t('note.studio.beautifying')
+                    : selectedPresets.length > 1
+                      ? t('note.studio.ai.applyCount', { count: selectedPresets.length })
+                      : t('note.studio.ai.apply')}
                 </span>
               </button>
-
-              <div className="px-2 pb-1 pt-0.5 grid grid-cols-2 gap-1">
-                {presetOptions.map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    data-testid={`beautify-preset-${opt.id}`}
-                    disabled={beautifying}
-                    title={opt.desc}
-                    onClick={() => {
-                      setActivePreset(opt.id);
-                      void handleBeautify(opt.id);
-                    }}
-                    className={`k-interactive rounded-md px-2 py-1 text-[11px] text-left truncate cursor-pointer ${
-                      activePreset === opt.id
-                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium'
-                        : 'bg-[var(--k-bg-surface-2)]/70 text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)]'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
 
               <div className="h-px bg-[var(--k-border-hairline)] my-1" />
 
@@ -1925,6 +1997,38 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               {!isDraft ? (
                 <>
                   <div className="h-px bg-[var(--k-border-hairline)] my-1" />
+                  {item.dna === 'note' || item.dna === 'snippet' ? (
+                    <button
+                      type="button"
+                      data-testid="studio-toggle-notes-hub-btn"
+                      onClick={() => {
+                        const nextInNotes = !isInNotesHub;
+                        setMoreMenuOpen(false);
+                        void (async () => {
+                          try {
+                            await applyMetaPatch({
+                              mediaMeta: { ...(item.mediaMeta ?? {}), inNotesHub: nextInNotes },
+                            });
+                            toast.success(
+                              t(
+                                nextInNotes
+                                  ? 'notes.hub.addedToNotesToast'
+                                  : 'notes.hub.removedFromNotesToast'
+                              )
+                            );
+                          } catch (err) {
+                            toast.error(friendlyErrorMessage(err, undefined, locale));
+                          }
+                        })();
+                      }}
+                      className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
+                    >
+                      <NotePencil className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
+                      <span>
+                        {t(isInNotesHub ? 'notes.hub.removeFromNotes' : 'notes.hub.addToNotes')}
+                      </span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => {
@@ -2011,7 +2115,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     text: dictatedBody,
                     orbitOverride: item.orbit || undefined,
                     focusBoardId: item.focusBoardId,
-                    mediaMeta: { waveformPeaks: wav.peaks, transcript: res.transcript },
+                    mediaMeta: {
+                      ...(itemRef.current.mediaMeta ?? {}),
+                      waveformPeaks: wav.peaks,
+                      transcript: res.transcript,
+                    },
                   });
                   persistedDraftIdRef.current = created.id;
                   isDraftRef.current = false;
@@ -2070,7 +2178,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   audioDurationSec: wav.durationSec,
                   source: 'vault_ui',
                   orbitOverride: item.orbit || undefined,
-                  mediaMeta: { waveformPeaks: wav.peaks },
+                  mediaMeta: { ...(itemRef.current.mediaMeta ?? {}), waveformPeaks: wav.peaks },
                 });
                 if (isDraftRef.current) onDraftPersisted?.(created);
                 toast.success(t('note.studio.audioSaved'));

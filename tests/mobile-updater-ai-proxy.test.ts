@@ -335,7 +335,7 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
     // Strict allowlist
     expect(
       isAllowedAndroidApkUrl(
-        'https://github.com/Suther1and/kapsula/releases/download/v1.1.0/Kapsula-1.1.0-android-release.apk'
+        'https://github.com/Suther1and/kapsula/releases/download/v1.1.0/Kapsula-1.1.0-android.apk'
       )
     ).toBe(true);
     expect(
@@ -351,7 +351,7 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
     // Mock GitHub Releases response with android-latest.json + release APK
     const sha = 'a'.repeat(64);
     const apkDownloadUrl =
-      'https://github.com/Suther1and/kapsula/releases/download/v1.1.0/Kapsula-1.1.0-android-release.apk';
+      'https://github.com/Suther1and/kapsula/releases/download/v1.1.0/Kapsula-1.1.0-android.apk';
     const manifestUrl =
       'https://github.com/Suther1and/kapsula/releases/download/v1.1.0/android-latest.json';
 
@@ -366,7 +366,7 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
             body: 'Улучшения синхронизации и входа через Google',
             assets: [
               { name: 'android-latest.json', browser_download_url: manifestUrl },
-              { name: 'Kapsula-1.1.0-android-release.apk', browser_download_url: apkDownloadUrl },
+              { name: 'Kapsula-1.1.0-android.apk', browser_download_url: apkDownloadUrl },
             ],
           }),
         } as unknown as Response;
@@ -378,7 +378,7 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
           json: async () => ({
             versionName: '1.1.0',
             versionCode: 101000012,
-            fileName: 'Kapsula-1.1.0-android-release.apk',
+            fileName: 'Kapsula-1.1.0-android.apk',
             sha256: sha,
           }),
         } as unknown as Response;

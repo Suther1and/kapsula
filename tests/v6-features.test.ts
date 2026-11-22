@@ -782,10 +782,38 @@ describe('Kapsula v6 Intelligence, Parsers & Calendar', () => {
       linksOut: [],
     };
 
-    // Authored note in Kapsula always belongs in Заметки
-    expect(isDedicatedNote({ ...baseItem, source: 'vault_ui', body: 'Короткая мысль' })).toBe(true);
+    // Quick vault_ui note without inNotesHub: true stays out of curated Заметки while remaining in Все тексты
+    const quickVaultNote = { ...baseItem, source: 'vault_ui' as const, body: 'Короткая мысль' };
+    expect(isDedicatedNote(quickVaultNote)).toBe(false);
+    expect(isAnyTextNote(quickVaultNote)).toBe(true);
 
-    // Short 1-line Telegram Saved Message stays in Все записи, not polluting Мои заметки
+    // Explicitly created / manually added note with mediaMeta.inNotesHub === true belongs in Заметки
+    expect(
+      isDedicatedNote({
+        ...baseItem,
+        source: 'vault_ui',
+        body: 'Короткая мысль',
+        mediaMeta: { inNotesHub: true },
+      })
+    ).toBe(true);
+    expect(
+      isDedicatedNote({
+        ...baseItem,
+        source: 'telegram_saved',
+        body: 'Перенесено в заметки вручную',
+        mediaMeta: { inNotesHub: true },
+      })
+    ).toBe(true);
+    expect(
+      isDedicatedNote({
+        ...baseItem,
+        source: 'vault_ui',
+        body: 'Убрано из Заметок',
+        mediaMeta: { inNotesHub: false },
+      })
+    ).toBe(false);
+
+    // Short or structured Telegram Saved Message without inNotesHub: true stays out of curated Заметки
     const shortTg = {
       ...baseItem,
       source: 'telegram_saved' as const,
@@ -795,13 +823,13 @@ describe('Kapsula v6 Intelligence, Parsers & Calendar', () => {
     expect(isDedicatedNote(shortTg)).toBe(false);
     expect(isAnyTextNote(shortTg)).toBe(true);
 
-    // Structured or long Telegram note DOES qualify for Заметки
     const structuredTg = {
       ...baseItem,
       source: 'telegram_saved' as const,
       body: '## План релиза\n\n- [ ] Сделать билд\n- [x] Проверить меню',
     };
-    expect(isDedicatedNote(structuredTg)).toBe(true);
+    expect(isDedicatedNote(structuredTg)).toBe(false);
+    expect(isAnyTextNote(structuredTg)).toBe(true);
     expect(countChecklistStats(structuredTg.body)).toEqual({ total: 2, done: 1 });
 
     // Media categorization across photo, video, audio, link_visual, and non-media

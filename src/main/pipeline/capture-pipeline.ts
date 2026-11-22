@@ -19,7 +19,12 @@ import { parseRussianEvent } from '@shared/russian-event-parser';
 import type { CloudAiProxyConfig } from '../ai/cloud-proxy';
 import type { FetchLike } from '../ai/decision-router';
 import { analyzeImageWithVision, runAiPipeline, type ParsedAiCalendarEvent } from '../ai/enricher';
-import { classifyLocally, detectContactInfo, isGenericImageTitle } from '../ai/local-heuristic';
+import {
+  classifyLocally,
+  detectContactInfo,
+  isGenericImageTitle,
+  pickCleanScreenshotTitle,
+} from '../ai/local-heuristic';
 import type { VaultRepository } from '../db/repository';
 import { extractActionsFromText } from '../ocr/ocr-service';
 import { defaultLocalOcrAdapter } from '../platform/platform-adapters';
@@ -1200,6 +1205,9 @@ export class CapturePipeline {
       stripCookieNoise: source === 'browser_ext',
     });
     const cleanExplicitTitle = safeExplicitTitle ? normalizeMetaText(safeExplicitTitle) : '';
+    const inlineMediaStrippedText = cleanText
+      .replace(/!\[[^\]]*\]\(kapsula-media:\/\/[^)\s]+\)/gi, '')
+      .trim();
 
     // 2.1 Fast Tier-0 local classification + synchronous link unfurl (so links open clean on first frame)
     let local = classifyLocally({
@@ -1217,6 +1225,19 @@ export class CapturePipeline {
 
     let effectiveBody = cleanText;
     let effectiveTitle = cleanExplicitTitle || local.title;
+    if (
+      hasImage &&
+      !cleanExplicitTitle &&
+      (effectiveTitle.includes('kapsula-media://') || /^!\[[^\]]*\]\(/i.test(effectiveTitle))
+    ) {
+      effectiveTitle = pickCleanScreenshotTitle(
+        preScannedOcrText,
+        inlineMediaStrippedText,
+        local.suggestedNewSection,
+        null,
+        locale
+      );
+    }
     let effectiveSummary = local.summary;
     let effectiveDomain = local.domain;
     let effectivePlatform = input.platform ?? local.platform;
@@ -1432,10 +1453,15 @@ export class CapturePipeline {
           location: override.location,
           notes: override.notes ?? rawText,
         });
-      } else if (!(input.url && rawText.trim() === input.url.trim())) {
-        const parsedEv = parseRussianEvent(rawText, undefined, undefined, locale);
-        if (parsedEv?.isEventIntent) {
-          this.syncAutoCalendarEvent(created, parsedEv);
+      } else {
+        const textForCalendar = rawText
+          .replace(/!\[[^\]]*\]\(kapsula-media:\/\/[^)\s]+\)/gi, '')
+          .trim();
+        if (textForCalendar && !(input.url && textForCalendar === input.url.trim())) {
+          const parsedEv = parseRussianEvent(textForCalendar, undefined, undefined, locale);
+          if (parsedEv?.isEventIntent) {
+            this.syncAutoCalendarEvent(created, parsedEv);
+          }
         }
       }
     }
@@ -1721,6 +1747,17 @@ export class CapturePipeline {
       current.dna === 'link' &&
       body.trim().length >= 40 &&
       body.trim() !== (current.url || '').trim();
+    const strippedShotBody = current.body
+      .replace(/!\[[^\]]*\]\(kapsula-media:\/\/[^)\s]+\)/gi, '')
+      .trim();
+    const hasUserCaptionShot =
+      current.dna === 'shot' &&
+      strippedShotBody.length > 0 &&
+      !isGenericImageTitle(strippedShotBody) &&
+      Boolean(current.title.trim()) &&
+      !isGenericImageTitle(current.title) &&
+      !/^!\[[^\]]*\]\(kapsula-media:\/\//i.test(current.title.trim());
+    const preserveExistingTitle = hasRichExtractedLinkTitle || hasUserCaptionShot;
     const preserveExtractedLinkCopy = hasRichExtractedLinkTitle && hasRichExtractedLinkBody;
     const linkNeedsVisualBody =
       current.dna === 'link' && (!body.trim() || body.trim() === (current.url || '').trim());
@@ -1754,7 +1791,7 @@ export class CapturePipeline {
         });
         if (vision) {
           visionUsed = true;
-          visionTitle = hasRichExtractedLinkTitle ? null : vision.title;
+          visionTitle = preserveExistingTitle ? null : vision.title;
           visionSummary =
             hasRichExtractedLinkBody && summary.trim().length >= 25
               ? null
@@ -1773,7 +1810,7 @@ export class CapturePipeline {
           }
 
           if (current.dna !== 'link') {
-            if (vision.title) title = vision.title;
+            if (vision.title && !hasUserCaptionShot) title = vision.title;
             if (vision.summary) summary = vision.summary;
             if (vision.bodyMarkdown && !body.trim()) {
               body = vision.bodyMarkdown;
@@ -1828,7 +1865,7 @@ export class CapturePipeline {
       mediaMeta = { ...(localRecheck.mediaMetaPatch), ...(mediaMeta ?? {}) };
     }
 
-    const chosenLocalTitle = hasRichExtractedLinkTitle
+    const chosenLocalTitle = preserveExistingTitle
       ? title.trim()
       : visionTitle ||
         (isGenericImageTitle(localRecheck.title)
@@ -1937,7 +1974,7 @@ export class CapturePipeline {
     const finalSubKind =
       latest.subKind ?? (contactCheck?.isContact ? 'contact' : localRecheck.subKind);
 
-    const bestFinalTitle = hasRichExtractedLinkTitle
+    const bestFinalTitle = preserveExistingTitle
       ? title.trim()
       : visionTitle ||
         (!isGenericImageTitle(aiResult.title) ? aiResult.title : chosenLocalTitle);

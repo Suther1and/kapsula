@@ -154,7 +154,7 @@ export function selectReleaseAsset(
 
   if (platform === 'win32') {
     const exes = valid.filter((a) => a.name.toLowerCase().endsWith('.exe'));
-    const setupExe = exes.find((a) => /setup|installer/i.test(a.name));
+    const setupExe = exes.find((a) => /windows|setup|installer/i.test(a.name));
     if (setupExe) return setupExe;
     if (exes.length > 0) return exes[0] ?? null;
     const winZip = valid.find(
