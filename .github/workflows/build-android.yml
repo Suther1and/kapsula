@@ -174,7 +174,7 @@ jobs:
             fs.writeFileSync(outPath, JSON.stringify(metadata, null, 2) + '\n', 'utf8');
             console.log('--- release/android-latest.json ---');
             console.log(fs.readFileSync(outPath, 'utf8').trim());
-            EOF
+          EOF
           fi
 
       - name: Upload Android build artifact

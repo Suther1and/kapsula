@@ -340,7 +340,9 @@ describe('Kapsula E2EE Sync Engine Dual-Device Integration (Story 1.3–1.6)', (
     const allCloudJson = JSON.stringify(Array.from(cloud.records.values()));
     expect(allCloudJson).not.toContain('Архитектура боёвки');
     expect(allCloudJson).not.toContain('5536 9138');
-    expect(allCloudJson).not.toContain('742');
+    expect(allCloudJson).not.toContain('"cvv"');
+    expect(allCloudJson).not.toContain('"742"');
+    expect(allCloudJson).not.toContain('owner@example.com');
     expect(allCloudJson).not.toContain('Созвон с художником');
     expect(allCloudJson).not.toContain('Демо-запись');
     // Demo item excluded -> exactly 1 orbit + 1 board + 2 items + 1 calendar event = 5 cloud records

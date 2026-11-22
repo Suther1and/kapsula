@@ -90,6 +90,19 @@ export function detectImageExtFromMagic(buf: Buffer): '.png' | '.jpg' | '.webp' 
   return null;
 }
 
+function isContainedTarget(rootPath: string, targetPath: string): boolean {
+  const normRoot = process.platform === 'win32' ? rootPath.toLowerCase() : rootPath;
+  const normTarget = process.platform === 'win32' ? targetPath.toLowerCase() : targetPath;
+  const rel = path.relative(normRoot, normTarget);
+  return !(
+    !rel ||
+    rel === '..' ||
+    rel.startsWith(`..${path.sep}`) ||
+    rel.startsWith('../') ||
+    path.isAbsolute(rel)
+  );
+}
+
 /**
  * Resolves a requested `kapsula-media://` asset name strictly inside `mediaDir`
  * using `fs.realpathSync` so neither `..` traversal nor symlinks inside `mediaDir` can escape.
@@ -125,16 +138,7 @@ export function resolveSafeMediaFilePath(
   } catch {
     return { ok: false, status: 404 };
   }
-  const normRoot = process.platform === 'win32' ? realMediaDir.toLowerCase() : realMediaDir;
-  const normTarget = process.platform === 'win32' ? realTarget.toLowerCase() : realTarget;
-  const rel = path.relative(normRoot, normTarget);
-  if (
-    !rel ||
-    rel === '..' ||
-    rel.startsWith(`..${path.sep}`) ||
-    rel.startsWith('../') ||
-    path.isAbsolute(rel)
-  ) {
+  if (!isContainedTarget(realMediaDir, realTarget)) {
     return { ok: false, status: 403 };
   }
   let stat: fs.Stats;
@@ -186,17 +190,21 @@ export async function resolveSafeMediaFilePathAsync(
   } catch {
     return { ok: false, status: 404 };
   }
-  const normRoot = process.platform === 'win32' ? realMediaDir.toLowerCase() : realMediaDir;
-  const normTarget = process.platform === 'win32' ? realTarget.toLowerCase() : realTarget;
-  const rel = path.relative(normRoot, normTarget);
-  if (
-    !rel ||
-    rel === '..' ||
-    rel.startsWith(`..${path.sep}`) ||
-    rel.startsWith('../') ||
-    path.isAbsolute(rel)
-  ) {
-    return { ok: false, status: 403 };
+  if (!isContainedTarget(realMediaDir, realTarget)) {
+    // Handles Windows 8.3 short-path callers passed via cachedRealMediaDir
+    // while keeping symlink containment strict against fs.promises.realpath(mediaDir).
+    if (cachedRealMediaDir) {
+      try {
+        const freshRoot = await fs.promises.realpath(mediaDir);
+        if (!isContainedTarget(freshRoot, realTarget)) {
+          return { ok: false, status: 403 };
+        }
+      } catch {
+        return { ok: false, status: 404 };
+      }
+    } else {
+      return { ok: false, status: 403 };
+    }
   }
   let stat: fs.Stats;
   try {

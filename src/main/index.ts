@@ -126,7 +126,7 @@ if (!singleInstanceLock) {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const mediaDir = path.join(dataDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
-    const cachedRealMediaDir = fs.realpathSync(mediaDir);
+    const cachedRealMediaDir = (fs.realpathSync.native ?? fs.realpathSync)(mediaDir);
 
     const baseCsp =
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' kapsula-media: data: blob:; media-src 'self' kapsula-media: blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";

@@ -281,7 +281,7 @@ describe('Wave 3 Performance & Scalability (10k SQLite, Async KDF & Lazy Cleaner
     const resolved = await resolveSafeMediaFilePathAsync(mediaDir, 'shot-1.png', realDir);
     expect(resolved.ok).toBe(true);
     if (resolved.ok) {
-      expect(resolved.filePath).toBe(fs.realpathSync(validFile));
+      expect(resolved.filePath).toBe(await fs.promises.realpath(validFile));
     }
 
     const escaped = await resolveSafeMediaFilePathAsync(mediaDir, '../outside.png', realDir);
