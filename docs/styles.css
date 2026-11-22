@@ -599,24 +599,20 @@ h3 {
 }
 
 .hero-shot {
-  max-height: 100%;
-  width: auto;
-  max-width: 100%;
-  object-fit: contain;
-}
-
-.hero-shot.is-hud {
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.hero-shot.is-hud[data-zoomable="true"]:hover {
-  border-color: transparent;
-  transform: scale(1.005);
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .themes-visual {
   position: relative;
+  aspect-ratio: 16 / 10;
+}
+
+.themes-visual > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .swap-overlay {
@@ -840,6 +836,8 @@ h3 {
 .theme-caption {
   margin: 6px 0 0;
   font-size: 16px;
+  line-height: 1.55;
+  min-height: calc(1.55em * 2);
   color: var(--contrast-ink-2);
 }
 
@@ -1252,8 +1250,8 @@ h3 {
   }
 
   .hero-shot {
-    max-height: none;
     width: 100%;
+    height: auto;
   }
 
   .dl-grid {
@@ -1344,6 +1342,10 @@ h3 {
 @media (max-width: 540px) {
   .control-row {
     flex-wrap: wrap;
+  }
+
+  .theme-caption {
+    min-height: calc(1.55em * 3);
   }
 }
 

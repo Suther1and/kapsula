@@ -81,7 +81,7 @@
       'hero.secondaryCta': 'Watch 30s walkthrough',
       'hero.metaPlatforms': 'Windows, macOS & Android',
       'hero.tabFeed': 'Workspace',
-      'hero.tabHud': '{shortcut}',
+      'hero.tabHud': 'Quick Search',
       'hero.tabStudio': 'Link Studio',
       'hero.tabTasks': 'Task Board',
 
@@ -171,7 +171,7 @@
       'hero.secondaryCta': 'Ролик за 30\u00A0секунд',
       'hero.metaPlatforms': 'Windows, macOS и\u00A0Android',
       'hero.tabFeed': 'Лента',
-      'hero.tabHud': '{shortcut}',
+      'hero.tabHud': 'Быстрый поиск',
       'hero.tabStudio': 'Редактор',
       'hero.tabTasks': 'Задачи',
 
@@ -355,14 +355,12 @@
 
   function swapImageSmooth(imgEl, nextSrc, nextAlt, tokenKey, opts = {}) {
     if (!imgEl) return;
-    const isHud = Boolean(opts.isHud);
     const useTransition = Boolean(opts.animate && imgEl.dataset.initialized === '1');
     const prevAttrSrc = imgEl.getAttribute('src') || '';
 
     if (!useTransition || prevAttrSrc === nextSrc) {
       imgEl.src = nextSrc;
       if (nextAlt) imgEl.alt = nextAlt;
-      if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
       imgEl.dataset.initialized = '1';
       return;
     }
@@ -376,55 +374,38 @@
       if (!parent) {
         imgEl.src = nextSrc;
         if (nextAlt) imgEl.alt = nextAlt;
-        if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
         return;
       }
 
       parent.querySelectorAll('.swap-overlay').forEach((n) => n.remove());
 
-      const isHeroShot = imgEl.classList.contains('hero-shot');
       const overlay = document.createElement('img');
       overlay.className = 'shot-surface swap-overlay';
       if (imgEl.classList.contains('contrast-shot')) overlay.classList.add('contrast-shot');
-      if (isHeroShot) overlay.classList.add('hero-shot');
-      if ('isHud' in opts) overlay.classList.toggle('is-hud', isHud);
+      if (imgEl.classList.contains('hero-shot')) overlay.classList.add('hero-shot');
       overlay.src = nextSrc;
       overlay.alt = '';
       overlay.setAttribute('aria-hidden', 'true');
-
-      if (isHeroShot) {
-        overlay.style.inset = '0';
-        overlay.style.margin = 'auto';
-      } else {
-        overlay.style.left = `${imgEl.offsetLeft}px`;
-        overlay.style.top = `${imgEl.offsetTop}px`;
-        overlay.style.width = `${imgEl.offsetWidth}px`;
-        overlay.style.height = `${imgEl.offsetHeight}px`;
-      }
+      overlay.style.left = `${imgEl.offsetLeft}px`;
+      overlay.style.top = `${imgEl.offsetTop}px`;
+      overlay.style.width = `${imgEl.offsetWidth}px`;
+      overlay.style.height = `${imgEl.offsetHeight}px`;
 
       parent.appendChild(overlay);
       const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (!reduced) {
         void overlay.offsetWidth;
         overlay.style.opacity = '1';
-        if (isHeroShot) imgEl.style.opacity = '0';
       }
 
       const finish = () => {
         if (swapTokens[tokenKey] !== token) {
-          if (isHeroShot) imgEl.style.opacity = '';
           overlay.remove();
           return;
         }
-        if (isHeroShot) {
-          imgEl.style.transition = 'none';
-          imgEl.style.opacity = '';
-        }
         imgEl.src = nextSrc;
         if (nextAlt) imgEl.alt = nextAlt;
-        if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
         requestAnimationFrame(() => {
-          if (isHeroShot) imgEl.style.transition = '';
           overlay.remove();
         });
       };
@@ -500,10 +481,7 @@
     if (img) {
       const nextSrc = shotPath(state.heroShot);
       const nextAlt = formatCopy(state.lang === 'ru' ? view.ruAlt : view.enAlt);
-      swapImageSmooth(img, nextSrc, nextAlt, 'hero', {
-        animate,
-        isHud: state.heroShot === 'hud-search',
-      });
+      swapImageSmooth(img, nextSrc, nextAlt, 'hero', { animate });
     }
     if (note) {
       note.textContent = formatCopy(state.lang === 'ru' ? view.ruNote : view.enNote);
