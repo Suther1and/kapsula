@@ -3539,7 +3539,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
                 >
                 {loading ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+                  <div key="feed-loading" className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
                     {[0, 1, 2, 3, 4, 5].map((i) => (
                       <div
                         key={i}
@@ -3571,7 +3571,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     onCreateBoardNote={handleOpenBlankDraft}
                   />
                 ) : visibleItems.length === 0 ? (
-                  <div className="py-16 px-6 text-center rounded-[16px] border border-dashed border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/50 space-y-3">
+                  <div key="feed-empty" className="py-16 px-6 text-center rounded-[16px] border border-dashed border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/50 space-y-3">
                     <div className="w-11 h-11 mx-auto rounded-[12px] bg-[var(--k-bg-surface-2)] flex items-center justify-center text-[var(--k-ink-muted)]">
                       {nav.type === 'secrets' ? (
                         <LockKey size={22} />
@@ -3650,6 +3650,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 ) : nav.type === 'trash' ? (
                   <div
+                    key="feed-trash"
                     data-testid="trash-list-container"
                     className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
                   >
@@ -3744,6 +3745,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 ) : nav.type === 'archive' ? (
                   <div
+                    key="feed-archive"
                     data-testid="archive-list-container"
                     className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
                   >
@@ -3838,6 +3840,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 ) : effectiveLayoutMode === 'list' && showFeedToolbar ? (
                   <div
+                    key="feed-list"
                     ref={feedListAnimRef}
                     data-testid="feed-list-container"
                     className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
@@ -3878,6 +3881,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 ) : nav.type === 'secrets' ? (
                   <div
+                    key="feed-secrets"
                     data-testid="vault-grid-container"
                     style={{ gap: 'var(--k-grid-gap)' }}
                     className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
@@ -3916,6 +3920,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 ) : (
                   <div
+                    key="feed-grid"
                     ref={feedGridAnimRef}
                     data-testid="feed-grid-container"
                     style={{ gridAutoRows: `${MASONRY_ROW_UNIT_PX}px`, columnGap: 'var(--k-grid-gap)' }}

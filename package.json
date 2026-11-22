@@ -1,6 +1,6 @@
 {
   "name": "kapsula-notes-plus",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Kapsula — fast, encrypted cross-platform notes, tasks, vault, and AI workspace",
   "main": "dist/main/index.js",
   "author": "Kapsula Team",

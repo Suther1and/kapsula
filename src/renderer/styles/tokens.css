@@ -475,11 +475,33 @@ button.k-interactive:not(:disabled):active,
   *,
   *::before,
   *::after {
-    animation-duration: 120ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-property: opacity, background-color, border-color, color, box-shadow !important;
-    transition-duration: 120ms !important;
+    transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .k-interactive,
+  .k-card-surface,
+  .k-card-lift {
+    transition-property: opacity, background-color, border-color, color, box-shadow !important;
+    transition-duration: 100ms !important;
+  }
+
+  button.k-interactive:not(:disabled):active,
+  [data-pressable="true"]:active {
+    scale: none !important;
+  }
+
+  .k-popup-motion {
+    transition-property: opacity !important;
+    transition-duration: 100ms !important;
+  }
+
+  .k-popup-motion[data-starting-style],
+  .k-popup-motion[data-ending-style] {
+    scale: 1 !important;
+    translate: 0 0 !important;
   }
 
   .k-pulse-dot,

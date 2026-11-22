@@ -526,4 +526,68 @@ describe('Kapsula v9 UX, parser, AI studio, revisions & capture fixes', () => {
       vi.resetModules();
     }
   });
+
+  it('keeps card hover actions strictly gated on group-hover without flashing on deselection', () => {
+    const routerPath = path.resolve(process.cwd(), 'src/renderer/components/cards/MemoryCardRouter.tsx');
+    const source = fs.readFileSync(routerPath, 'utf8');
+
+    const badgeIdx = source.indexOf('data-testid={onToggleSelect ? `card-select-badge-${item.id}` : undefined}');
+    const actionsIdx = source.indexOf('data-testid={`card-hover-actions-${item.id}`}');
+    const checkboxIdx = source.indexOf('role="checkbox"');
+
+    expect(badgeIdx).toBeGreaterThan(-1);
+    expect(actionsIdx).toBeGreaterThan(badgeIdx);
+    expect(checkboxIdx).toBeGreaterThan(actionsIdx);
+
+    const badgeBlock = source.slice(badgeIdx, actionsIdx);
+    const actionsBlock = source.slice(actionsIdx, checkboxIdx);
+
+    // Outer pill chrome (bg/border/shadow) stays transparent until group-hover regardless of selectionMode
+    expect(badgeBlock).toContain('border-transparent bg-transparent shadow-none');
+    expect(badgeBlock).toContain('group-hover:bg-[var(--k-bg-surface-2)]');
+    expect(badgeBlock).toContain('group-hover:border-[var(--k-border-hairline)]');
+    expect(badgeBlock).toContain('group-hover:shadow-sm');
+    expect(badgeBlock).not.toMatch(/\bborder-\[var\(--k-border-hairline\)\](?!.*group-hover)/);
+
+    // Inner hover action tray stays strictly opacity-0 unless group-hover (never toggled via hidden -> inline-flex)
+    expect(actionsBlock).toContain('opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto');
+    expect(actionsBlock).not.toContain('hidden group-hover:inline-flex');
+  });
+
+  it('prevents reduced-motion wildcard transition-property injection and keys mutually exclusive layout containers', () => {
+    const tokensCss = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/styles/tokens.css'), 'utf8');
+    const reducedStart = tokensCss.indexOf('@media (prefers-reduced-motion: reduce)');
+    expect(reducedStart).toBeGreaterThan(-1);
+    const wildcardBlock = tokensCss.slice(reducedStart, reducedStart + 320);
+
+    expect(wildcardBlock).toContain('transition-duration: 0.01ms !important');
+    expect(wildcardBlock).not.toMatch(/\*::after[\s\S]*?\btransition-property:/);
+
+    const studioTsx = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/renderer/surfaces/StudioWorkspace.tsx'),
+      'utf8'
+    );
+    expect(studioTsx).toContain('key="feed-loading"');
+    expect(studioTsx).toContain('key="feed-empty"');
+    expect(studioTsx).toContain('key="feed-trash"');
+    expect(studioTsx).toContain('key="feed-archive"');
+    expect(studioTsx).toContain('key="feed-list"');
+    expect(studioTsx).toContain('key="feed-secrets"');
+    expect(studioTsx).toContain('key="feed-grid"');
+
+    const mediaTsx = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/renderer/components/studio/MediaHubView.tsx'),
+      'utf8'
+    );
+    expect(mediaTsx).toContain('key="media-empty"');
+    expect(mediaTsx).toContain('key="media-gallery"');
+
+    const tasksTsx = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/renderer/components/studio/TasksHubView.tsx'),
+      'utf8'
+    );
+    expect(tasksTsx).toContain('key="tasks-board"');
+    expect(tasksTsx).toContain('key="tasks-list-empty"');
+    expect(tasksTsx).toContain('key="tasks-list-groups"');
+  });
 });

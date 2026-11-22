@@ -520,6 +520,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
         />
       ) : filteredItems.length === 0 ? (
         <div
+          key="media-empty"
           data-testid="media-empty-state"
           className="rounded-2xl border border-dashed border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)]/55 px-6 py-16 text-center space-y-3"
         >
@@ -546,7 +547,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
           </button>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div key="media-gallery" className="space-y-6">
           {/* Visual Photo / Video / Link-Preview Grid */}
           {visualTiles.length > 0 ? (
             <div

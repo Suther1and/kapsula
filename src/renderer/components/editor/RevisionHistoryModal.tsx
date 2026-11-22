@@ -463,7 +463,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                     ) : null}
 
                     {viewMode === 'diff' ? (
-                      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+                      <div key="rev-diff" className="flex-1 min-h-0 overflow-y-auto flex flex-col">
                         <div className="px-4 py-1.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/40 flex items-center gap-4 text-[11px] text-[var(--k-ink-muted)] shrink-0">
                           <span className="inline-flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-[var(--k-emerald)]" />
@@ -530,7 +530,7 @@ export const RevisionHistoryModal: React.FC<RevisionHistoryModalProps> = ({
                         )}
                       </div>
                     ) : (
-                      <div className="flex-1 min-h-0 overflow-y-auto p-4 k-selectable">
+                      <div key="rev-full" className="flex-1 min-h-0 overflow-y-auto p-4 k-selectable">
                         <pre className="m-0 whitespace-pre-wrap break-words font-sans text-[13.5px] leading-relaxed text-[var(--k-ink-primary)]">
                           {formatDiffDisplayLine(selectedRev.content || '', t) || t('rev.emptyVersion')}
                         </pre>

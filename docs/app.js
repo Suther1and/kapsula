@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const DEFAULT_VERSION = '1.0.3';
+  const DEFAULT_VERSION = '1.0.4';
   const RELEASE_API = 'https://api.github.com/repos/Suther1and/kapsula/releases/latest';
   const DOWNLOAD_BASE = 'https://github.com/Suther1and/kapsula/releases/download/v';
 
@@ -124,7 +124,7 @@
       'duo2.desc':
         'One-handed bottom bar on phones and an automatic two-pane workspace on Android foldables.',
 
-      'dl.title': 'Download Kapsula v1.0.3',
+      'dl.title': 'Download Kapsula v1.0.4',
       'dl.sub':
         'Free desktop and Android installers with clean, human-readable filenames. Updates preserve your local vault.',
       'dl.allReleases': 'Release notes on GitHub ↗',
@@ -140,7 +140,7 @@
       'dl.helpMac':
         '<strong>macOS:</strong> Drag Kapsula.app to Applications. If Gatekeeper blocks an unnotarized build, run once in Terminal: <code>xattr -cr /Applications/Kapsula.app</code>',
       'dl.helpAndroid':
-        '<strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v1.0.3.',
+        '<strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v1.0.4.',
 
       'footer.repo': 'GitHub',
       'footer.releases': 'Releases',
@@ -151,7 +151,7 @@
         'mac-arm': 'Download for macOS (Apple Silicon)',
         'mac-x64': 'Download for macOS (Intel)',
         android: 'Download Android APK',
-        fallback: 'Download Kapsula v1.0.3',
+        fallback: 'Download Kapsula v1.0.4',
       },
     },
     ru: {
@@ -214,7 +214,7 @@
       'duo2.desc':
         'Нижняя панель под большой палец на смартфонах и\u00A0широкий двухпанельный режим на Android Fold.',
 
-      'dl.title': 'Скачать Kapsula v1.0.3',
+      'dl.title': 'Скачать Kapsula v1.0.4',
       'dl.sub':
         'Готовые установщики под Windows, macOS и\u00A0Android. Обновления сохраняют все локальные записи и\u00A0сейф.',
       'dl.allReleases': 'История версий на GitHub ↗',
@@ -241,7 +241,7 @@
         'mac-arm': 'Скачать для macOS (Apple Silicon)',
         'mac-x64': 'Скачать для macOS (Intel)',
         android: 'Скачать APK для Android',
-        fallback: 'Скачать Kapsula v1.0.3',
+        fallback: 'Скачать Kapsula v1.0.4',
       },
     },
   };

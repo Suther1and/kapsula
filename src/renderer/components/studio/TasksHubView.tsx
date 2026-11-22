@@ -1468,6 +1468,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       {/* BOARD MODE (KANBAN) */}
       {viewMode === 'board' ? (
         <div
+          key="tasks-board"
           ref={boardScrollRef}
           data-testid="tasks-kanban-board"
           className="w-full min-w-0 flex-1 overflow-x-auto overflow-y-hidden pb-3"
@@ -2056,7 +2057,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
 
           {/* Grouped Tasks List */}
           {listGrouped.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)]/60 px-6 py-12 text-center space-y-2.5">
+            <div key="tasks-list-empty" className="rounded-2xl border border-dashed border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)]/60 px-6 py-12 text-center space-y-2.5">
               <CheckSquare weight="duotone" className="w-10 h-10 text-[var(--k-accent)] mx-auto opacity-80" />
               <div className="text-[15px] font-medium text-[var(--k-ink-primary)]">
                 {searchFilter.trim() || priorityFilter !== 'all' || orbitFilter !== 'all'
@@ -2094,7 +2095,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               </div>
             </div>
           ) : (
-            <div className="space-y-5">
+            <div key="tasks-list-groups" className="space-y-5">
               {listGrouped.map((group) => (
                 <section key={group.key} className="space-y-2">
                   <div className="flex items-center gap-2 px-1">

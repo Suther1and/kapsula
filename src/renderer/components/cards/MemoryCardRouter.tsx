@@ -551,44 +551,43 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
             <div
               data-testid={onToggleSelect ? `card-select-badge-${item.id}` : undefined}
               onClick={(e) => e.stopPropagation()}
-              className={`absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-0.5 rounded-full transition-opacity duration-140 ease-[var(--k-ease-out)] h-6 ${
+              className={`absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-0.5 h-6 px-1 rounded-full border border-transparent bg-transparent shadow-none group-hover:bg-[var(--k-bg-surface-2)] group-hover:border-[var(--k-border-hairline)] group-hover:shadow-sm transition-[opacity,background-color,border-color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
                 selected || selectionMode
-                  ? 'opacity-100 pointer-events-auto group-hover:bg-[var(--k-bg-surface-2)] group-hover:border group-hover:border-[var(--k-border-hairline)] group-hover:px-1 group-hover:shadow-sm'
-                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] px-1 shadow-sm'
+                  ? 'opacity-100 pointer-events-none group-hover:pointer-events-auto'
+                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
               }`}
             >
-              {onQuickLook ? (
+              <div
+                data-testid={`card-hover-actions-${item.id}`}
+                className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-140 ease-[var(--k-ease-out)]"
+              >
+                {onQuickLook ? (
+                  <button
+                    type="button"
+                    title={t('cards.quickLookHint')}
+                    onClick={() => onQuickLook(item)}
+                    className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
+                  >
+                    <Eye className="w-3 h-3" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  title={t('cards.quickLookHint')}
-                  onClick={() => onQuickLook(item)}
-                  className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer ${
-                    selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
-                  }`}
+                  title={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
+                  onClick={() => onTogglePin(item)}
+                  className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
                 >
-                  <Eye className="w-3 h-3" />
+                  <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3 h-3" />
                 </button>
-              ) : null}
-              <button
-                type="button"
-                title={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
-                onClick={() => onTogglePin(item)}
-                className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer ${
-                  selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
-                }`}
-              >
-                <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                title={t('common.delete')}
-                onClick={() => onDelete(item.id)}
-                className={`k-interactive items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer ${
-                  selected || selectionMode ? 'hidden group-hover:inline-flex' : 'inline-flex'
-                }`}
-              >
-                <Trash className="w-3 h-3" />
-              </button>
+                <button
+                  type="button"
+                  title={t('common.delete')}
+                  onClick={() => onDelete(item.id)}
+                  className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
+                >
+                  <Trash className="w-3 h-3" />
+                </button>
+              </div>
               {onToggleSelect ? (
                 <button
                   type="button"
@@ -601,6 +600,10 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
                     if (e.detail > 0) e.currentTarget.blur();
                   }}
                   className={`inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border transition-[background-color,border-color] duration-[110ms] ease-out cursor-pointer ${
+                    selected || selectionMode
+                      ? 'pointer-events-auto'
+                      : 'pointer-events-none group-hover:pointer-events-auto'
+                  } ${
                     selected
                       ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
                       : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-accent)]'
