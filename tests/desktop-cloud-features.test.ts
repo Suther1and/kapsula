@@ -755,7 +755,7 @@ describe('Google Calendar Server Proxy OAuth Config, Exchange & Refresh', () => 
 });
 
 describe('Packaging Config & Unified Windows/macOS afterPack Hook', () => {
-  it('configures v1.0.4, GitHub Releases publishing, NSIS installer, and safe afterPack hook', async () => {
+  it('configures v1.0.5, GitHub Releases publishing, NSIS installer, and safe afterPack hook', async () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
       version: string;
       scripts: Record<string, string>;
@@ -768,7 +768,7 @@ describe('Packaging Config & Unified Windows/macOS afterPack Hook', () => {
       };
     };
 
-    expect(pkg.version).toBe('1.0.4');
+    expect(pkg.version).toBe('1.0.5');
     expect(pkg.dependencies['electron-updater']).toBeTruthy();
     expect(pkg.scripts['pack:win:installer']).toContain('electron-builder --win nsis');
     expect(pkg.build.afterPack).toBe('scripts/after-pack-win.cjs');
