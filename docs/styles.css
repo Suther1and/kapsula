@@ -4,13 +4,13 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-outer: #070709;
-  --bg-page: #141418;
+  --bg-outer: #0b0b0e;
+  --bg-page: #131317;
   --bg-elevated: #1c1c22;
-  --bg-header: rgba(7, 7, 9, 0.88);
+  --bg-header: rgba(11, 11, 14, 0.88);
   --bg-pill: rgba(244, 242, 237, 0.06);
   --bg-pill-active: rgba(244, 242, 237, 0.14);
-  --sheet-border: rgba(244, 242, 237, 0.12);
+  --sheet-border: rgba(244, 242, 237, 0.075);
 
   --ink-1: #f4f2ed;
   --ink-2: #b9b6ae;
@@ -42,13 +42,13 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg-outer: #e5e1d8;
+  --bg-outer: #efece5;
   --bg-page: #fcfbf8;
   --bg-elevated: #f1eee7;
-  --bg-header: rgba(229, 225, 216, 0.9);
+  --bg-header: rgba(239, 236, 229, 0.9);
   --bg-pill: rgba(20, 20, 22, 0.055);
   --bg-pill-active: #141416;
-  --sheet-border: rgba(20, 20, 22, 0.11);
+  --sheet-border: rgba(20, 20, 22, 0.065);
 
   --ink-1: #141416;
   --ink-2: #4e4c47;
@@ -201,10 +201,10 @@ kbd {
 
 .page-sheet {
   width: min(calc(100% - 32px), 1340px);
-  margin: 20px auto 24px;
+  margin: 14px auto 20px;
   background: var(--bg-page);
   border: 1px solid var(--sheet-border);
-  border-radius: 20px;
+  border-radius: 16px;
   transition: background-color 180ms ease, border-color 180ms ease;
 }
 
@@ -407,7 +407,7 @@ h3 {
 .hero-band {
   padding: 36px 44px 52px;
   border-bottom: 1px solid var(--hairline);
-  border-radius: 19px 19px 0 0;
+  border-radius: 15px 15px 0 0;
 }
 
 .hero-grid {
@@ -596,6 +596,16 @@ h3 {
   border-radius: 14px;
   overflow: hidden;
   box-shadow: 0 0 0 1px var(--hairline), var(--shot-shadow);
+}
+
+.video-stage[data-playing="false"] {
+  cursor: pointer;
+}
+
+.video-stage[data-playing="false"]:hover .play-pill {
+  background: var(--accent-btn);
+  border-color: var(--accent-btn);
+  transform: translateY(-1px);
 }
 
 .video-stage video,
@@ -864,7 +874,7 @@ h3 {
 /* Band 5: Download Dock & Compact Footer */
 .download-band {
   padding: 68px 44px;
-  border-radius: 0 0 19px 19px;
+  border-radius: 0 0 15px 15px;
 }
 
 .dl-head {

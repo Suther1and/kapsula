@@ -596,17 +596,25 @@
     const playBtn = document.getElementById('video-play-btn');
     if (frame && video && playBtn) {
       const startPlay = () => {
+        if (frame.getAttribute('data-playing') === 'true') return;
         video.setAttribute('controls', '');
         frame.setAttribute('data-playing', 'true');
         const promise = video.play();
         if (promise && typeof promise.catch === 'function') promise.catch(() => {});
       };
-      playBtn.addEventListener('click', startPlay);
+      playBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startPlay();
+      });
+      frame.addEventListener('click', () => {
+        if (frame.getAttribute('data-playing') !== 'true') startPlay();
+      });
       video.addEventListener('play', () => {
         video.setAttribute('controls', '');
         frame.setAttribute('data-playing', 'true');
       });
       video.addEventListener('ended', () => {
+        video.removeAttribute('controls');
         frame.setAttribute('data-playing', 'false');
       });
     }
