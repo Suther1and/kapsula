@@ -4,11 +4,13 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-page: #111113;
-  --bg-elevated: #18181b;
-  --bg-header: rgba(17, 17, 19, 0.88);
+  --bg-outer: #070709;
+  --bg-page: #141418;
+  --bg-elevated: #1c1c22;
+  --bg-header: rgba(7, 7, 9, 0.88);
   --bg-pill: rgba(244, 242, 237, 0.06);
   --bg-pill-active: rgba(244, 242, 237, 0.14);
+  --sheet-border: rgba(244, 242, 237, 0.12);
 
   --ink-1: #f4f2ed;
   --ink-2: #b9b6ae;
@@ -40,11 +42,13 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg-page: #f5f3ee;
-  --bg-elevated: #ece9e1;
-  --bg-header: rgba(245, 243, 238, 0.9);
+  --bg-outer: #e5e1d8;
+  --bg-page: #fcfbf8;
+  --bg-elevated: #f1eee7;
+  --bg-header: rgba(229, 225, 216, 0.9);
   --bg-pill: rgba(20, 20, 22, 0.055);
   --bg-pill-active: #141416;
+  --sheet-border: rgba(20, 20, 22, 0.11);
 
   --ink-1: #141416;
   --ink-2: #4e4c47;
@@ -127,7 +131,7 @@ html {
 
 body {
   margin: 0;
-  background-color: var(--bg-page);
+  background-color: var(--bg-outer);
   color: var(--ink-1);
   font-family: 'Golos Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 16px;
@@ -190,10 +194,24 @@ kbd {
 }
 
 .wrap {
-  width: 100%;
-  max-width: 1320px;
+  width: min(calc(100% - 32px), 1340px);
   margin-inline: auto;
-  padding: 0 32px;
+  padding: 0 44px;
+}
+
+.page-sheet {
+  width: min(calc(100% - 32px), 1340px);
+  margin: 20px auto 24px;
+  background: var(--bg-page);
+  border: 1px solid var(--sheet-border);
+  border-radius: 20px;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.page-sheet .wrap {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
 }
 
 /* Header */
@@ -387,8 +405,9 @@ h3 {
 
 /* Band 1: Asymmetric Hero fitting inside 1440x900 */
 .hero-band {
-  padding: 36px 0 52px;
+  padding: 36px 44px 52px;
   border-bottom: 1px solid var(--hairline);
+  border-radius: 19px 19px 0 0;
 }
 
 .hero-grid {
@@ -553,7 +572,7 @@ h3 {
 
 /* Band 2: Video Walkthrough + 3-Column Hairline Strip */
 .overview-band {
-  padding: 72px 0;
+  padding: 68px 44px;
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -652,7 +671,9 @@ h3 {
 .themes-band {
   background: var(--contrast-bg);
   color: var(--contrast-ink-1);
-  padding: 76px 0;
+  padding: 72px 44px;
+  border-top: 1px solid var(--contrast-hairline);
+  border-bottom: 1px solid var(--contrast-hairline);
   transition: background-color 180ms ease, color 180ms ease;
 }
 
@@ -662,9 +683,9 @@ h3 {
 
 .themes-layout {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  grid-template-columns: minmax(475px, 5.2fr) minmax(0, 6.8fr);
   align-items: center;
-  gap: clamp(28px, 4vw, 56px);
+  gap: clamp(28px, 3.5vw, 48px);
 }
 
 .themes-lead {
@@ -676,35 +697,29 @@ h3 {
 }
 
 .control-row {
-  margin-top: 28px;
+  margin-top: 24px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.control-line {
-  display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 .swatch-group {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .swatch-ring {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border-radius: 999px;
   border: 0;
   background: var(--sw);
   outline: 2px solid transparent;
-  outline-offset: 3px;
+  outline-offset: 2px;
   transition: outline-color 140ms ease, transform 140ms ease;
 }
 
@@ -718,21 +733,23 @@ h3 {
 
 .segmented {
   display: inline-flex;
-  padding: 4px;
+  flex-shrink: 0;
+  padding: 3px;
   border-radius: 9px;
   border: 1px solid var(--contrast-hairline);
   background: var(--contrast-pill);
 }
 
 .seg-btn {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 30px;
+  padding: 0 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--contrast-ink-2);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   transition: background-color 140ms ease, color 140ms ease;
 }
 
@@ -766,7 +783,7 @@ h3 {
 
 /* Band 4: Encrypted Cloud Sync + Vault & Foldable */
 .sync-band {
-  padding: 76px 0;
+  padding: 72px 44px;
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -846,7 +863,8 @@ h3 {
 
 /* Band 5: Download Dock & Compact Footer */
 .download-band {
-  padding: 72px 0;
+  padding: 68px 44px;
+  border-radius: 0 0 19px 19px;
 }
 
 .dl-head {
@@ -1027,8 +1045,7 @@ h3 {
 
 /* Footer */
 .site-footer {
-  border-top: 1px solid var(--hairline);
-  padding: 24px 0;
+  padding: 4px 0 28px;
 }
 
 .footer-inner {
@@ -1072,7 +1089,7 @@ h3 {
 }
 
 /* Responsive */
-@media (max-width: 1080px) {
+@media (max-width: 1120px) {
   .hero-grid,
   .band-head,
   .themes-layout,
@@ -1102,7 +1119,14 @@ h3 {
 
 @media (max-width: 760px) {
   .wrap {
+    width: calc(100% - 16px);
     padding: 0 20px;
+  }
+
+  .page-sheet {
+    width: calc(100% - 16px);
+    margin: 10px auto 16px;
+    border-radius: 14px;
   }
 
   h1 {
@@ -1131,14 +1155,19 @@ h3 {
   }
 
   .hero-band {
-    padding: 28px 0 40px;
+    padding: 28px 20px 36px;
+    border-radius: 13px 13px 0 0;
   }
 
   .overview-band,
   .themes-band,
   .sync-band,
   .download-band {
-    padding: 52px 0;
+    padding: 44px 20px;
+  }
+
+  .download-band {
+    border-radius: 0 0 13px 13px;
   }
 
   .pillars-grid,
@@ -1159,6 +1188,12 @@ h3 {
     min-height: 36px;
     padding: 0 12px;
     font-size: 12px;
+  }
+}
+
+@media (max-width: 540px) {
+  .control-row {
+    flex-wrap: wrap;
   }
 }
 
