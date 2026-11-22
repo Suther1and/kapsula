@@ -7,10 +7,10 @@ declare const __APP_VERSION__: string | undefined;
 export const APP_VERSION: string =
   typeof __APP_VERSION__ === 'string' && __APP_VERSION__.trim()
     ? __APP_VERSION__.trim()
-    : '1.0.2';
+    : '1.0.3';
 
 export function computeVersionCodeFromSemver(version: string = APP_VERSION): number {
-  const parts = String(version || '1.0.2')
+  const parts = String(version || '1.0.3')
     .split(/[^0-9]+/)
     .filter(Boolean)
     .map((p) => Number.parseInt(p, 10) || 0);
