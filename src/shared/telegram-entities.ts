@@ -149,7 +149,8 @@ export function serializeTelegramEntitiesToMarkdown(
         if (u) {
           links.push(u);
           if (!slice.includes(u)) {
-            addPair(item.start, item.end, '[', `](${u})`, item.idx);
+            const safeMdUrl = u.replace(/\(/g, '%28').replace(/\)/g, '%29');
+            addPair(item.start, item.end, '[', `](${safeMdUrl})`, item.idx);
           }
         }
         break;
@@ -160,7 +161,19 @@ export function serializeTelegramEntitiesToMarkdown(
         break;
       }
       case 'blockquote': {
-        if (slice.trim()) addPair(item.start, item.end, '\n> ', '\n', item.idx);
+        if (slice.trim()) {
+          addPair(item.start, item.end, '\n> ', '\n', item.idx);
+          for (let k = item.start; k < item.end - 1; k += 1) {
+            if (text[k] === '\n') {
+              const lineStart = k + 1;
+              const oList = opens.get(lineStart) ?? [];
+              if (!oList.some((m) => m.open === '> ')) {
+                oList.push({ pos: lineStart, open: '> ', close: '', order: item.idx });
+                opens.set(lineStart, oList);
+              }
+            }
+          }
+        }
         break;
       }
       default:

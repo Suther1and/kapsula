@@ -10,7 +10,7 @@ interface CodeSnippetCardProps {
   compactList?: boolean;
 }
 
-export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
+export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = React.memo(({
   item,
   compactList = false,
 }) => {
@@ -77,4 +77,4 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = ({
       </div>
     </div>
   );
-};
+});

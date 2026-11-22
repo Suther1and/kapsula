@@ -452,7 +452,9 @@ describe('Kapsula v3: Organic Routing, Scratch Safety, Multimodal, Reminders & I
     });
     const plainShot = await pipeline.capture({
       text: 'макет экрана',
-      imageBase64: Buffer.from(samplePngB64 + 'salt').toString('base64'),
+      imageBase64: Buffer.concat([Buffer.from(samplePngB64, 'base64'), Buffer.from('salt')]).toString(
+        'base64'
+      ),
       source: 'vault_ui',
     });
 

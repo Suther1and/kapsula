@@ -45,7 +45,7 @@ import { GoogleCalendarBridge } from './bridges/google-calendar';
 import { VaultRepository } from './db/repository';
 import { registerIpcHandlers } from './ipc';
 import { samplePaletteFromBgra } from './ocr/ocr-service';
-import { CapturePipeline, resolveSafeMediaFilePath } from './pipeline/capture-pipeline';
+import { CapturePipeline, resolveSafeMediaFilePathAsync } from './pipeline/capture-pipeline';
 import { readClipboardSnapshot } from './pipeline/clipboard-helper';
 import { ReminderScheduler } from './pipeline/reminder-scheduler';
 import { VaultCrypto } from './security/vault-crypto';
@@ -80,7 +80,7 @@ const MEDIA_MIME_TYPES: Record<string, string> = {
 // Isolate Chromium/Electron userData when running automated tests or secondary data dirs
 if (process.env.KAPSULA_DATA_DIR) {
   const isolatedUserData = path.join(path.resolve(process.env.KAPSULA_DATA_DIR), '_electron-profile');
-  fs.mkdirSync(isolatedUserData, { recursive: true });
+  fs.mkdirSync(isolatedUserData, { recursive: true, mode: 0o700 });
   app.setPath('userData', isolatedUserData);
 }
 
@@ -123,9 +123,10 @@ if (!singleInstanceLock) {
 
   app.whenReady().then(async () => {
     const dataDir = process.env.KAPSULA_DATA_DIR || path.join(app.getPath('userData'), 'kapsula-data');
-    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const mediaDir = path.join(dataDir, 'media');
-    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
+    const cachedRealMediaDir = fs.realpathSync(mediaDir);
 
     const baseCsp =
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' kapsula-media: data: blob:; media-src 'self' kapsula-media: blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
@@ -140,6 +141,7 @@ if (!singleInstanceLock) {
         const headers: Record<string, string | string[]> = {
           ...(details.responseHeaders ?? {}),
           'Content-Security-Policy': [`${baseCsp}; frame-ancestors 'none'`],
+          'X-Content-Type-Options': ['nosniff'],
         };
         callback({ responseHeaders: headers });
       });
@@ -153,7 +155,7 @@ if (!singleInstanceLock) {
           u.hostname === 'local'
             ? u.pathname.replace(/^\/+/, '')
             : u.hostname || u.pathname.replace(/^\/+/, '');
-        const resolved = resolveSafeMediaFilePath(mediaDir, rawPart);
+        const resolved = await resolveSafeMediaFilePathAsync(mediaDir, rawPart, cachedRealMediaDir);
         if (!resolved.ok) {
           return new Response(
             resolved.status === 400
@@ -173,7 +175,12 @@ if (!singleInstanceLock) {
             : MEDIA_MIME_TYPES[ext] ?? 'application/octet-stream';
         const totalSize = stat.size;
         const rangeHeader = request.headers.get('range');
-        const cacheHeader = 'private, no-cache';
+        const isImmutableMediaName = /^(?:[a-f0-9]{16,}|(?:shot|thumb|img|vid|aud|doc|voice|noteimg|media|clip|tg|og|file|att|cam)_)/i.test(
+          safeName
+        );
+        const cacheHeader = isImmutableMediaName
+          ? 'private, max-age=31536000, immutable'
+          : 'private, max-age=3600';
 
         if (rangeHeader && totalSize > 0) {
           const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
@@ -200,6 +207,7 @@ if (!singleInstanceLock) {
               'Content-Length': String(end - start + 1),
               'Accept-Ranges': 'bytes',
               'Cache-Control': cacheHeader,
+              'X-Content-Type-Options': 'nosniff',
             },
           });
         }
@@ -212,6 +220,7 @@ if (!singleInstanceLock) {
             'Content-Length': String(totalSize),
             'Accept-Ranges': 'bytes',
             'Cache-Control': cacheHeader,
+            'X-Content-Type-Options': 'nosniff',
           },
         });
       } catch {
@@ -224,7 +233,7 @@ if (!singleInstanceLock) {
     const getLocale = (): AppLocale => repo?.getLocale() ?? 'ru';
     let cryptoVault: VaultCrypto;
     try {
-      cryptoVault = new VaultCrypto(dataDir, safeStorage, getLocale());
+      cryptoVault = new VaultCrypto(dataDir, safeStorage, getLocale(), { isPackaged: app.isPackaged });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isEnStartup = getLocale() === 'en';
@@ -281,6 +290,25 @@ if (!singleInstanceLock) {
       clipperToken = crypto.randomBytes(16).toString('hex');
       repo.setSetting('clipper_token', clipperToken);
     }
+    let clipperPairingCode = repo.getSetting('clipper_pairing_code') || '';
+    if (!clipperPairingCode) {
+      clipperPairingCode = String(crypto.randomInt(100000, 1000000));
+      repo.setSetting('clipper_pairing_code', clipperPairingCode);
+    }
+    const readPairedOrigins = (): Set<string> => {
+      try {
+        const raw = repo?.getSetting('clipper_paired_origins');
+        if (!raw) return new Set();
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return new Set();
+        return new Set(parsed.filter((v): v is string => typeof v === 'string' && v.trim().length > 0));
+      } catch {
+        return new Set();
+      }
+    };
+    const writePairedOrigins = (origins: Set<string>): void => {
+      repo?.setSetting('clipper_paired_origins', JSON.stringify(Array.from(origins)));
+    };
 
     // Bootstrap API key from environment if present on first start
     const envOpenRouter = process.env.OPENROUTER_API_KEY?.trim();
@@ -294,24 +322,37 @@ if (!singleInstanceLock) {
     if (!repo.getSetting('ai_provider')) {
       if (envGemini) repo.setSetting('ai_provider', 'google_ai_studio');
       else if (envOpenRouter) repo.setSetting('ai_provider', 'openrouter');
-      else repo.setSetting('ai_provider', 'google_ai_studio');
+      else repo.setSetting('ai_provider', 'local');
     }
+
+    const apiKeyMemo = new Map<AiProvider, { enc: string; key: string | null }>();
 
     const getApiKeyForProvider = (p: AiProvider): string | null => {
       if (p === 'local') return null;
       const settingKey = p === 'openrouter' ? 'api_key_openrouter_enc' : 'api_key_google_enc';
       const enc = repo!.getSetting(settingKey);
-      if (!enc) return null;
+      if (!enc) {
+        apiKeyMemo.delete(p);
+        return null;
+      }
+      const memo = apiKeyMemo.get(p);
+      if (memo && memo.enc === enc) {
+        return memo.key;
+      }
       try {
         const res = cryptoVault.decryptConfigJson<{ key: string }>(enc);
+        let storedEnc = enc;
         if (res.migratedFromVdk && res.value?.key) {
           try {
-            repo!.setSetting(settingKey, cryptoVault.encryptConfigJson({ key: res.value.key }));
+            storedEnc = cryptoVault.encryptConfigJson({ key: res.value.key });
+            repo!.setSetting(settingKey, storedEnc);
           } catch {
             // Non-fatal migration re-wrap
           }
         }
-        return res.value?.key || null;
+        const key = res.value?.key || null;
+        apiKeyMemo.set(p, { enc: storedEnc, key });
+        return key;
       } catch {
         return null;
       }
@@ -319,9 +360,29 @@ if (!singleInstanceLock) {
 
     const setApiKeyForProvider = (p: 'openrouter' | 'google_ai_studio', apiKey: string): void => {
       const settingKey = p === 'openrouter' ? 'api_key_openrouter_enc' : 'api_key_google_enc';
-      if (!apiKey) repo!.setSetting(settingKey, '');
-      else repo!.setSetting(settingKey, cryptoVault.encryptConfigJson({ key: apiKey }));
+      apiKeyMemo.delete(p);
+      if (!apiKey) {
+        repo!.setSetting(settingKey, '');
+      } else {
+        const enc = cryptoVault.encryptConfigJson({ key: apiKey });
+        repo!.setSetting(settingKey, enc);
+        apiKeyMemo.set(p, { enc, key: apiKey });
+      }
     };
+
+    const getVaultAutoLockMinutes = (): number => {
+      const autoLockStr = repo!.getSetting('vault_auto_lock_minutes');
+      const parsedAutoLock = autoLockStr !== null && autoLockStr !== '' ? Number(autoLockStr) : NaN;
+      return Number.isFinite(parsedAutoLock) && parsedAutoLock >= 0
+        ? Math.min(120, Math.round(parsedAutoLock))
+        : 5;
+    };
+
+    const getLockVaultOnMinimize = (): boolean =>
+      repo!.getSetting('lock_vault_on_minimize') !== 'false';
+
+    const getLockVaultOnHudClose = (): boolean =>
+      repo!.getSetting('lock_vault_on_hud_close') === 'true';
 
     const defaultSnatchShortcut = getDefaultSnatchShortcut(process.platform);
     let boundClipperPort = CLIPPER_PORT_BASE;
@@ -351,8 +412,7 @@ if (!singleInstanceLock) {
       const parsedCap = capStr ? Number(capStr) : NaN;
       const wipeStr = repo!.getSetting('clipboard_wipe_sec');
       const parsedWipe = wipeStr !== null && wipeStr !== '' ? Number(wipeStr) : NaN;
-      const autoLockStr = repo!.getSetting('vault_auto_lock_minutes');
-      const parsedAutoLock = autoLockStr !== null && autoLockStr !== '' ? Number(autoLockStr) : NaN;
+      const autoLockMinutes = getVaultAutoLockMinutes();
       const pinLockedUntil = Number(repo!.getSetting('pin_locked_until') || '0') || 0;
       const pinLockoutRemainingSec = Math.max(0, Math.ceil((pinLockedUntil - Date.now()) / 1000));
       const layoutRaw = repo!.getSetting('view_layout');
@@ -393,12 +453,9 @@ if (!singleInstanceLock) {
         googleCalendarClientId: gcalStatus?.clientId ?? '',
         googleCalendarIcalUrl: gcalStatus?.icalUrl ?? '',
         googleCalendarLastSyncAt: gcalStatus?.lastSyncAt ?? null,
-        vaultAutoLockMinutes:
-          Number.isFinite(parsedAutoLock) && parsedAutoLock >= 0
-            ? Math.min(120, Math.round(parsedAutoLock))
-            : 5,
-        lockVaultOnMinimize: repo!.getSetting('lock_vault_on_minimize') !== 'false',
-        lockVaultOnHudClose: repo!.getSetting('lock_vault_on_hud_close') === 'true',
+        vaultAutoLockMinutes: autoLockMinutes,
+        lockVaultOnMinimize: getLockVaultOnMinimize(),
+        lockVaultOnHudClose: getLockVaultOnHudClose(),
         enableScreenProtection:
           repo!.getSetting('enable_screen_protection') !== 'false' &&
           repo!.getSetting('enable_screen_protection') !== '0',
@@ -455,11 +512,15 @@ if (!singleInstanceLock) {
       if (!candidateUrl || candidateUrl === 'file://' || candidateUrl === 'file:///') return true;
       return windows.isAllowedSurfaceUrl(candidateUrl);
     };
-    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
-      return permission === 'media' && isAllowedMediaSender(wc, requestingOrigin);
+    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+      if (permission !== 'media' || !isAllowedMediaSender(wc, requestingOrigin)) return false;
+      return details?.mediaType !== 'video';
     });
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-      const allowed = permission === 'media' && isAllowedMediaSender(wc, details?.requestingUrl);
+      const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined;
+      const requestsVideo = Array.isArray(mediaTypes) && mediaTypes.includes('video');
+      const allowed =
+        permission === 'media' && !requestsVideo && isAllowedMediaSender(wc, details?.requestingUrl);
       if (!allowed) {
         callback(false);
         return;
@@ -493,8 +554,8 @@ if (!singleInstanceLock) {
     const getCloudAiProxyConfig = (): CloudAiProxyConfig | null => {
       if (!syncEngine) return null;
       return {
-        supabaseUrl: syncEngine.getSupabaseBaseUrl(),
-        supabasePublishableKey: syncEngine.getSupabasePublishableKey(),
+        supabaseUrl: DEFAULT_SYNC_SUPABASE_URL,
+        supabasePublishableKey: DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
         getAccessToken: () => syncEngine!.getActiveAccessToken(),
         getLocale,
       };
@@ -572,9 +633,10 @@ if (!singleInstanceLock) {
 
     gcalBridge = new GoogleCalendarBridge(repo, cryptoVault, {
       getSupabaseConfig: () => ({
-        url: syncEngine?.getSupabaseBaseUrl() ?? DEFAULT_SYNC_SUPABASE_URL,
-        key: syncEngine?.getSupabasePublishableKey() ?? DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
+        url: DEFAULT_SYNC_SUPABASE_URL,
+        key: DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
       }),
+      getAccessToken: () => syncEngine?.getActiveAccessToken() ?? Promise.resolve(null),
     });
     clipper = new ClipperServer(
       pipeline,
@@ -584,7 +646,16 @@ if (!singleInstanceLock) {
         repo!
           .listOrbits()
           .map((o) => ({ id: o.id, name: o.name, color: o.color })),
-      getLocale
+      getLocale,
+      {
+        getPairingCode: () => clipperPairingCode,
+        isOriginPaired: (origin) => readPairedOrigins().has(origin),
+        onPairOrigin: (origin) => {
+          const next = readPairedOrigins();
+          next.add(origin);
+          writePairedOrigins(next);
+        },
+      }
     );
 
     if (process.env.KAPSULA_DISABLE_CLIPPER !== '1') {
@@ -599,7 +670,7 @@ if (!singleInstanceLock) {
     let hudVaultTabActive = false;
 
     const syncContentProtection = () => {
-      const envDisabled = process.env.KAPSULA_DISABLE_CONTENT_PROTECTION === '1';
+      const envDisabled = !app.isPackaged && process.env.KAPSULA_DISABLE_CONTENT_PROTECTION === '1';
       const prefEnabled = !envDisabled && getSettingsState().enableScreenProtection !== false;
       const vaultProtect = prefEnabled && vaultViewActive;
       const hudProtect = prefEnabled && hudVaultTabActive;
@@ -610,13 +681,7 @@ if (!singleInstanceLock) {
       } catch {
         // Optional depending on OS compositor / headless environment
       }
-      try {
-        if (windows?.hud && !windows.hud.isDestroyed()) {
-          windows.hud.setContentProtection(hudProtect);
-        }
-      } catch {
-        // Optional depending on OS compositor / headless environment
-      }
+      windows?.setHudContentProtection(hudProtect);
     };
 
     const applyWindowBackground = () => {
@@ -909,22 +974,11 @@ if (!singleInstanceLock) {
       repo,
       vaultCrypto: cryptoVault,
       safeStorage,
-      isPackaged: app.isPackaged && !process.env.KAPSULA_DATA_DIR,
+      isPackaged: app.isPackaged,
       appVersion: app.getVersion(),
       openExternal: (url) => shell.openExternal(url),
       callbacks: {
         onStatusChanged: (status) => {
-          if (
-            status.userId &&
-            status.state !== 'signed_out' &&
-            repo!.getSetting('ai_provider') === 'local' &&
-            repo!.getSetting('ai_provider_explicit') !== '1' &&
-            !getApiKeyForProvider('google_ai_studio') &&
-            !getApiKeyForProvider('openrouter')
-          ) {
-            repo!.setSetting('ai_provider', 'google_ai_studio');
-            windows?.broadcast('settings:updated', getSettingsState());
-          }
           windows?.broadcast('sync:status-updated', status);
         },
         onItemUpserted: (item) => {
@@ -969,7 +1023,7 @@ if (!singleInstanceLock) {
       currentVersion: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
-      isPackaged: app.isPackaged && !process.env.KAPSULA_DATA_DIR,
+      isPackaged: app.isPackaged,
       locale: getLocale(),
       onStateChanged: (nextState) => {
         windows?.broadcast('updater:state-changed', nextState);
@@ -1022,6 +1076,23 @@ if (!singleInstanceLock) {
         reminderScheduler?.refresh();
       },
       reapplyShortcuts,
+      clipperControl: {
+        getPairingInfo: () => ({
+          pairingCode: clipperPairingCode,
+          pairedCount: readPairedOrigins().size,
+        }),
+        resetPairing: () => {
+          writePairedOrigins(new Set());
+          clipperToken = crypto.randomBytes(16).toString('hex');
+          repo!.setSetting('clipper_token', clipperToken);
+          clipperPairingCode = String(crypto.randomInt(100000, 1000000));
+          repo!.setSetting('clipper_pairing_code', clipperPairingCode);
+          return {
+            pairingCode: clipperPairingCode,
+            pairedCount: 0,
+          };
+        },
+      },
       onLocaleChanged: (nextLocale) => {
         cryptoVault.setLocale(nextLocale);
         syncEngine?.setLocale(nextLocale);
@@ -1050,20 +1121,20 @@ if (!singleInstanceLock) {
     powerMonitor.on('resume', () => syncEngine?.handleSystemResume());
     windows.vault?.on('hide', () => ipcHooks.lockVaultIfProtected());
     windows.vault?.on('minimize', () => {
-      if (getSettingsState().lockVaultOnMinimize !== false) {
+      if (getLockVaultOnMinimize()) {
         ipcHooks.lockVaultIfProtected();
       }
     });
-    windows.hud?.on('hide', () => {
+    windows.setOnHudHide(() => {
       hudVaultTabActive = false;
       syncContentProtection();
-      if (getSettingsState().lockVaultOnHudClose === true) {
+      if (getLockVaultOnHudClose()) {
         ipcHooks.lockVaultIfProtected();
       }
     });
     const idleLockInterval = setInterval(() => {
       try {
-        const autoLockMin = getSettingsState().vaultAutoLockMinutes ?? 5;
+        const autoLockMin = getVaultAutoLockMinutes();
         if (autoLockMin > 0 && powerMonitor.getSystemIdleTime() >= autoLockMin * 60) {
           ipcHooks.lockVaultIfProtected();
         }

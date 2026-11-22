@@ -69,14 +69,12 @@ const RECURRENCE_LABEL_KEYS: Record<CalendarRecurrence, MobileDictKey> = {
   monthly: 'calendar.recurrenceMonthly',
 };
 
+import { toDateIso } from '../lib/date-utils';
+export { toDateIso };
+
 function formatInputTime24(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-export function toDateIso(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function fromDateIso(iso: string): Date {
@@ -243,7 +241,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     e.preventDefault();
     const clean = quickInput.trim();
     if (!clean) return;
-    const parsed = parseRussianEvent(clean, Date.now(), selectedDate.getTime());
+    const parsed = parseRussianEvent(clean, Date.now(), selectedDate.getTime(), locale);
     if (parsed) {
       const defaultRuTitle = tm('calendar.defaultEventTitle', undefined, 'ru');
       const eventTitle =
@@ -369,7 +367,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   );
   const selectedDayLabel = capitalizeFirst(
     selectedDate.toLocaleDateString(intlLocale, {
-      weekday: 'long',
+      weekday: isExpanded ? 'short' : 'long',
       day: 'numeric',
       month: 'long',
     })

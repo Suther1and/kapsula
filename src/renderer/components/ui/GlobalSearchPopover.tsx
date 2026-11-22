@@ -130,6 +130,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
   );
 
   const entries = useMemo<SearchEntry[]>(() => {
+    if (!open) return [];
     const out: SearchEntry[] = [];
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
 
@@ -187,7 +188,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     }
 
     return out;
-  }, [q, items, calendarEvents, tasks, serverSearchIds, commands]);
+  }, [open, q, items, calendarEvents, tasks, serverSearchIds, commands]);
 
   useEffect(() => {
     setActiveIdx(0);

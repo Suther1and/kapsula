@@ -277,12 +277,24 @@ export async function importArchiveJson(
         const msg = msgRaw as Record<string, unknown>;
         if (msg.type && msg.type !== 'message') continue;
 
+function resolveContainedAssetPath(baseDir: string | undefined, relPath: string | null): string | undefined {
+  if (!baseDir || !relPath || path.isAbsolute(relPath)) return undefined;
+  try {
+    const realBase = fs.realpathSync(baseDir);
+    const candidate = path.resolve(realBase, relPath);
+    const realCandidate = fs.realpathSync(candidate);
+    const rel = path.relative(realBase, realCandidate);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    if (!fs.statSync(realCandidate).isFile()) return undefined;
+    return realCandidate;
+  } catch {
+    return undefined;
+  }
+}
+
         const parsedText = flattenTelegramText(msg.text);
         const relPhoto = typeof msg.photo === 'string' && msg.photo ? msg.photo : null;
-        const resolvedPhoto =
-          baseDir && relPhoto && fs.existsSync(path.resolve(baseDir, relPhoto))
-            ? path.resolve(baseDir, relPhoto)
-            : undefined;
+        const resolvedPhoto = resolveContainedAssetPath(baseDir, relPhoto);
         if (!parsedText.markdown && !resolvedPhoto) continue;
 
         const msgId = String(msg.id ?? '');

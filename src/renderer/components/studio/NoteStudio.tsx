@@ -97,7 +97,13 @@ import { SelectMenu } from '../ui/SelectMenu';
 import { VoiceRecorderStudio } from '../ui/VoiceRecorderStudio';
 import { WaveformAudioPlayer } from '../ui/WaveformAudioPlayer';
 
-const lowlight = createLowlight(common);
+let cachedLowlight: ReturnType<typeof createLowlight> | null = null;
+function getLowlight() {
+  if (!cachedLowlight) {
+    cachedLowlight = createLowlight(common);
+  }
+  return cachedLowlight;
+}
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 const AUDIO_PATH_RE = /\.(?:wav|webm|ogg|oga|mp3|m4a)$/i;
 
@@ -327,7 +333,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [draftOrbit, setDraftOrbit] = useState<string>(item.orbit || '');
   const [draftBoardId, setDraftBoardId] = useState<string | null>(item.focusBoardId ?? null);
   const [draftRemindAt, setDraftRemindAt] = useState<number | null>(item.remindAt ?? null);
-  const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [beautifying, setBeautifying] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [extractingVoiceTasks, setExtractingVoiceTasks] = useState(false);
@@ -402,8 +408,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const titleRef = useRef(isDraft ? '' : item.title || '');
   const bodyMarkdownRef = useRef(item.body || '');
   const dirtyRef = useRef(false);
+  const editSeqRef = useRef(0);
+  const inFlightSaveCountRef = useRef(0);
+  const inFlightUpdatePromiseRef = useRef<Promise<void> | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const liveBodyTimerRef = useRef<number | null>(null);
   const loadingItemRef = useRef(false);
+  const loadingItemTimerRef = useRef<number | null>(null);
   const allItemsForLinksRef = useRef(allItemsForLinks);
   allItemsForLinksRef.current = allItemsForLinks;
 
@@ -504,6 +515,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const insertImageFilesRef = useRef<(files: File[], insertPos?: number | null) => Promise<void>>(
     async () => {}
   );
+
+  const lowlight = useMemo(() => getLowlight(), []);
 
   const editor = useEditor({
     extensions: [
@@ -670,8 +683,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
       const md = ed.getMarkdown();
       bodyMarkdownRef.current = md;
-      setLiveBody(md);
+      if (liveBodyTimerRef.current) {
+        window.clearTimeout(liveBodyTimerRef.current);
+      }
+      liveBodyTimerRef.current = window.setTimeout(() => {
+        liveBodyTimerRef.current = null;
+        setLiveBody(bodyMarkdownRef.current);
+      }, 180);
       dirtyRef.current = true;
+      editSeqRef.current += 1;
       setSaveState('saving');
 
       const updateCaretPosition = () => {
@@ -782,6 +802,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
+      if (liveBodyTimerRef.current) {
+        window.clearTimeout(liveBodyTimerRef.current);
+        liveBodyTimerRef.current = null;
+      }
+      setLiveBody(bodyMarkdownRef.current);
 
       // Snapshot live refs synchronously BEFORE any await so fast-switching to another note
       // never contaminates this flush with the next note's metadata or text.
@@ -792,6 +817,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       const remindVal = draftRemindAtRef.current;
       const draftTags = [...tagsRef.current];
       const reconciledLinks = computeReconciledLinksOut(rawBody);
+      const snapshotSeq = editSeqRef.current;
 
       // Serialize behind any in-flight draft creation to prevent duplicate captures
       if (inflightCreateRef.current) {
@@ -799,7 +825,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
 
       if (!dirtyRef.current) {
-        setSaveState('saved');
+        if (inFlightSaveCountRef.current === 0) setSaveState('saved');
         return;
       }
 
@@ -815,24 +841,30 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           setSaveState('saved');
           return;
         }
-        dirtyRef.current = false;
         const effectiveTitle = rawTitle || deriveTitleFromBody(rawBody, fallbackTitleRef.current);
-        const createPromise = window.kapsula
-          .capture({
-            title: effectiveTitle,
-            text: rawBody,
-            orbitOverride: orbitVal,
-            focusBoardId: boardVal,
-            remindAt: remindVal,
-            tags: draftTags,
-            ...(itemRef.current.mediaMeta ? { mediaMeta: itemRef.current.mediaMeta } : {}),
-            source: 'vault_ui',
-          })
-          .catch(() => null);
+        const createPromise = window.kapsula.capture({
+          title: effectiveTitle,
+          text: rawBody,
+          orbitOverride: orbitVal,
+          focusBoardId: boardVal,
+          remindAt: remindVal,
+          tags: draftTags,
+          ...(itemRef.current.mediaMeta ? { mediaMeta: itemRef.current.mediaMeta } : {}),
+          source: 'vault_ui',
+        });
         inflightCreateRef.current = createPromise;
+        inFlightSaveCountRef.current += 1;
+        let saveFailed = false;
         try {
           let created = await createPromise;
-          if (!created) return;
+          if (!created) {
+            saveFailed = true;
+            if (itemRef.current.id === '__draft__') {
+              dirtyRef.current = true;
+              setSaveState('error');
+            }
+            return;
+          }
           if (reconciledLinks && reconciledLinks.length > 0) {
             const linked = await window.kapsula
               .updateItem(created.id, { linksOut: reconciledLinks })
@@ -844,7 +876,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             persistedDraftIdRef.current = created.id;
             isDraftRef.current = false;
             const userTypedMeanwhile =
-              titleRef.current.trim() !== rawTitle || bodyMarkdownRef.current !== rawBody;
+              editSeqRef.current !== snapshotSeq ||
+              titleRef.current.trim() !== rawTitle ||
+              bodyMarkdownRef.current !== rawBody;
+            if (!userTypedMeanwhile) {
+              dirtyRef.current = false;
+            }
             if (!rawTitle && titleRef.current.trim() === '') {
               setTitle(created.title);
               titleRef.current = created.title;
@@ -860,38 +897,68 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               return;
             }
           }
+        } catch {
+          saveFailed = true;
+          if (itemRef.current.id === '__draft__') {
+            dirtyRef.current = true;
+            setSaveState('error');
+          }
         } finally {
+          inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
           if (inflightCreateRef.current === createPromise) {
             inflightCreateRef.current = null;
           }
-          if (!dirtyRef.current) setSaveState('saved');
+          if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
+            setSaveState('saved');
+          }
         }
         return;
       }
 
-      dirtyRef.current = false;
+      while (inFlightUpdatePromiseRef.current) {
+        await inFlightUpdatePromiseRef.current.catch(() => {});
+      }
+
       const finalId =
         (targetId && targetId !== '__draft__' ? targetId : null) ||
         persistedDraftIdRef.current ||
         (itemRef.current.id !== '__draft__' ? itemRef.current.id : null);
       if (!finalId) {
-        setSaveState('saved');
+        if (inFlightSaveCountRef.current === 0) setSaveState('saved');
         return;
       }
-      const nextTitle = rawTitle || deriveTitleFromBody(rawBody, fallbackTitleRef.current);
+      const latestSeq = editSeqRef.current;
+      const latestRawTitle = titleRef.current.trim();
+      const latestRawBody = bodyMarkdownRef.current;
+      const latestLinks = computeReconciledLinksOut(latestRawBody);
+      const nextTitle = latestRawTitle || deriveTitleFromBody(latestRawBody, fallbackTitleRef.current);
+      const patch: Record<string, unknown> = {
+        title: nextTitle,
+        body: latestRawBody,
+      };
+      if (latestLinks !== null) {
+        patch.linksOut = latestLinks;
+      }
+
+      inFlightSaveCountRef.current += 1;
+      let saveFailed = false;
+      const updatePromise = window.kapsula.updateItem(finalId, patch);
+      const guard = updatePromise.then(
+        () => {},
+        () => {}
+      );
+      inFlightUpdatePromiseRef.current = guard;
       try {
-        const patch: Record<string, unknown> = {
-          title: nextTitle,
-          body: rawBody,
-        };
-        if (reconciledLinks !== null) {
-          patch.linksOut = reconciledLinks;
-        }
-        const updated = await window.kapsula.updateItem(finalId, patch);
+        const updated = await updatePromise;
         const stillSameItem = (persistedDraftIdRef.current || itemRef.current.id) === finalId;
         const userTypedMeanwhile =
           stillSameItem &&
-          (titleRef.current.trim() !== rawTitle || bodyMarkdownRef.current !== rawBody);
+          (editSeqRef.current !== latestSeq ||
+            titleRef.current.trim() !== latestRawTitle ||
+            bodyMarkdownRef.current !== latestRawBody);
+        if (!userTypedMeanwhile && stillSameItem) {
+          dirtyRef.current = false;
+        }
         if (updated) onItemUpdatedRef.current(updated);
         if (userTypedMeanwhile) {
           dirtyRef.current = true;
@@ -902,8 +969,20 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           }, 300);
           return;
         }
+      } catch {
+        saveFailed = true;
+        if ((persistedDraftIdRef.current || itemRef.current.id) === finalId) {
+          dirtyRef.current = true;
+          setSaveState('error');
+        }
       } finally {
-        if (!dirtyRef.current) setSaveState('saved');
+        if (inFlightUpdatePromiseRef.current === guard) {
+          inFlightUpdatePromiseRef.current = null;
+        }
+        inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
+        if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
+          setSaveState('saved');
+        }
       }
     },
     [computeReconciledLinksOut]
@@ -925,6 +1004,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
+      if (liveBodyTimerRef.current) {
+        window.clearTimeout(liveBodyTimerRef.current);
+        liveBodyTimerRef.current = null;
+      }
+      setLiveBody(bodyMarkdownRef.current);
       if (dirtyRef.current) {
         const flushId = persistedDraftIdRef.current || closedItemId;
         void flushDraft(flushId, closedWasDraft && !persistedDraftIdRef.current);
@@ -959,6 +1043,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setBubbleLinkUrl('');
       setInsertMenuOpen(false);
       setMoreMenuOpen(false);
+      if (liveBodyTimerRef.current) {
+        window.clearTimeout(liveBodyTimerRef.current);
+        liveBodyTimerRef.current = null;
+      }
       const nextBody = item.body || '';
       bodyMarkdownRef.current = nextBody;
       setLiveBody(nextBody);
@@ -966,9 +1054,14 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setSaveState('saved');
 
       if (editor) {
+        if (loadingItemTimerRef.current) {
+          window.clearTimeout(loadingItemTimerRef.current);
+          loadingItemTimerRef.current = null;
+        }
         loadingItemRef.current = true;
         editor.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
-        window.setTimeout(() => {
+        loadingItemTimerRef.current = window.setTimeout(() => {
+          loadingItemTimerRef.current = null;
           loadingItemRef.current = false;
           if (isDraft) {
             editor.commands.focus('end');
@@ -990,6 +1083,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setRevisions([]);
       setRelatedState({ related: [], backlinks: [] });
     }
+    return () => {
+      if (loadingItemTimerRef.current) {
+        window.clearTimeout(loadingItemTimerRef.current);
+        loadingItemTimerRef.current = null;
+        loadingItemRef.current = false;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id, isDraft]);
 
@@ -997,9 +1097,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     setTags(item.tags || []);
   }, [item.tags]);
 
-  // Live sync external enrichment updates when user hasn't modified this note
+  // Live sync external enrichment updates when user hasn't modified this note or has in-flight save
   useEffect(() => {
-    if (isDraft || persistedDraftIdRef.current !== item.id || dirtyRef.current) return;
+    if (
+      isDraft ||
+      persistedDraftIdRef.current !== item.id ||
+      dirtyRef.current ||
+      inFlightSaveCountRef.current > 0
+    ) {
+      return;
+    }
     const extTitle = item.title || '';
     if (extTitle && extTitle !== titleRef.current) {
       setTitle(extTitle);
@@ -1009,9 +1116,14 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     if (editor && extBody !== bodyMarkdownRef.current) {
       bodyMarkdownRef.current = extBody;
       setLiveBody(extBody);
+      if (loadingItemTimerRef.current) {
+        window.clearTimeout(loadingItemTimerRef.current);
+        loadingItemTimerRef.current = null;
+      }
       loadingItemRef.current = true;
       editor.commands.setContent(extBody, { contentType: 'markdown', emitUpdate: false });
-      window.setTimeout(() => {
+      loadingItemTimerRef.current = window.setTimeout(() => {
+        loadingItemTimerRef.current = null;
         loadingItemRef.current = false;
       }, 15);
     }
@@ -1065,14 +1177,20 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
     await flushDraft(persistedDraftIdRef.current || curItem.id);
 
-    // Clean up auto-created blank note if user left both title & body completely empty
+    // Clean up auto-created blank note only if it has no metadata (tags/reminder/annotations/links)
     const effectiveId = persistedDraftIdRef.current || curItem.id;
     const isEmptyUntouched =
       !curBody &&
       isUntitledPlaceholderTitle(curTitle) &&
       !curItem.imagePath &&
       !curItem.mediaPath &&
-      !curItem.url;
+      !curItem.url &&
+      !(curItem.tags?.length) &&
+      !curItem.remindAt &&
+      !(curItem.annotations?.length) &&
+      !(curItem.linksOut?.length) &&
+      tagsRef.current.length === 0 &&
+      draftRemindAtRef.current == null;
     if (isEmptyUntouched && effectiveId && !isDraftRef.current) {
       onDeleteRef.current(effectiveId);
     }
@@ -1090,6 +1208,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     setTitle(val);
     titleRef.current = val;
     dirtyRef.current = true;
+    editSeqRef.current += 1;
     setSaveState('saving');
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -1115,6 +1234,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     if (isDraftRef.current && !persistedDraftIdRef.current) {
       dirtyRef.current = true;
       await flushDraft(item.id, true);
+    } else if (dirtyRef.current) {
+      await flushDraft(persistedDraftIdRef.current || item.id);
     }
     const effectiveId = persistedDraftIdRef.current || item.id;
     if (!effectiveId || effectiveId.startsWith('__draft__')) return;
@@ -1772,12 +1893,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           />
 
           {/* Subtle Relative Date & Save Status */}
-          <span className="text-[11.5px] text-[var(--k-ink-muted)]/85 k-tabular truncate hidden @[480px]:inline">
+          <span
+            className={`text-[11.5px] k-tabular truncate hidden @[480px]:inline ${
+              saveState === 'error' ? 'text-[var(--k-danger)]' : 'text-[var(--k-ink-muted)]/85'
+            }`}
+          >
             {saveState === 'saving'
               ? t('note.studio.statusSaving')
-              : !isDraft
-                ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
-                : t('note.studio.statusNew')}
+              : saveState === 'error'
+                ? t('note.studio.statusError')
+                : !isDraft
+                  ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
+                  : t('note.studio.statusNew')}
           </span>
         </div>
 

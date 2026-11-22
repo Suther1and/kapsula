@@ -50,7 +50,7 @@ function extractCardTasks(body: string) {
   return tasks;
 }
 
-export const RichNoteCard: React.FC<RichNoteCardProps> = ({
+export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
   item,
   compactList = false,
   onToggleMarkdownTask,
@@ -145,7 +145,7 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = ({
             className="w-full h-[132px] object-cover block"
           />
           {inlineMediaFiles.length > 1 ? (
-            <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/68 text-white text-[10.5px] font-medium backdrop-blur-sm k-tabular">
+            <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/74 text-white text-[10.5px] font-medium k-tabular">
               <ImageSquare weight="fill" className="w-3 h-3" />
               +{inlineMediaFiles.length - 1}
             </span>
@@ -205,4 +205,4 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = ({
       ) : null}
     </div>
   );
-};
+});

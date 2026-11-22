@@ -54,6 +54,7 @@ import type {
 export interface KapsulaBridgeApi {
   readonly platform: NodeJS.Platform;
   queryVault(q?: VaultQuery): Promise<VaultItem[]>;
+  getVaultItem(id: string, opts?: { includeDeleted?: boolean }): Promise<VaultItem | null>;
   getStats(): Promise<{
     total: number;
     inboxCount: number;
@@ -81,7 +82,7 @@ export interface KapsulaBridgeApi {
   duplicateItem(id: string): Promise<VaultItem | null>;
   saveNoteImage(input: {
     base64?: string;
-    filePath?: string;
+    bytes?: Uint8Array;
     mimeType?: string;
     fileName?: string;
   }): Promise<SaveNoteImageResult>;
@@ -102,7 +103,7 @@ export interface KapsulaBridgeApi {
   ): Promise<SecretCopyResult>;
   getTotpCode(itemId: string): Promise<TotpCodeSnapshot | null>;
   saveStructuredSecret(input: StructuredSecretInput): Promise<VaultItem | null>;
-  setMasterPin(pin: string | null): Promise<boolean>;
+  setMasterPin(pin: string | null, currentPin?: string): Promise<boolean>;
   unlockVaultPin(pin: string): Promise<boolean>;
   lockVaultPin(): Promise<boolean>;
   promptBiometricUnlock(): Promise<{ ok: boolean; error?: string }>;
@@ -191,6 +192,8 @@ export interface KapsulaBridgeApi {
   importArchiveJson(rawJson: string): Promise<ArchiveImportResult>;
   pickAndImportArchive(): Promise<ArchiveImportResult & { canceled?: boolean }>;
   openExtensionFolder(): Promise<void>;
+  getClipperPairingInfo(): Promise<{ pairingCode: string; pairedCount: number }>;
+  resetClipperPairing(): Promise<{ pairingCode: string; pairedCount: number }>;
   getStorageSummary(): Promise<{ itemCount: number; mediaFilesCount: number; totalBytes: number }>;
   openDataFolder(): Promise<void>;
   exportBackup(): Promise<{ canceled: boolean; itemCount: number; filePath: string | null }>;
@@ -206,6 +209,7 @@ export interface KapsulaBridgeApi {
   syncSignIn(input: SyncAuthInput): Promise<SyncAuthResult>;
   syncSignInGoogle(): Promise<SyncAuthResult>;
   syncSignOut(): Promise<SyncStatus>;
+  syncDeleteAccount(): Promise<{ ok: boolean; error?: string; status?: SyncStatus }>;
   syncSetupPassphrase(passphrase: string): Promise<SyncSetupPassphraseResult>;
   syncUnlockPassphrase(passphrase: string): Promise<SyncActionResult>;
   syncUnlockRecovery(payload: {
@@ -279,6 +283,7 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 const api: KapsulaBridgeApi = {
   platform: process.platform,
   queryVault: (q) => ipcRenderer.invoke('vault:query', q),
+  getVaultItem: (id, opts) => ipcRenderer.invoke('vault:get-item', id, opts),
   getStats: () => ipcRenderer.invoke('vault:stats'),
   getInventorySummary: () => ipcRenderer.invoke('vault:inventory-summary'),
   pickSerendipity: (limit) => ipcRenderer.invoke('vault:serendipity', limit),
@@ -305,7 +310,7 @@ const api: KapsulaBridgeApi = {
   copySecretField: (id, field) => ipcRenderer.invoke('secret:copy-field', id, field),
   getTotpCode: (itemId) => ipcRenderer.invoke('secret:get-totp-code', itemId),
   saveStructuredSecret: (input) => ipcRenderer.invoke('secret:save-structured', input),
-  setMasterPin: (pin) => ipcRenderer.invoke('secret:set-pin', pin),
+  setMasterPin: (pin, currentPin) => ipcRenderer.invoke('secret:set-pin', pin, currentPin),
   unlockVaultPin: (pin) => ipcRenderer.invoke('secret:unlock-pin', pin),
   lockVaultPin: () => ipcRenderer.invoke('secret:lock'),
   promptBiometricUnlock: () => ipcRenderer.invoke('vault:biometric-unlock'),
@@ -371,6 +376,8 @@ const api: KapsulaBridgeApi = {
   importArchiveJson: (rawJson) => ipcRenderer.invoke('bridges:import-archive', rawJson),
   pickAndImportArchive: () => ipcRenderer.invoke('bridges:pick-archive-file'),
   openExtensionFolder: () => ipcRenderer.invoke('bridges:open-extension-dir'),
+  getClipperPairingInfo: () => ipcRenderer.invoke('clipper:get-pairing-info'),
+  resetClipperPairing: () => ipcRenderer.invoke('clipper:reset-pairing'),
   getStorageSummary: () => ipcRenderer.invoke('vault:storage-summary'),
   openDataFolder: () => ipcRenderer.invoke('vault:open-data-dir'),
   exportBackup: () => ipcRenderer.invoke('vault:export-backup'),
@@ -387,6 +394,7 @@ const api: KapsulaBridgeApi = {
   syncSignIn: (input) => ipcRenderer.invoke('sync:sign-in', input),
   syncSignInGoogle: () => ipcRenderer.invoke('sync:sign-in-google'),
   syncSignOut: () => ipcRenderer.invoke('sync:sign-out'),
+  syncDeleteAccount: () => ipcRenderer.invoke('sync:delete-account'),
   syncSetupPassphrase: (passphrase) => ipcRenderer.invoke('sync:setup-passphrase', passphrase),
   syncUnlockPassphrase: (passphrase) => ipcRenderer.invoke('sync:unlock-passphrase', passphrase),
   syncUnlockRecovery: (payload) => ipcRenderer.invoke('sync:unlock-recovery', payload),

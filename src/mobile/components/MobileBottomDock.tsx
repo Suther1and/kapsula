@@ -129,7 +129,7 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
                 borderColor: 'var(--k-dock-border)',
                 boxShadow: 'var(--k-dock-shadow)',
               }}
-              className={`pointer-events-auto h-[54px] p-1 rounded-[27px] border backdrop-blur-xl flex items-center justify-between gap-0.5 ${
+              className={`pointer-events-auto h-[54px] p-1 rounded-[27px] border backdrop-blur-md flex items-center justify-between gap-0.5 ${
                 showCaptureOrb ? 'flex-1 min-w-0 max-w-[344px]' : 'w-full max-w-[360px]'
               }`}
             >

@@ -81,9 +81,11 @@ export function registerV8IntegrationIpc(deps: V8IntegrationIpcDeps): void {
     'media:save-note-image',
     async (
       _e,
-      input: { base64?: string; filePath?: string; mimeType?: string; fileName?: string }
+      input: { base64?: string; bytes?: Uint8Array; filePath?: string; mimeType?: string; fileName?: string }
     ): Promise<SaveNoteImageResult> => {
-      return deps.pipeline.saveNoteImageAsset(input ?? {});
+      const sanitized = { ...(input ?? {}) };
+      delete sanitized.filePath;
+      return deps.pipeline.saveNoteImageAsset(sanitized);
     }
   );
 

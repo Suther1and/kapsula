@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   FolderPlus,
@@ -45,11 +45,14 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
   const [selectedMoveIds, setSelectedMoveIds] = useState<Set<string>>(new Set());
   const [orbitOverrides, setOrbitOverrides] = useState<Record<string, string>>({});
   const [selectedNewOrbits, setSelectedNewOrbits] = useState<Set<string>>(new Set());
+  const previewReqRef = useRef(0);
 
   const runPreview = async () => {
+    const reqId = ++previewReqRef.current;
     setLoading(true);
     try {
       const res = await window.kapsula.previewSmartTriage();
+      if (reqId !== previewReqRef.current) return;
       setPreview(res);
       const moveSet = new Set<string>();
       const overrides: Record<string, string> = {};
@@ -61,16 +64,23 @@ export const SmartTriageModal: React.FC<SmartTriageModalProps> = ({
       setOrbitOverrides(overrides);
       setSelectedNewOrbits(new Set(res.newOrbits.map((o) => o.name)));
     } catch (err) {
+      if (reqId !== previewReqRef.current) return;
       toast.error(friendlyErrorMessage(err, t('triage.previewErr'), locale));
     } finally {
-      setLoading(false);
+      if (reqId === previewReqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     if (open) {
       void runPreview();
+    } else {
+      previewReqRef.current += 1;
+      setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const handleApply = async () => {

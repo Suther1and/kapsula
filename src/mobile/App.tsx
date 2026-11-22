@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowCircleUp, Cloud, MagnifyingGlass, X } from '@phosphor-icons/react';
 import { Toaster, toast } from 'sonner';
@@ -22,6 +22,7 @@ import { KapsulaEmblem } from '@renderer/components/ui/KapsulaEmblem';
 import { useFoldLayout } from './hooks/useFoldLayout';
 import { useKeyboardState } from './hooks/useKeyboardState';
 import { consumeTopBackHandler } from './lib/back-stack';
+import { MobileMediaCacheContext } from './lib/media-cache-context';
 import {
   extractTasksFromMobileItem,
   polishMobileNoteText,
@@ -49,41 +50,76 @@ import {
   tm,
   writeStoredMobileLocale,
 } from './lib/mobile-i18n';
-import { checkForMobileUpdate, type MobileUpdateCheckResult } from './lib/mobile-updater';
 import {
+  checkForMobileUpdate,
+  GITHUB_RELEASES_PAGE_URL,
+  isSelfUpdateAllowed,
+  type MobileUpdateCheckResult,
+} from './lib/mobile-updater';
+import {
+  isNativeExternalFlowInFlight,
   mobileBridge,
   type NativeAppVersion,
   type NativeFoldState,
   type NativeKeyboardState,
   type SharedIntentPayload,
 } from './native/bridge';
-import {
-  MobileVaultStore,
-  type MobileAiConfig,
-} from './storage/mobile-store';
-import { base64ToBytes } from './sync/mobile-crypto';
+import { MobileVaultStore, type MobileAiConfig } from './storage/mobile-store';
 import { MobileSyncEngine } from './sync/mobile-sync-engine';
-import { CalendarView, toDateIso } from './components/CalendarView';
+import { toDateIso } from './lib/date-utils';
+import {
+  DRAFT_NOTE_ID,
+  type MaterializeDraftInput,
+  type NoteDraftBuffer,
+  type QuickCaptureTab,
+} from './lib/note-draft-types';
 import { FeedView } from './components/FeedView';
 import {
   MOBILE_NAV_TABS,
   MobileBottomDock,
   MobileNavRail,
 } from './components/MobileBottomDock';
-import { MobileImageLightbox } from './components/MobileImageLightbox';
-import {
-  DRAFT_NOTE_ID,
-  type MaterializeDraftInput,
-  type NoteDraftBuffer,
-} from './components/MobileNoteEditor';
-import { MobileSearchOverlay } from './components/MobileSearchOverlay';
-import { MobileWelcomeSheet } from './components/MobileWelcomeSheet';
-import { NotesView } from './components/NotesView';
-import { QuickCaptureSheet, type QuickCaptureTab } from './components/QuickCaptureSheet';
-import { SettingsCloudSheet } from './components/SettingsCloudSheet';
-import { ShareTargetSheet } from './components/ShareTargetSheet';
-import { TasksView } from './components/TasksView';
-import { VaultView } from './components/VaultView';
+
+const CalendarView = lazy(() =>
+  import('./components/CalendarView').then((m) => ({ default: m.CalendarView }))
+);
+const NotesView = lazy(() =>
+  import('./components/NotesView').then((m) => ({ default: m.NotesView }))
+);
+const TasksView = lazy(() =>
+  import('./components/TasksView').then((m) => ({ default: m.TasksView }))
+);
+const VaultView = lazy(() =>
+  import('./components/VaultView').then((m) => ({ default: m.VaultView }))
+);
+const MobileImageLightbox = lazy(() =>
+  import('./components/MobileImageLightbox').then((m) => ({ default: m.MobileImageLightbox }))
+);
+const MobileSearchOverlay = lazy(() =>
+  import('./components/MobileSearchOverlay').then((m) => ({ default: m.MobileSearchOverlay }))
+);
+const MobileWelcomeSheet = lazy(() =>
+  import('./components/MobileWelcomeSheet').then((m) => ({ default: m.MobileWelcomeSheet }))
+);
+const QuickCaptureSheet = lazy(() =>
+  import('./components/QuickCaptureSheet').then((m) => ({ default: m.QuickCaptureSheet }))
+);
+const SettingsCloudSheet = lazy(() =>
+  import('./components/SettingsCloudSheet').then((m) => ({ default: m.SettingsCloudSheet }))
+);
+const ShareTargetSheet = lazy(() =>
+  import('./components/ShareTargetSheet').then((m) => ({ default: m.ShareTargetSheet }))
+);
+
+function useMountOnce(active: boolean): boolean {
+  const [mounted, setMounted] = useState(active);
+  useEffect(() => {
+    if (active && !mounted) {
+      setMounted(true);
+    }
+  }, [active, mounted]);
+  return active || mounted;
+}
 
 function readInitialTheme(): ThemeMode {
   try {
@@ -148,6 +184,7 @@ export const App: React.FC = () => {
   const flushEditorRef = useRef<(() => Promise<void>) | null>(null);
   const seenShareIdsRef = useRef<Set<string>>(new Set());
   const seenAuthCallbacksRef = useRef<Set<string>>(new Set());
+  const inFlightAuthCallbacksRef = useRef<Set<string>>(new Set());
 
   // Boot & data state
   const [ready, setReady] = useState(false);
@@ -197,6 +234,8 @@ export const App: React.FC = () => {
   const [hasMasterPin, setHasMasterPin] = useState(false);
   const [pinLockoutRemainingSec, setPinLockoutRemainingSec] = useState(0);
   const [autoLockMinutes, setAutoLockMinutes] = useState(5);
+  const autoLockMinutesRef = useRef(autoLockMinutes);
+  autoLockMinutesRef.current = autoLockMinutes;
   const [wipeSeconds, setWipeSeconds] = useState(30);
   const [aiConfig, setAiConfig] = useState<MobileAiConfig>({
     provider: 'local',
@@ -209,8 +248,8 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     vaultLockedRef.current = vaultLocked;
-    syncEngine.setVaultLockedProvider(() => vaultLockedRef.current);
-  }, [vaultLocked, syncEngine]);
+    syncEngine.setVaultLockedProvider(() => vaultLockedRef.current || store.isVaultLocked());
+  }, [vaultLocked, store, syncEngine]);
 
   // Modals / Sheets / Lightbox / Share Queue / First-run Welcome
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -225,6 +264,12 @@ export const App: React.FC = () => {
   const [lightboxImage, setLightboxImage] = useState<{ src: string; caption?: string } | null>(
     null
   );
+  const mountSearch = useMountOnce(searchOpen);
+  const mountWelcome = useMountOnce(welcomeOpen);
+  const mountCapture = useMountOnce(captureOpen);
+  const mountShare = useMountOnce(shareQueue.length > 0);
+  const mountSettings = useMountOnce(settingsOpen);
+  const mountLightbox = useMountOnce(Boolean(lightboxImage));
 
   // App Version & In-App Updates state
   const [appVersion, setAppVersion] = useState<NativeAppVersion>({
@@ -245,23 +290,30 @@ export const App: React.FC = () => {
   const handleAuthCallbackUrl = useCallback(
     async (rawUrl: string) => {
       const clean = rawUrl.trim();
-      if (!clean || seenAuthCallbacksRef.current.has(clean)) return;
-      seenAuthCallbacksRef.current.add(clean);
-      const res = await syncEngine.completeOAuthCallback(clean);
-      if (!res.ok) {
-        mobileBridge.haptic('error');
-        toast.error(res.error || t('toast.googleError'));
+      if (!clean || seenAuthCallbacksRef.current.has(clean) || inFlightAuthCallbacksRef.current.has(clean)) {
         return;
       }
-      mobileBridge.haptic('success');
-      if (res.needsPassphraseSetup) {
-        toast.success(t('toast.googleNeedsSetup'));
-        openSettingsAt('cloud');
-      } else if (res.needsPassphraseUnlock) {
-        toast.success(t('toast.googleNeedsUnlock'));
-        openSettingsAt('cloud');
-      } else {
-        toast.success(t('toast.googleSuccess'));
+      inFlightAuthCallbacksRef.current.add(clean);
+      try {
+        const res = await syncEngine.completeOAuthCallback(clean);
+        if (!res.ok) {
+          mobileBridge.haptic('error');
+          toast.error(res.error || t('toast.googleError'));
+          return;
+        }
+        seenAuthCallbacksRef.current.add(clean);
+        mobileBridge.haptic('success');
+        if (res.needsPassphraseSetup) {
+          toast.success(t('toast.googleNeedsSetup'));
+          openSettingsAt('cloud');
+        } else if (res.needsPassphraseUnlock) {
+          toast.success(t('toast.googleNeedsUnlock'));
+          openSettingsAt('cloud');
+        } else {
+          toast.success(t('toast.googleSuccess'));
+        }
+      } finally {
+        inFlightAuthCallbacksRef.current.delete(clean);
       }
     },
     [syncEngine, openSettingsAt, t]
@@ -269,6 +321,7 @@ export const App: React.FC = () => {
 
   const handleCheckUpdates = useCallback(
     async (manual = true) => {
+      if (!isSelfUpdateAllowed(appVersion)) return;
       setUpdateChecking(true);
       try {
         const res = await checkForMobileUpdate({
@@ -292,11 +345,15 @@ export const App: React.FC = () => {
         setUpdateChecking(false);
       }
     },
-    [appVersion.versionName, appVersion.versionCode, t]
+    [appVersion, t]
   );
 
   const handleInstallUpdate = useCallback(async () => {
-    if (!updateInfo?.apkUrl) return;
+    if (!isSelfUpdateAllowed(appVersion) || !updateInfo?.apkUrl) return;
+    if (!updateInfo.sha256) {
+      await mobileBridge.openExternalUrl(updateInfo.releaseUrl || GITHUB_RELEASES_PAGE_URL);
+      return;
+    }
     setUpdateInstalling(true);
     setUpdateDownloadPercent(1);
     try {
@@ -312,7 +369,7 @@ export const App: React.FC = () => {
       setUpdateInstalling(false);
       setUpdateDownloadPercent(null);
     }
-  }, [updateInfo, t]);
+  }, [appVersion, updateInfo, t]);
 
   const enqueueSharesUnique = useCallback((incoming: SharedIntentPayload[]) => {
     const fresh: SharedIntentPayload[] = [];
@@ -556,6 +613,7 @@ export const App: React.FC = () => {
     const arm = () => {
       if (timerId) clearTimeout(timerId);
       timerId = setTimeout(() => {
+        store.lockVault();
         setVaultLocked(true);
       }, timeoutMs);
     };
@@ -582,11 +640,24 @@ export const App: React.FC = () => {
   // Boot Store, Sync Engine, Share Target & App Lifecycle
   useEffect(() => {
     let active = true;
+    let prevSyncUserId: string | null = syncEngine.getStatus().userId;
     const unsubStore = store.subscribe(() => {
-      if (active) refreshFromStore();
+      if (!active) return;
+      refreshFromStore();
+      if (!store.hasMasterPin() && !store.isVaultLocked() && store.getSyncState('pref_biometric_vault') === '0') {
+        setVaultLocked(false);
+      }
     });
     const unsubSync = syncEngine.onStatusChanged((st) => {
-      if (active) setSyncStatus(st);
+      if (!active) return;
+      setSyncStatus(st);
+      if (prevSyncUserId && !st.userId && st.state === 'signed_out') {
+        setHasMasterPin(false);
+        if (!store.hasMasterPin()) {
+          setVaultLocked(false);
+        }
+      }
+      prevSyncUserId = st.userId;
     });
 
     const boot = async () => {
@@ -599,7 +670,9 @@ export const App: React.FC = () => {
       setBiometricEnabled(bioOn);
       setHasMasterPin(pinSet);
       setPinLockoutRemainingSec(store.getPinLockoutRemainingSec());
-      setVaultLocked(bioOn || pinSet);
+      const shouldLock = bioOn || pinSet;
+      if (shouldLock) store.lockVault();
+      setVaultLocked(shouldLock);
 
       const savedWipe = Number(store.getSyncState('pref_wipe_seconds') || '30');
       if (savedWipe === 15 || savedWipe === 30 || savedWipe === 60) {
@@ -650,7 +723,7 @@ export const App: React.FC = () => {
         void handleAuthCallbackUrl(pendingAuthUrl);
       }
 
-      if (active && mobileBridge.isNativeAndroid()) {
+      if (active && mobileBridge.isNativeAndroid() && isSelfUpdateAllowed(installedVer)) {
         silentUpdateTimer = setTimeout(() => {
           if (!active) return;
           void checkForMobileUpdate({
@@ -684,7 +757,12 @@ export const App: React.FC = () => {
       if (!active) return;
       if (state === 'paused') {
         void flushEditorRef.current?.();
-        if (store.getSyncState('pref_biometric_vault') !== '0' || store.hasMasterPin()) {
+        if (
+          !isNativeExternalFlowInFlight() &&
+          autoLockMinutesRef.current > 0 &&
+          (store.getSyncState('pref_biometric_vault') !== '0' || store.hasMasterPin())
+        ) {
+          store.lockVault();
           setVaultLocked(true);
         }
       } else if (state === 'resumed') {
@@ -779,8 +857,15 @@ export const App: React.FC = () => {
         setSearchOpen(false);
         return;
       }
-      if (!s.isExpanded && s.activeTab === 'notes' && s.activeNoteId) {
-        void flushEditorRef.current?.().finally(() => setActiveNoteId(null));
+      if (s.activeTab === 'notes') {
+        const target = !s.isExpanded && s.activeNoteId ? 'closeNote' : 'feed';
+        void Promise.resolve()
+          .then(() => flushEditorRef.current?.())
+          .catch(() => undefined)
+          .finally(() => {
+            if (target === 'closeNote') setActiveNoteId(null);
+            else setActiveTab('feed');
+          });
         return;
       }
       if (s.activeTab === 'feed' && s.selectedFeedItemId) {
@@ -900,6 +985,7 @@ export const App: React.FC = () => {
     error?: string;
   }> => {
     if (!biometricEnabled && !hasMasterPin) {
+      store.localCrypto.setPinProtectedMode(false);
       setVaultLocked(false);
       return { ok: true };
     }
@@ -911,6 +997,10 @@ export const App: React.FC = () => {
       t('biometric.vaultSubtitle')
     );
     if (res.ok) {
+      const vdkRes = await store.unlockVaultWithBiometric();
+      if (!vdkRes.ok) {
+        return { ok: false, needsPinFallback: true };
+      }
       setVaultLocked(false);
       return { ok: true };
     }
@@ -921,13 +1011,13 @@ export const App: React.FC = () => {
       toast.error(res.error);
     }
     return { ok: false, error: res.error };
-  }, [biometricEnabled, hasMasterPin]);
+  }, [biometricEnabled, hasMasterPin, store, t]);
 
   const handleUnlockWithPin = useCallback(
     async (
       pin: string
     ): Promise<{ ok: boolean; lockoutRemainingSec: number; error?: string }> => {
-      const res = await store.verifyMasterPinWithBackoff(pin);
+      const res = await store.unlockVaultWithPin(pin);
       setPinLockoutRemainingSec(res.lockoutRemainingSec);
       if (res.ok) {
         setVaultLocked(false);
@@ -999,7 +1089,7 @@ export const App: React.FC = () => {
           ? await mobileBridge.capturePhoto()
           : (await mobileBridge.pickFile('image/*', false))[0] ?? null;
       if (!file) return null;
-      const bytes = base64ToBytes(file.base64);
+      const bytes = await mobileBridge.readNativeFileBytes(file);
       const localName = makeSafeUploadName('shot', file.name, file.mime);
       await store.putMedia(localName, file.mime, bytes);
       return localName;
@@ -1167,7 +1257,7 @@ export const App: React.FC = () => {
         let imagePath: string | null = null;
         const galleryPaths: string[] = [];
         for (const img of imageFiles) {
-          const bytes = base64ToBytes(img.base64);
+          const bytes = await mobileBridge.readNativeFileBytes(img);
           const localName = makeSafeUploadName('shot', img.name, img.mime);
           await store.saveMediaFile(localName, img.mime, bytes);
           if (!imagePath) imagePath = localName;
@@ -1191,7 +1281,7 @@ export const App: React.FC = () => {
 
       for (let i = 0; i < nonImageFiles.length; i++) {
         const f = nonImageFiles[i]!;
-        const bytes = base64ToBytes(f.base64);
+        const bytes = await mobileBridge.readNativeFileBytes(f);
         const isAudio = f.mime.startsWith('audio/');
         const prefix = isAudio ? 'voice' : 'doc';
         const localName = makeSafeUploadName(prefix, f.name, f.mime);
@@ -1224,6 +1314,14 @@ export const App: React.FC = () => {
 
   const ensureMediaUrl = useCallback(
     (localName?: string | null) => store.ensureMediaObjectUrl(localName),
+    [store]
+  );
+
+  const mediaCacheCtx = useMemo(
+    () => ({
+      retainMediaUrl: (localName?: string | null) => store.retainMediaUrl(localName),
+      releaseMediaUrl: (localName?: string | null) => store.releaseMediaUrl(localName),
+    }),
     [store]
   );
 
@@ -1319,6 +1417,7 @@ export const App: React.FC = () => {
 
   return (
     <MobileI18nProvider locale={locale} onLocaleChange={handleChangeLocale}>
+    <MobileMediaCacheContext.Provider value={mediaCacheCtx}>
     <div
       data-testid="kapsula-mobile-root"
       data-fold-mode={fold.isExpanded ? 'expanded' : 'compact'}
@@ -1443,6 +1542,7 @@ export const App: React.FC = () => {
         ) : null}
 
         {!isFullscreenCompactNote &&
+        isSelfUpdateAllowed(appVersion) &&
         updateInfo?.status === 'update_available' &&
         updateInfo.latestVersion &&
         updateInfo.apkUrl &&
@@ -1525,122 +1625,133 @@ export const App: React.FC = () => {
           ) : null}
 
           {activeTab === 'notes' ? (
-            <NotesView
-              items={items}
-              orbits={orbits}
-              boards={boards}
-              isExpanded={fold.isExpanded}
-              hingeListWidthPx={hingeListWidthPx}
-              hingeRightOffsetPx={hingeRightOffsetPx}
-              searchQuery={searchQuery}
-              selectedOrbitId={selectedOrbitId}
-              activeNoteId={activeNoteId}
-              noteDrafts={noteDrafts}
-              ensureMediaUrl={ensureMediaUrl}
-              flushEditorRef={flushEditorRef}
-              onSelectOrbit={setSelectedOrbitId}
-              onSelectNote={setActiveNoteId}
-              onOpenImage={(src, caption) => setLightboxImage({ src, caption })}
-              onCreateOrbit={handleCreateOrbitQuick}
-              onCreateBoard={handleCreateBoardQuick}
-              onMaterializeDraft={handleMaterializeDraft}
-              onDraftChange={handleDraftChange}
-              onDraftSaved={handleDraftSaved}
-              onSaveNote={async (id, patch) => {
-                await store.updateItem(id, patch);
-              }}
-              onInsertInlinePhoto={handleInsertInlinePhoto}
-              onAttachPhoto={handleAttachPhotoToNote}
-              listRevisions={(id) => store.listItemRevisions(id)}
-              onRevertRevision={(itemId, revId) => store.revertItemToRevision(itemId, revId)}
-              onTranscribeVoice={handleTranscribeVoice}
-              onExtractTasks={handleExtractTasks}
-              onPolishNote={handlePolishNote}
-              onOpenExternalItem={(id) => {
-                setSelectedFeedItemId(id);
-                setActiveTab('feed');
-              }}
-              onDeleteNote={(id) => handleDeleteItemWithUndo(id, t('common.movedToTrash'))}
-            />
+            <Suspense fallback={null}>
+              <NotesView
+                items={items}
+                orbits={orbits}
+                boards={boards}
+                isExpanded={fold.isExpanded}
+                hingeListWidthPx={hingeListWidthPx}
+                hingeRightOffsetPx={hingeRightOffsetPx}
+                searchQuery={searchQuery}
+                selectedOrbitId={selectedOrbitId}
+                activeNoteId={activeNoteId}
+                noteDrafts={noteDrafts}
+                ensureMediaUrl={ensureMediaUrl}
+                flushEditorRef={flushEditorRef}
+                onSelectOrbit={setSelectedOrbitId}
+                onSelectNote={setActiveNoteId}
+                onOpenImage={(src, caption) => setLightboxImage({ src, caption })}
+                onCreateOrbit={handleCreateOrbitQuick}
+                onCreateBoard={handleCreateBoardQuick}
+                onMaterializeDraft={handleMaterializeDraft}
+                onDraftChange={handleDraftChange}
+                onDraftSaved={handleDraftSaved}
+                onSaveNote={async (id, patch) => {
+                  await store.updateItem(id, patch);
+                }}
+                onInsertInlinePhoto={handleInsertInlinePhoto}
+                onAttachPhoto={handleAttachPhotoToNote}
+                listRevisions={(id) => store.listItemRevisions(id)}
+                onRevertRevision={(itemId, revId) => store.revertItemToRevision(itemId, revId)}
+                onTranscribeVoice={handleTranscribeVoice}
+                onExtractTasks={handleExtractTasks}
+                onPolishNote={handlePolishNote}
+                onOpenExternalItem={(id) => {
+                  setSelectedFeedItemId(id);
+                  setActiveTab('feed');
+                }}
+                onDeleteNote={(id) => handleDeleteItemWithUndo(id, t('common.movedToTrash'))}
+              />
+            </Suspense>
           ) : null}
 
           {activeTab === 'tasks' ? (
-            <TasksView
-              tasks={tasks}
-              items={items}
-              orbits={orbits}
-              columns={taskColumns}
-              isExpanded={fold.isExpanded}
-              hingeRightOffsetPx={hingeRightOffsetPx}
-              searchQuery={searchQuery}
-              selectedTaskId={selectedTaskId}
-              onSelectTask={setSelectedTaskId}
-              onToggleTask={handleToggleTaskOptimistic}
-              onAddQuickTask={async (text, orbit, dueAt, columnId, priority) => {
-                await store.addQuickTask(text, orbit, dueAt, columnId, priority);
-              }}
-              onEditTaskText={async (task, nextText) => {
-                await store.updateVaultTaskText(task, nextText);
-              }}
-              onDeleteTask={handleDeleteTaskWithUndo}
-              onMoveTaskOnBoard={async (input) => {
-                await store.moveTaskOnBoard(input);
-              }}
-              onUpdateTaskMeta={async (input) => {
-                await store.updateTaskMeta(input);
-              }}
-              onSaveColumns={async (cols) => {
-                await store.saveTaskBoardColumns(cols);
-              }}
-              onOpenNote={(itemId) => {
-                setActiveNoteId(itemId);
-                setActiveTab('notes');
-              }}
-              onCreateOrbit={handleCreateOrbitQuick}
-            />
+            <Suspense fallback={null}>
+              <TasksView
+                tasks={tasks}
+                items={items}
+                orbits={orbits}
+                columns={taskColumns}
+                isExpanded={fold.isExpanded}
+                hingeRightOffsetPx={hingeRightOffsetPx}
+                searchQuery={searchQuery}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+                onToggleTask={handleToggleTaskOptimistic}
+                onAddQuickTask={async (text, orbit, dueAt, columnId, priority) => {
+                  await store.addQuickTask(text, orbit, dueAt, columnId, priority);
+                }}
+                onEditTaskText={async (task, nextText) => {
+                  await store.updateVaultTaskText(task, nextText);
+                }}
+                onDeleteTask={handleDeleteTaskWithUndo}
+                onMoveTaskOnBoard={async (input) => {
+                  await store.moveTaskOnBoard(input);
+                }}
+                onUpdateTaskMeta={async (input) => {
+                  await store.updateTaskMeta(input);
+                }}
+                onSaveColumns={async (cols) => {
+                  await store.saveTaskBoardColumns(cols);
+                }}
+                onOpenNote={(itemId) => {
+                  setActiveNoteId(itemId);
+                  setActiveTab('notes');
+                }}
+                onCreateOrbit={handleCreateOrbitQuick}
+              />
+            </Suspense>
           ) : null}
 
           {activeTab === 'calendar' ? (
-            <CalendarView
-              events={events}
-              tasks={tasks}
-              isExpanded={fold.isExpanded}
-              isWide={fold.isWide}
-              hingeRightOffsetPx={hingeRightOffsetPx}
-              searchQuery={searchQuery}
-              selectedDateIso={selectedDateIso}
-              onSelectDateIso={setSelectedDateIso}
-              onSaveEvent={(input) => store.upsertCalendarEvent(input)}
-              onDeleteEvent={handleDeleteEventWithUndo}
-              onToggleTask={handleToggleTaskOptimistic}
-            />
+            <Suspense fallback={null}>
+              <CalendarView
+                events={events}
+                tasks={tasks}
+                isExpanded={fold.isExpanded}
+                isWide={fold.isWide}
+                hingeRightOffsetPx={hingeRightOffsetPx}
+                searchQuery={searchQuery}
+                selectedDateIso={selectedDateIso}
+                onSelectDateIso={setSelectedDateIso}
+                onSaveEvent={(input) => store.upsertCalendarEvent(input)}
+                onDeleteEvent={handleDeleteEventWithUndo}
+                onToggleTask={handleToggleTaskOptimistic}
+              />
+            </Suspense>
           ) : null}
 
           {activeTab === 'vault' ? (
-            <VaultView
-              items={items}
-              orbits={orbits}
-              isExpanded={fold.isExpanded}
-              hingeRightOffsetPx={hingeRightOffsetPx}
-              searchQuery={searchQuery}
-              vaultLocked={vaultLocked}
-              biometricEnabled={biometricEnabled}
-              hasMasterPin={hasMasterPin}
-              pinLockoutRemainingSec={pinLockoutRemainingSec}
-              wipeSeconds={wipeSeconds}
-              selectedSecretId={selectedSecretId}
-              openCreateSignal={vaultCreateSignal}
-              onSelectSecret={setSelectedSecretId}
-              onUnlockVault={handleUnlockVault}
-              onUnlockWithPin={handleUnlockWithPin}
-              onOpenSecuritySettings={() => openSettingsAt('appearance')}
-              onLockVault={() => setVaultLocked(true)}
-              onRevealSecret={(id) => store.revealSecret(id)}
-              onCopySecretField={handleCopySecretField}
-              onUpsertSecret={(input) => store.upsertSecret(input)}
-              onDeleteSecret={(id) => handleDeleteItemWithUndo(id, t('common.secretMovedToTrash'))}
-              onCreateOrbit={handleCreateOrbitQuick}
-            />
+            <Suspense fallback={null}>
+              <VaultView
+                items={items}
+                orbits={orbits}
+                isExpanded={fold.isExpanded}
+                hingeRightOffsetPx={hingeRightOffsetPx}
+                searchQuery={searchQuery}
+                vaultLocked={vaultLocked}
+                biometricEnabled={biometricEnabled}
+                hasMasterPin={hasMasterPin}
+                pinLockoutRemainingSec={pinLockoutRemainingSec}
+                wipeSeconds={wipeSeconds}
+                selectedSecretId={selectedSecretId}
+                openCreateSignal={vaultCreateSignal}
+                onSelectSecret={setSelectedSecretId}
+                onUnlockVault={handleUnlockVault}
+                onUnlockWithPin={handleUnlockWithPin}
+                onOpenSecuritySettings={() => openSettingsAt('appearance')}
+                onLockVault={() => {
+                  store.lockVault();
+                  setVaultLocked(true);
+                }}
+                onRevealSecret={(id) => store.revealSecret(id)}
+                onCopySecretField={handleCopySecretField}
+                onUpsertSecret={(input) => store.upsertSecret(input)}
+                onDeleteSecret={(id) => handleDeleteItemWithUndo(id, t('common.secretMovedToTrash'))}
+                onCreateOrbit={handleCreateOrbitQuick}
+              />
+            </Suspense>
           ) : null}
         </main>
       </div>
@@ -1667,163 +1778,181 @@ export const App: React.FC = () => {
       />
 
       {/* ==================== FULL-HEIGHT GLOBAL SEARCH OVERLAY ==================== */}
-      <MobileSearchOverlay
-        open={searchOpen}
-        query={searchQuery}
-        items={items}
-        tasks={tasks}
-        events={events}
-        orbits={orbits}
-        vaultLocked={vaultLocked}
-        onChangeQuery={setSearchQuery}
-        onClose={() => {
-          setSearchOpen(false);
-          setSearchQuery('');
-        }}
-        onOpenItem={(item) => {
-          setSearchOpen(false);
-          setSearchQuery('');
-          if (item.dna === 'note') {
-            setActiveNoteId(item.id);
-            setActiveTab('notes');
-          } else {
-            setSelectedFeedItemId(item.id);
-            setActiveTab('feed');
-          }
-        }}
-        onOpenTask={(task) => {
-          setSearchOpen(false);
-          setSearchQuery('');
-          setSelectedTaskId(task.id);
-          setActiveTab('tasks');
-        }}
-        onToggleTask={(task) => void handleToggleTaskOptimistic(task).catch(() => {})}
-        onOpenEvent={(ev) => {
-          setSearchOpen(false);
-          setSearchQuery('');
-          setSelectedDateIso(toDateIso(new Date(ev.startAt)));
-          setActiveTab('calendar');
-        }}
-        onOpenSecret={(sec) => {
-          setSearchOpen(false);
-          setSearchQuery('');
-          setSelectedSecretId(sec.id);
-          setActiveTab('vault');
-        }}
-        onUnlockVault={async () => {
-          const res = await handleUnlockVault();
-          if (!res.ok && res.needsPinFallback) {
-            setSearchOpen(false);
-            setActiveTab('vault');
-          }
-          return res.ok;
-        }}
-      />
+      {mountSearch ? (
+        <Suspense fallback={null}>
+          <MobileSearchOverlay
+            open={searchOpen}
+            query={searchQuery}
+            items={items}
+            tasks={tasks}
+            events={events}
+            orbits={orbits}
+            vaultLocked={vaultLocked}
+            onChangeQuery={setSearchQuery}
+            onClose={() => {
+              setSearchOpen(false);
+              setSearchQuery('');
+            }}
+            onOpenItem={(item) => {
+              setSearchOpen(false);
+              setSearchQuery('');
+              if (item.dna === 'note') {
+                setActiveNoteId(item.id);
+                setActiveTab('notes');
+              } else {
+                setSelectedFeedItemId(item.id);
+                setActiveTab('feed');
+              }
+            }}
+            onOpenTask={(task) => {
+              setSearchOpen(false);
+              setSearchQuery('');
+              setSelectedTaskId(task.id);
+              setActiveTab('tasks');
+            }}
+            onToggleTask={(task) => void handleToggleTaskOptimistic(task).catch(() => {})}
+            onOpenEvent={(ev) => {
+              setSearchOpen(false);
+              setSearchQuery('');
+              setSelectedDateIso(toDateIso(new Date(ev.startAt)));
+              setActiveTab('calendar');
+            }}
+            onOpenSecret={(sec) => {
+              setSearchOpen(false);
+              setSearchQuery('');
+              setSelectedSecretId(sec.id);
+              setActiveTab('vault');
+            }}
+            onUnlockVault={async () => {
+              const res = await handleUnlockVault();
+              if (!res.ok && res.needsPinFallback) {
+                setSearchOpen(false);
+                setActiveTab('vault');
+              }
+              return res.ok;
+            }}
+          />
+        </Suspense>
+      ) : null}
 
       {/* ==================== SHEETS, LIGHTBOX & SYSTEM OVERLAYS ==================== */}
-      <MobileWelcomeSheet
-        open={welcomeOpen}
-        isExpanded={fold.isExpanded}
-        hingeRightOffsetPx={hingeRightOffsetPx}
-        theme={theme}
-        onChangeTheme={setTheme}
-        onComplete={async ({ selectedOrbits, createWelcomeNote }) => {
-          for (const o of selectedOrbits) {
-            await store.createOrbit({
-              name: o.name,
-              color: o.color,
-              icon: o.icon,
-              description: o.description,
-            });
-          }
-          if (createWelcomeNote) {
-            const { welcomeNote } = getMobileOnboardingPresets(locale);
-            await store.createItem({
-              dna: 'note',
-              title: welcomeNote.title,
-              summary: welcomeNote.summary,
-              body: welcomeNote.body,
-              tags: welcomeNote.tags,
-            });
-          }
-          await store.setSyncState('pref_onboarded', '1');
-          setWelcomeOpen(false);
-        }}
-        onOpenCloud={() => {
-          void store.setSyncState('pref_onboarded', '1');
-          setWelcomeOpen(false);
-          openSettingsAt('cloud');
-        }}
-        onSkip={() => {
-          void store.setSyncState('pref_onboarded', '1');
-          setWelcomeOpen(false);
-        }}
-      />
+      {mountWelcome ? (
+        <Suspense fallback={null}>
+          <MobileWelcomeSheet
+            open={welcomeOpen}
+            isExpanded={fold.isExpanded}
+            hingeRightOffsetPx={hingeRightOffsetPx}
+            theme={theme}
+            onChangeTheme={setTheme}
+            onComplete={async ({ selectedOrbits, createWelcomeNote }) => {
+              for (const o of selectedOrbits) {
+                await store.createOrbit({
+                  name: o.name,
+                  color: o.color,
+                  icon: o.icon,
+                  description: o.description,
+                });
+              }
+              if (createWelcomeNote) {
+                const { welcomeNote } = getMobileOnboardingPresets(locale);
+                await store.createItem({
+                  dna: 'note',
+                  title: welcomeNote.title,
+                  summary: welcomeNote.summary,
+                  body: welcomeNote.body,
+                  tags: welcomeNote.tags,
+                });
+              }
+              await store.setSyncState('pref_onboarded', '1');
+              setWelcomeOpen(false);
+            }}
+            onOpenCloud={() => {
+              void store.setSyncState('pref_onboarded', '1');
+              setWelcomeOpen(false);
+              openSettingsAt('cloud');
+            }}
+            onSkip={() => {
+              void store.setSyncState('pref_onboarded', '1');
+              setWelcomeOpen(false);
+            }}
+          />
+        </Suspense>
+      ) : null}
 
-      <QuickCaptureSheet
-        open={captureOpen}
-        initialTab={captureTab}
-        isExpanded={fold.isExpanded}
-        hingeRightOffsetPx={hingeRightOffsetPx}
-        orbits={orbits}
-        boards={boards}
-        onClose={() => setCaptureOpen(false)}
-        onCreateOrbit={handleCreateOrbitQuick}
-        onCreateBoard={handleCreateBoardQuick}
-        onSaveText={async (data) => {
-          await store.createItem({
-            dna: data.url ? 'link' : 'note',
-            title: data.title,
-            body: data.body,
-            url: data.url,
-            orbit: data.orbit,
-            focusBoardId: data.focusBoardId,
-          });
-        }}
-        onSaveMedia={async (data) => {
-          await store.saveMediaFile(data.fileName, data.mime, data.bytes);
-          await store.createItem({
-            dna: data.kind,
-            title: data.title,
-            body: data.body,
-            orbit: data.orbit,
-            focusBoardId: data.focusBoardId,
-            imagePath: data.kind === 'shot' ? data.fileName : null,
-            thumbPath: data.kind === 'shot' ? data.fileName : null,
-            mediaPath: data.kind !== 'shot' ? data.fileName : null,
-            mediaType: data.mime,
-            mediaDurationSec: data.durationSec ?? null,
-            mediaMeta:
-              data.kind === 'voice'
-                ? { waveformPeaks: data.peaks }
-                : data.kind === 'doc'
-                  ? { fileName: data.title, fileSize: data.bytes.byteLength }
-                  : null,
-          });
-        }}
-        onOpenVaultAdd={() => {
-          setActiveTab('vault');
-          setVaultCreateSignal((n) => n + 1);
-          if (vaultLocked) {
-            void handleUnlockVault();
-          }
-        }}
-      />
+      {mountCapture ? (
+        <Suspense fallback={null}>
+          <QuickCaptureSheet
+            open={captureOpen}
+            initialTab={captureTab}
+            isExpanded={fold.isExpanded}
+            hingeRightOffsetPx={hingeRightOffsetPx}
+            orbits={orbits}
+            boards={boards}
+            onClose={() => setCaptureOpen(false)}
+            onCreateOrbit={handleCreateOrbitQuick}
+            onCreateBoard={handleCreateBoardQuick}
+            onSaveText={async (data) => {
+              await store.createItem({
+                dna: data.url ? 'link' : 'note',
+                title: data.title,
+                body: data.body,
+                url: data.url,
+                orbit: data.orbit,
+                focusBoardId: data.focusBoardId,
+              });
+            }}
+            onSaveMedia={async (data) => {
+              await store.saveMediaFile(data.fileName, data.mime, data.bytes);
+              await store.createItem({
+                dna: data.kind,
+                title: data.title,
+                body: data.body,
+                orbit: data.orbit,
+                focusBoardId: data.focusBoardId,
+                imagePath: data.kind === 'shot' ? data.fileName : null,
+                thumbPath: data.kind === 'shot' ? data.fileName : null,
+                mediaPath: data.kind !== 'shot' ? data.fileName : null,
+                mediaType: data.mime,
+                mediaDurationSec: data.durationSec ?? null,
+                mediaMeta:
+                  data.kind === 'voice'
+                    ? { waveformPeaks: data.peaks }
+                    : data.kind === 'doc'
+                      ? { fileName: data.title, fileSize: data.bytes.byteLength }
+                      : null,
+              });
+            }}
+            onOpenVaultAdd={() => {
+              setActiveTab('vault');
+              setVaultCreateSignal((n) => n + 1);
+              if (vaultLocked) {
+                void handleUnlockVault();
+              }
+            }}
+          />
+        </Suspense>
+      ) : null}
 
-      <ShareTargetSheet
-        share={currentShare}
-        isExpanded={fold.isExpanded}
-        hingeRightOffsetPx={hingeRightOffsetPx}
-        isCloudConnected={isCloudConnected}
-        orbits={orbits}
-        boards={boards}
-        onClose={() => setShareQueue((prev) => prev.slice(1))}
-        onCreateOrbit={handleCreateOrbitQuick}
-        onCreateBoard={handleCreateBoardQuick}
-        onConfirmSave={handleConfirmShare}
-      />
+      {mountShare ? (
+        <Suspense fallback={null}>
+          <ShareTargetSheet
+            share={currentShare}
+            isExpanded={fold.isExpanded}
+            hingeRightOffsetPx={hingeRightOffsetPx}
+            isCloudConnected={isCloudConnected}
+            orbits={orbits}
+            boards={boards}
+            onClose={() => setShareQueue((prev) => prev.slice(1))}
+            onCreateOrbit={handleCreateOrbitQuick}
+            onCreateBoard={handleCreateBoardQuick}
+            onConfirmSave={handleConfirmShare}
+          />
+        </Suspense>
+      ) : null}
 
-      <SettingsCloudSheet
+      {mountSettings ? (
+        <Suspense fallback={null}>
+          <SettingsCloudSheet
         open={settingsOpen}
         initialSection={settingsInitialSection}
         isExpanded={fold.isExpanded}
@@ -1870,19 +1999,34 @@ export const App: React.FC = () => {
               t('biometric.disableTitle'),
               t('biometric.vaultSubtitle')
             );
-            if (!verified.ok && verified.reason !== 'no_device_credential') {
+            if (!verified.ok) {
               mobileBridge.haptic('error');
               toast.error(verified.error || t('biometric.disableCancel'));
               return;
             }
+          } else if (enabled && hasMasterPin) {
+            const verified = await mobileBridge.authenticateBiometric(
+              t('biometric.vaultTitle'),
+              t('biometric.vaultSubtitle')
+            );
+            if (!verified.ok) {
+              mobileBridge.haptic('error');
+              toast.error(verified.error || t('bridge.biometricFailed'));
+              return;
+            }
+          }
+          await store.setSyncState('pref_biometric_vault', enabled ? '1' : '0');
+          if (enabled && hasMasterPin) {
+            await store.enableBiometricVdkWrap();
+          } else if (!enabled) {
+            await store.disableBiometricVdkWrap();
           }
           setBiometricEnabled(enabled);
-          await store.setSyncState('pref_biometric_vault', enabled ? '1' : '0');
           if (!enabled && !hasMasterPin) setVaultLocked(false);
         }}
         onSetMasterPin={async (pin, currentPin) => {
           if (store.hasMasterPin()) {
-            const verify = await store.verifyMasterPinWithBackoff(currentPin ?? '');
+            const verify = await store.unlockVaultWithPin(currentPin ?? '');
             setPinLockoutRemainingSec(verify.lockoutRemainingSec);
             if (!verify.ok) {
               mobileBridge.haptic('error');
@@ -1897,7 +2041,7 @@ export const App: React.FC = () => {
               t('biometric.setupPinTitle'),
               t('biometric.vaultSubtitle')
             );
-            if (!verified.ok && verified.reason !== 'no_device_credential') {
+            if (!verified.ok) {
               mobileBridge.haptic('error');
               throw new Error(verified.error || t('biometric.setupPinCancel'));
             }
@@ -1907,7 +2051,7 @@ export const App: React.FC = () => {
         }}
         onRemoveMasterPin={async (currentPin) => {
           if (store.hasMasterPin()) {
-            const verify = await store.verifyMasterPinWithBackoff(currentPin ?? '');
+            const verify = await store.unlockVaultWithPin(currentPin ?? '');
             setPinLockoutRemainingSec(verify.lockoutRemainingSec);
             if (!verify.ok) {
               mobileBridge.haptic('error');
@@ -1975,14 +2119,21 @@ export const App: React.FC = () => {
           await store.updateItem(id, { isArchived: false });
         }}
         onSensitiveOverlayChange={setSensitiveOverlayVisible}
-      />
+          />
+        </Suspense>
+      ) : null}
 
-      <MobileImageLightbox
-        src={lightboxImage?.src ?? null}
-        caption={lightboxImage?.caption}
-        onClose={() => setLightboxImage(null)}
-      />
+      {mountLightbox ? (
+        <Suspense fallback={null}>
+          <MobileImageLightbox
+            src={lightboxImage?.src ?? null}
+            caption={lightboxImage?.caption}
+            onClose={() => setLightboxImage(null)}
+          />
+        </Suspense>
+      ) : null}
     </div>
+    </MobileMediaCacheContext.Provider>
     </MobileI18nProvider>
   );
 };

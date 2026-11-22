@@ -254,7 +254,7 @@ export function parseRussianEvent(
       minute = Number(colonTime[2]);
       const mod = colonTime[3]?.toLowerCase();
       if ((mod === 'дня' || mod === 'вечера' || mod === 'pm') && hour >= 1 && hour <= 11) hour += 12;
-      if (mod === 'am' && hour === 12) hour = 0;
+      if ((mod === 'am' || mod === 'ночи') && hour === 12) hour = 0;
       hasExplicitTime = true;
       remaining = removeSpan(remaining, colonTime);
     } else if (dotPrefixedTime) {
@@ -283,7 +283,7 @@ export function parseRussianEvent(
             minute = 0;
             const mod = rawModStr?.toLowerCase() ?? '';
             if ((mod === 'дня' || mod === 'вечера' || mod === 'pm') && hour >= 1 && hour <= 11) hour += 12;
-            if (mod === 'am' && hour === 12) hour = 0;
+            if ((mod === 'am' || mod === 'ночи') && hour === 12) hour = 0;
             hasExplicitTime = true;
             remaining = removeSpan(remaining, wordPrefixedTime);
           }
@@ -312,13 +312,13 @@ export function parseRussianEvent(
     }
   }
 
-  // 4. Relative offsets (`через 2 часа`, `in 2 hours`, `in 30 min`, `in a week`)
+  // 4. Relative offsets (`через 2 часа`, `через 2.5 часа`, `in 2 hours`, `in 30 min`, `in a week`)
   const relMatch = remaining.match(
-    /(?:^|[^\p{L}])(?:через|in)\s+(\d+|пол(?:часа)?|одн[уо]?|пару|an?|half\s+an?)?\s*(минут[уы]?|мин|час(?:а|ов)?|ч(?=$|[^\p{L}])|д(?:ень|ня|ней)|недел[юи]|minutes?|mins?|hours?|hrs?|days?|weeks?)(?=$|[^\p{L}])/iu
+    /(?:^|[^\p{L}])(?:через|in)\s+(\d+(?:[.,]\d+)?|пол(?:часа)?|одн[уо]?|пару|an?|half\s+an?)?\s*(минут[уы]?|мин|час(?:а|ов)?|ч(?=$|[^\p{L}])|д(?:ень|ня|ней)|недел[юи]|minutes?|mins?|hours?|hrs?|days?|weeks?)(?=$|[^\p{L}])/iu
   );
   if (relMatch) {
     isRelativeOffset = true;
-    const rawQty = (relMatch[1] || '1').toLowerCase();
+    const rawQty = (relMatch[1] || '1').toLowerCase().replace(',', '.');
     const qty =
       rawQty.startsWith('пол') || rawQty.startsWith('half')
         ? 0.5
@@ -396,8 +396,8 @@ export function parseRussianEvent(
   // 7. Month names (`19 ноября`, `19 нояб.`, `3 дек 2026`, `Nov 19`, `19 Nov 2026`)
   if (!resolvedDate) {
     const monthMatch =
-      remaining.match(/(?:^|[^\d])([12]?\d|3[01])\s+([а-яёa-z]{3,10})\.?(?:\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu) ||
-      remaining.match(/\b([a-z]{3,9})\.?\s+([12]?\d|3[01])(?:st|nd|rd|th)?(?:,?\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu);
+      remaining.match(/(?:^|[^\d])(0?[1-9]|[12]\d|3[01])\s+([а-яёa-z]{3,10})\.?(?:\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu) ||
+      remaining.match(/\b([a-z]{3,9})\.?\s+(0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?(?:,?\s*((?:19|20)\d{2}))?(?=$|[^\p{L}\d])/iu);
     if (monthMatch) {
       const isMonthFirst = /^[a-z]+$/i.test(monthMatch[1] || '');
       const rawDay = isMonthFirst ? monthMatch[2] : monthMatch[1];
@@ -437,13 +437,22 @@ export function parseRussianEvent(
       explicitMonth = Number(isoMatch[2]) - 1;
       explicitDay = Number(isoMatch[3]);
       remaining = removeSpan(remaining, isoMatch);
-    } else if (dmyMatch && dmyMatch[1] && dmyMatch[3]) {
+    } else if (dmyMatch && dmyMatch[1] && dmyMatch[2] && dmyMatch[3]) {
       const d = Number(dmyMatch[1]);
       const sep = dmyMatch[2];
       const rawMonth = dmyMatch[3];
       const m = Number(rawMonth) - 1;
       const rawY = dmyMatch[4];
-      const isBareDecimal = sep === '.' && !rawY && rawMonth.length === 1;
+      const matchStart = dmyMatch.index ?? 0;
+      const leadingGapLen = dmyMatch[0].length - dmyMatch[1].length - sep.length - rawMonth.length - (rawY ? 1 + rawY.length : 0);
+      const preceding = remaining.slice(0, matchStart + Math.max(0, leadingGapLen));
+      const isVersionPrefix =
+        sep === '.' &&
+        !rawY &&
+        /(?:верси[яию]|вер\.?|ver\.?|version|rev\.?|build|release|релиз|сборк[аиу]|патч|обновлени[ея]|update|chrome|firefox|safari|edge|opera|node(?:\.js)?|react|electron|android|ios|iphone|ipad|windows|win|macos|linux|ubuntu|python|swift|java|kotlin|docker|kapsula|v\.?)\s*$/iu.test(
+          preceding
+        );
+      const isBareDecimal = sep === '.' && !rawY && (rawMonth.length === 1 || isVersionPrefix);
       if (!isBareDecimal) {
         explicitDay = d;
         explicitMonth = m;
@@ -475,12 +484,30 @@ export function parseRussianEvent(
   }
 
   if (!resolvedDate && explicitMonth !== null && explicitDay !== null) {
+    if (explicitDay < 1 || explicitMonth < 0 || explicitMonth > 11) {
+      return null;
+    }
     let yr = explicitYear ?? base.getFullYear();
     const candidate = new Date(yr, explicitMonth, explicitDay, hour, minute, 0, 0);
+    if (
+      candidate.getFullYear() !== yr ||
+      candidate.getMonth() !== explicitMonth ||
+      candidate.getDate() !== explicitDay
+    ) {
+      return null;
+    }
     if (!explicitYear && candidate.getTime() < nowMs - 2 * 86_400_000) {
       yr += 1;
     }
-    resolvedDate = new Date(yr, explicitMonth, explicitDay, hour, minute, 0, 0);
+    const finalDate = new Date(yr, explicitMonth, explicitDay, hour, minute, 0, 0);
+    if (
+      finalDate.getFullYear() !== yr ||
+      finalDate.getMonth() !== explicitMonth ||
+      finalDate.getDate() !== explicitDay
+    ) {
+      return null;
+    }
+    resolvedDate = finalDate;
   }
 
   // Fallback to selected calendar day when explicitly supplied (e.g. Calendar quick bar)
@@ -501,7 +528,15 @@ export function parseRussianEvent(
   let endAt: number;
   if (allDay) {
     durationMin = 1440;
-    endAt = startAt + 86_400_000 - 1000;
+    endAt = new Date(
+      startDate.getFullYear(),
+      startDate.getMonth(),
+      startDate.getDate(),
+      23,
+      59,
+      59,
+      0
+    ).getTime();
   } else if (hasEndTime && endHour !== null && endMinute !== null) {
     const endDate = new Date(
       startDate.getFullYear(),

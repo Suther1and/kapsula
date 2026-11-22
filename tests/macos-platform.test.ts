@@ -170,10 +170,16 @@ describe('Kapsula v7 macOS Platform Support (.dmg + E2EE Sync)', () => {
       build: {
         afterPack?: string;
         files: string[];
-        asarUnpack: string[];
+        asarUnpack?: string[];
+        win: {
+          files?: string[];
+          asarUnpack?: string[];
+        };
         mac: {
           icon: string;
-          extendInfo: Record<string, string>;
+          files?: string[];
+          asarUnpack?: string[];
+          extendInfo: Record<string, unknown>;
           target: Array<{ target: string; arch: string[] }>;
         };
         dmg: { icon: string; contents: Array<{ type?: string }> };
@@ -185,14 +191,22 @@ describe('Kapsula v7 macOS Platform Support (.dmg + E2EE Sync)', () => {
     expect(['scripts/after-pack-mac.cjs', 'scripts/after-pack-win.cjs']).toContain(
       pkg.build.afterPack
     );
-    expect(pkg.build.files).toContain('build/icon.icns');
-    expect(pkg.build.files).toContain('build/trayTemplate.png');
-    expect(pkg.build.files).toContain('build/trayTemplate@2x.png');
-    expect(pkg.build.asarUnpack).toContain('dist/main/macos-vision-ocr');
-    expect(pkg.build.asarUnpack).toContain('build/trayTemplate*.png');
+    expect(pkg.build.files).not.toContain('extension/**/*');
+    expect(pkg.build.files).toContain('LICENSE');
+    expect(pkg.build.files).toContain('!dist/main/*.swift');
+    expect(pkg.build.win.files).toContain('!dist/main/macos-vision-ocr*');
+    expect(pkg.build.win.asarUnpack).toEqual(['dist/main/winrt-ocr.ps1']);
+    expect(pkg.build.mac.files).toContain('!dist/main/winrt-ocr.ps1');
+    expect(pkg.build.mac.files).toContain('build/icon.icns');
+    expect(pkg.build.mac.files).toContain('build/trayTemplate.png');
+    expect(pkg.build.mac.files).toContain('build/trayTemplate@2x.png');
+    expect(pkg.build.mac.asarUnpack).toContain('dist/main/macos-vision-ocr');
+    expect(pkg.build.mac.asarUnpack).toContain('build/trayTemplate*.png');
     expect(pkg.build.mac.icon).toBe('build/icon.icns');
     expect(pkg.build.dmg.icon).toBe('build/icon.icns');
     expect(pkg.build.dmg.contents[0]?.type).toBe('file');
+    expect(pkg.build.mac.extendInfo.ITSAppUsesNonExemptEncryption).toBe(false);
+    expect(pkg.build.mac.extendInfo.LSMinimumSystemVersion).toBe('12.0');
     expect(pkg.build.mac.extendInfo.NSMicrophoneUsageDescription).toBeTruthy();
     expect(pkg.build.mac.extendInfo.NSScreenCaptureUsageDescription).toBeTruthy();
     expect(pkg.build.mac.extendInfo.NSAppleEventsUsageDescription).toBeTruthy();
@@ -200,6 +214,16 @@ describe('Kapsula v7 macOS Platform Support (.dmg + E2EE Sync)', () => {
     const entitlements = fs.readFileSync(path.join(ROOT, 'build', 'entitlements.mac.plist'), 'utf8');
     expect(entitlements).toContain('com.apple.security.device.audio-input');
     expect(entitlements).toContain('com.apple.security.automation.apple-events');
+    expect(entitlements).not.toContain('com.apple.security.cs.disable-library-validation');
+
+    const inheritEntitlements = fs.readFileSync(
+      path.join(ROOT, 'build', 'entitlements.mac.inherit.plist'),
+      'utf8'
+    );
+    expect(inheritEntitlements).toContain('com.apple.security.cs.allow-jit');
+    expect(inheritEntitlements).not.toContain('com.apple.security.device.audio-input');
+    expect(inheritEntitlements).not.toContain('com.apple.security.automation.apple-events');
+    expect(inheritEntitlements).not.toContain('com.apple.security.cs.disable-library-validation');
 
     // Verify afterPack hook skips universal temp dirs and non-darwin platforms without running codesign
     const req = createRequire(import.meta.url);

@@ -16,11 +16,13 @@ import {
   X,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
-import type { OrbitDef, SecretPayload, TotpCodeSnapshot, VaultItem } from '@shared/types';
+import type { OrbitDef, SecretPayload, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { formatCardExpiryDraft } from '@shared/russian-event-parser';
+import { useSecondTicker } from '@shared/second-ticker';
 import { generateTotp, isValidTotpInput, parseOtpAuthUri } from '@shared/totp';
 import { formatCardPanGroups, friendlyErrorMessage } from '../../lib/format';
+import { useTotpSnapshot } from '../../lib/totp-ticker';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { SelectMenu } from '../ui/SelectMenu';
 
@@ -112,6 +114,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [payload, setPayload] = useState<SecretPayload | null>(null);
   const [loading, setLoading] = useState(false);
+  const [revealFailed, setRevealFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [title, setTitle] = useState(item.title || '');
@@ -123,12 +126,10 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
   const [notes, setNotes] = useState('');
   const [totpInput, setTotpInput] = useState('');
   const [showTotpSeed, setShowTotpSeed] = useState(false);
-  const [totpPreviewTick, setTotpPreviewTick] = useState(0);
   const [orbit, setOrbit] = useState(item.orbit || '');
 
   const [showSecret, setShowSecret] = useState(false);
   const [showCvv, setShowCvv] = useState(false);
-  const [totpSnap, setTotpSnap] = useState<TotpCodeSnapshot | null>(null);
 
   const notesInputRef = useRef<HTMLTextAreaElement | null>(null);
   const focusNotesOnEditRef = useRef(false);
@@ -155,6 +156,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
     setShowCvv(false);
     setShowTotpSeed(false);
     setPayload(null);
+    setRevealFailed(false);
     setLogin('');
     setSecretValue('');
     setCvv('');
@@ -167,7 +169,12 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
     window.kapsula
       .revealSecret(item.id)
       .then((dec) => {
-        if (cancelled || !dec) return;
+        if (cancelled) return;
+        if (!dec) {
+          setRevealFailed(true);
+          return;
+        }
+        setRevealFailed(false);
         setPayload(dec);
         setService(dec.service || item.secretMeta?.service || '');
         setLogin(dec.login || '');
@@ -177,7 +184,9 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
         setNotes(dec.notes || '');
         setTotpInput(dec.totpSecret || '');
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setRevealFailed(true);
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -186,28 +195,12 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
     };
   }, [item.id, vaultLocked]);
 
-  // Live 1s TOTP polling in view mode
-  useEffect(() => {
-    if (!hasTotp || vaultLocked || mode !== 'view') {
-      setTotpSnap(null);
-      return;
-    }
-    let cancelled = false;
-    const poll = () => {
-      window.kapsula
-        .getTotpCode(item.id)
-        .then((snap) => {
-          if (!cancelled) setTotpSnap(snap);
-        })
-        .catch(() => {});
-    };
-    poll();
-    const timer = window.setInterval(poll, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [item.id, hasTotp, vaultLocked, mode, item.updatedAt]);
+  // Shared 1Hz TOTP snapshot (IPC only on mount/update/period rollover)
+  const totpSnap = useTotpSnapshot(
+    item.id,
+    hasTotp && !vaultLocked && mode === 'view',
+    item.updatedAt
+  );
 
   // Edit mode TOTP live validation & preview
   const trimmedTotp = totpInput.trim();
@@ -216,12 +209,7 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
     [trimmedTotp]
   );
   const editTotpValid = !trimmedTotp || isValidTotpInput(trimmedTotp);
-
-  useEffect(() => {
-    if (mode !== 'edit' || !parsedEditTotp) return;
-    const timer = window.setInterval(() => setTotpPreviewTick((t) => t + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [mode, parsedEditTotp]);
+  const editTickSec = useSecondTicker(mode === 'edit' && Boolean(parsedEditTotp));
 
   const editTotpPreview = useMemo(() => {
     if (!parsedEditTotp) return null;
@@ -231,16 +219,30 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
         algorithm: parsedEditTotp.algorithm,
         digits: parsedEditTotp.digits,
         period: parsedEditTotp.period,
+        nowMs: editTickSec * 1000,
       });
     } catch {
       return null;
     }
-  }, [parsedEditTotp, totpPreviewTick]);
+  }, [parsedEditTotp, editTickSec]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (vaultLocked) {
       onUnlockRequest();
+      return;
+    }
+    if (loading || !payload || revealFailed) {
+      toast.error(t('secret.sheet.revealFailed'));
+      return;
+    }
+    const cleanCardDigits = secretValue.replace(/\D/g, '');
+    if (isCard && cleanCardDigits.length < 12) {
+      toast.info(t('secret.modal.errCard'));
+      return;
+    }
+    if (!isCard && !secretValue.trim()) {
+      toast.info(t('secret.modal.errSecret'));
       return;
     }
     if (trimmedTotp && !editTotpValid) {
@@ -331,8 +333,9 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
               <button
                 type="button"
                 data-testid="secret-edit-mode-btn"
+                disabled={loading || !payload || revealFailed}
                 onClick={() => setMode('edit')}
-                className="k-interactive h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer"
+                className="k-interactive h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-45 disabled:cursor-default"
               >
                 <PencilSimple className="w-3.5 h-3.5 text-[var(--k-accent)]" />
                 <span>{t('common.edit')}</span>
@@ -679,6 +682,10 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
               >
                 {loading ? (
                   <div className="text-[12.5px] text-[var(--k-ink-muted)]">{t('vault.decryptingFields')}</div>
+                ) : revealFailed || !payload ? (
+                  <div className="rounded-xl border border-[var(--k-danger)]/35 bg-[var(--k-danger-soft)] p-3.5 text-[12.5px] text-[var(--k-danger)]">
+                    {t('secret.sheet.revealFailed')}
+                  </div>
                 ) : (
                   <>
                     <div className="flex flex-col gap-1.5">
@@ -901,7 +908,13 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
                       </button>
                       <button
                         type="submit"
-                        disabled={saving || (!payload && loading) || (Boolean(trimmedTotp) && !editTotpValid)}
+                        disabled={
+                          saving ||
+                          loading ||
+                          !payload ||
+                          revealFailed ||
+                          (Boolean(trimmedTotp) && !editTotpValid)
+                        }
                         className="k-interactive inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[13px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                       >
                         <Check weight="bold" className="w-4 h-4" />

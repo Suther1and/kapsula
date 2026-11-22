@@ -1,8 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import '@fontsource-variable/onest';
-import '@fontsource-variable/inter';
-import '@fontsource-variable/jetbrains-mono';
+import '@shared/fonts.css';
 import './styles/mobile.css';
 import { App } from './App';
 

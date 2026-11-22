@@ -1,5 +1,7 @@
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import { matchesRecurrenceOnLocalDay } from '@shared/calendar-recurrence';
 import type { AppLocale } from '@shared/i18n/core';
+import { isMediaItem as sharedIsMediaItem } from '@shared/item-helpers';
 import type { CalendarEvent, VaultItem } from '@shared/types';
 import { stripMarkdownPreview } from '@renderer/lib/format';
 import { getMobileIntlLocale, getRuntimeMobileLocale, tm } from './mobile-i18n';
@@ -46,12 +48,7 @@ export function filterItemsByQuery(items: VaultItem[], rawQuery: string): VaultI
 }
 
 export function isMediaItem(item: VaultItem): boolean {
-  return (
-    item.dna === 'shot' ||
-    item.dna === 'voice' ||
-    item.dna === 'doc' ||
-    Boolean(item.imagePath || item.thumbPath || item.mediaPath || item.ogImageUrl)
-  );
+  return sharedIsMediaItem(item);
 }
 
 export function getCardBrandLabel(brand?: string | null, locale?: AppLocale): string {
@@ -127,41 +124,7 @@ export function sameCalendarDay(aMs: number, bDate: Date): boolean {
 }
 
 export function eventOccursOnDay(ev: CalendarEvent, day: Date): boolean {
-  if (ev.deletedAt) return false;
-  const startDay = new Date(ev.startAt);
-  const targetStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0).getTime();
-  const targetEnd = targetStart + 86_400_000;
-
-  if (!ev.recurrence || ev.recurrence === 'none') {
-    if (ev.endAt > ev.startAt) {
-      return ev.startAt < targetEnd && ev.endAt > targetStart;
-    }
-    return sameCalendarDay(ev.startAt, day);
-  }
-
-  const originStart = new Date(
-    startDay.getFullYear(),
-    startDay.getMonth(),
-    startDay.getDate(),
-    0,
-    0,
-    0,
-    0
-  ).getTime();
-  if (targetStart < originStart) return false;
-
-  if (ev.recurrence === 'daily') return true;
-  if (ev.recurrence === 'weekdays') {
-    const dow = day.getDay();
-    return dow >= 1 && dow <= 5;
-  }
-  if (ev.recurrence === 'weekly') {
-    return day.getDay() === startDay.getDay();
-  }
-  if (ev.recurrence === 'monthly') {
-    return day.getDate() === startDay.getDate();
-  }
-  return false;
+  return matchesRecurrenceOnLocalDay(ev, day);
 }
 
 export function formatSyncTimeLabel(ts: number | null, locale?: AppLocale): string {
@@ -198,10 +161,16 @@ export function evaluateBiometricToggleGuard(
   state: VaultSecurityGuardState,
   locale?: AppLocale
 ): BiometricToggleGuardResult {
-  if (nextEnabled && state.hasMasterPin && state.vaultLocked) {
+  if (state.vaultLocked && (state.hasMasterPin || state.biometricEnabled)) {
     return {
       action: 'reject',
-      message: tm('guard.unlockPinForBiometric', undefined, locale),
+      message: tm(
+        nextEnabled && state.hasMasterPin
+          ? 'guard.unlockPinForBiometric'
+          : 'guard.unlockVaultFirst',
+        undefined,
+        locale
+      ),
     };
   }
   if (!nextEnabled && state.biometricEnabled) {

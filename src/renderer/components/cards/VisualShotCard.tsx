@@ -13,7 +13,7 @@ interface VisualShotCardProps {
   onZoom: (item: VaultItem) => void;
 }
 
-export const VisualShotCard: React.FC<VisualShotCardProps> = ({
+export const VisualShotCard: React.FC<VisualShotCardProps> = React.memo(({
   item,
   compactList = false,
   onZoom,
@@ -38,6 +38,8 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = ({
           <img
             src={imgSrc}
             alt={cleanTitle}
+            loading="lazy"
+            decoding="async"
             onClick={(e) => {
               e.stopPropagation();
               onZoom(item);
@@ -136,4 +138,4 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = ({
       </div>
     </div>
   );
-};
+});

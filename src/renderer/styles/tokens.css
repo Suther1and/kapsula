@@ -332,26 +332,51 @@ textarea:not(.k-mono) {
   }
 }
 
-*::-webkit-scrollbar {
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+textarea::-webkit-scrollbar,
+[class*="overflow-"]::-webkit-scrollbar,
+.k-scroll::-webkit-scrollbar,
+.ProseMirror::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track,
+[class*="overflow-"]::-webkit-scrollbar-track,
+.k-scroll::-webkit-scrollbar-track,
+.ProseMirror::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-corner {
+html::-webkit-scrollbar-corner,
+body::-webkit-scrollbar-corner,
+textarea::-webkit-scrollbar-corner,
+[class*="overflow-"]::-webkit-scrollbar-corner,
+.k-scroll::-webkit-scrollbar-corner,
+.ProseMirror::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-*::-webkit-scrollbar-button {
+html::-webkit-scrollbar-button,
+body::-webkit-scrollbar-button,
+textarea::-webkit-scrollbar-button,
+[class*="overflow-"]::-webkit-scrollbar-button,
+.k-scroll::-webkit-scrollbar-button,
+.ProseMirror::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
 }
 
-*::-webkit-scrollbar-thumb {
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb,
+[class*="overflow-"]::-webkit-scrollbar-thumb,
+.k-scroll::-webkit-scrollbar-thumb,
+.ProseMirror::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--k-scroll-thumb) 55%, transparent);
   border-radius: 999px;
   border: 1px solid transparent;
@@ -359,13 +384,28 @@ textarea:not(.k-mono) {
   transition: background-color 145ms var(--k-ease-out);
 }
 
-*:hover::-webkit-scrollbar-thumb {
+html:hover::-webkit-scrollbar-thumb,
+body:hover::-webkit-scrollbar-thumb,
+textarea:hover::-webkit-scrollbar-thumb,
+[class*="overflow-"]:hover::-webkit-scrollbar-thumb,
+.k-scroll:hover::-webkit-scrollbar-thumb,
+.ProseMirror:hover::-webkit-scrollbar-thumb {
   background: var(--k-scroll-thumb);
   background-clip: content-box;
 }
 
-*::-webkit-scrollbar-thumb:hover,
-*::-webkit-scrollbar-thumb:active {
+html::-webkit-scrollbar-thumb:hover,
+html::-webkit-scrollbar-thumb:active,
+body::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:active,
+textarea::-webkit-scrollbar-thumb:hover,
+textarea::-webkit-scrollbar-thumb:active,
+[class*="overflow-"]::-webkit-scrollbar-thumb:hover,
+[class*="overflow-"]::-webkit-scrollbar-thumb:active,
+.k-scroll::-webkit-scrollbar-thumb:hover,
+.k-scroll::-webkit-scrollbar-thumb:active,
+.ProseMirror::-webkit-scrollbar-thumb:hover,
+.ProseMirror::-webkit-scrollbar-thumb:active {
   background: var(--k-scroll-thumb-hover);
   background-clip: content-box;
 }

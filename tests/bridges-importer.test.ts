@@ -104,14 +104,29 @@ describe('Instagram/Telegram Archive Importer & ClipperServer', () => {
 
   it('serves /health, enforces strict /api/handshake & /api/clip auth/CSRF, and salts multi-selection clips', async () => {
     const { pipeline, repo } = makePipeline();
-    const server = new ClipperServer(pipeline, () => 'secret-tok-123');
+    const pairedOrigins = new Set<string>();
+    const server = new ClipperServer(
+      pipeline,
+      () => 'secret-tok-123',
+      undefined,
+      undefined,
+      undefined,
+      {
+        getPairingCode: () => '654321',
+        isOriginPaired: (o) => pairedOrigins.has(o),
+        onPairOrigin: (o) => {
+          pairedOrigins.add(o);
+        },
+      }
+    );
     const port = await server.start();
     cleanups.push(() => server.stop());
 
     const health = await fetch(`http://127.0.0.1:${port}/health`);
     expect(health.status).toBe(200);
-    const hJson = (await health.json()) as { ok: boolean };
+    const hJson = (await health.json()) as { ok: boolean; app: string };
     expect(hJson.ok).toBe(true);
+    expect(hJson.app).toBe('kapsula');
 
     // GET handshake blocked with 405; POST handshake blocked without valid extension Origin
     const hsGet = await fetch(`http://127.0.0.1:${port}/api/handshake`);
@@ -135,16 +150,48 @@ describe('Instagram/Telegram Archive Importer & ClipperServer', () => {
     });
     expect(hsWebOrigin.status).toBe(403);
 
-    const hsValid = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
+    const hsShortOrigin = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
       method: 'POST',
       headers: {
         'X-Kapsula-Client': 'ext-v1',
+        'X-Kapsula-Pair-Code': '654321',
         Origin: 'chrome-extension://abcdefghijklmnop',
       },
     });
-    expect(hsValid.status).toBe(200);
-    const hsJson = (await hsValid.json()) as { token: string };
+    expect(hsShortOrigin.status).toBe(403);
+
+    const validExtOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    const hsUnpaired = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
+      method: 'POST',
+      headers: {
+        'X-Kapsula-Client': 'ext-v1',
+        Origin: validExtOrigin,
+      },
+    });
+    expect(hsUnpaired.status).toBe(403);
+    const hsUnpairedJson = (await hsUnpaired.json()) as { code: string };
+    expect(hsUnpairedJson.code).toBe('pairing_required');
+
+    const hsPaired = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
+      method: 'POST',
+      headers: {
+        'X-Kapsula-Client': 'ext-v1',
+        'X-Kapsula-Pair-Code': '654321',
+        Origin: validExtOrigin,
+      },
+    });
+    expect(hsPaired.status).toBe(200);
+    const hsJson = (await hsPaired.json()) as { token: string };
     expect(hsJson.token).toBe('secret-tok-123');
+
+    const hsRepeat = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
+      method: 'POST',
+      headers: {
+        'X-Kapsula-Client': 'ext-v1',
+        Origin: validExtOrigin,
+      },
+    });
+    expect(hsRepeat.status).toBe(200);
 
     const unauth = await fetch(`http://127.0.0.1:${port}/api/clip`, {
       method: 'POST',
@@ -212,6 +259,11 @@ describe('Instagram/Telegram Archive Importer & ClipperServer', () => {
     );
     expect(badPixel.status).toBe(403);
 
+    const ghostPixel = await fetch(
+      `http://127.0.0.1:${port}/clip-pixel?token=secret-tok-123&mode=ghost&text=secret`
+    );
+    expect(ghostPixel.status).toBe(403);
+
     const pixel = await fetch(
       `http://127.0.0.1:${port}/clip-pixel?token=secret-tok-123&url=${encodeURIComponent('https://example.org/bm')}&title=BM`
     );
@@ -221,7 +273,11 @@ describe('Instagram/Telegram Archive Importer & ClipperServer', () => {
     await pipeline.waitForIdle();
     expect(repo.queryItems({ limit: 10 }).length).toBeGreaterThanOrEqual(3);
 
-    // Verify GET /api/orbits returns live sections cleanly when authorized
+    // Query ?token= must NOT authenticate GET /api/orbits
+    const orbitsQueryRes = await fetch(`http://127.0.0.1:${port}/api/orbits?token=secret-tok-123`);
+    expect(orbitsQueryRes.status).toBe(403);
+
+    // Verify GET /api/orbits returns live sections cleanly when authorized via header
     const orb = repo.createOrbit({ name: 'Дизайн', description: 'Референсы и макеты' });
     const orbitsRes = await fetch(`http://127.0.0.1:${port}/api/orbits`, {
       headers: { 'X-Kapsula-Token': 'secret-tok-123' },

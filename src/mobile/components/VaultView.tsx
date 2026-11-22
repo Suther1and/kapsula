@@ -25,6 +25,7 @@ import {
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { formatCardExpiryDraft } from '@shared/russian-event-parser';
+import { useSecondTicker } from '@shared/second-ticker';
 import { generateTotp, isValidTotpInput, parseOtpAuthUri } from '@shared/totp';
 import type {
   OrbitDef,
@@ -103,6 +104,157 @@ const TotpRing: React.FC<{ remainingSec: number; period: number; size?: number }
   );
 };
 
+const MobileRevealCountdown: React.FC<{
+  untilMs: number;
+  renderText: (sec: number) => string;
+}> = ({ untilMs, renderText }) => {
+  const nowSec = useSecondTicker(true);
+  const remaskSec = Math.max(1, Math.ceil((untilMs - nowSec * 1000) / 1000));
+  return <>{renderText(remaskSec)}</>;
+};
+
+const MobileTotpCardBlock: React.FC<{
+  itemId: string;
+  dec?: SecretPayload | null;
+  copyBadge: CopyBadgeState | null;
+  onCopy: (e: React.MouseEvent, itemId: string) => void;
+}> = React.memo(({ itemId, dec, copyBadge, onCopy }) => {
+  const { t } = useMobileI18n();
+  const hasTotp = Boolean(dec?.totpSecret);
+  const nowSec = useSecondTicker(hasTotp);
+  if (!dec?.totpSecret) return null;
+  let snap: ReturnType<typeof generateTotp> | null = null;
+  try {
+    snap = generateTotp({
+      secret: dec.totpSecret,
+      algorithm: dec.totpAlgorithm ?? 'SHA1',
+      digits: dec.totpDigits ?? 6,
+      period: dec.totpPeriod ?? 30,
+      nowMs: nowSec * 1000,
+    });
+  } catch {
+    snap = null;
+  }
+  if (!snap) return null;
+  const isCopied = copyBadge?.key === `${itemId}:totp`;
+  return (
+    <div
+      data-testid={`mobile-totp-row-${itemId}`}
+      onClick={(e) => onCopy(e, itemId)}
+      className="relative mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 border border-[var(--k-border-hairline)] px-3 py-2 cursor-pointer"
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <TotpRing remainingSec={snap.remainingSec} period={snap.period} size={26} />
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">
+            {t('vault.totpBadge')}
+          </div>
+          <div className="k-mono text-[16.5px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
+            {formatTotpCode(snap.code)}
+          </div>
+        </div>
+      </div>
+      <span
+        data-testid={`mobile-copy-totp-${itemId}`}
+        className={`inline-flex items-center gap-1 px-2 h-7 rounded-lg text-[11px] font-medium border shrink-0 ${
+          isCopied
+            ? 'bg-[var(--k-emerald-soft)] border-[var(--k-emerald)]/55 text-[var(--k-emerald)]'
+            : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]'
+        }`}
+      >
+        {isCopied ? (
+          <>
+            <Check weight="bold" className="w-3 h-3" />
+            <span className="k-mono">{t('common.secondsShort', { count: copyBadge.remainingSec })}</span>
+          </>
+        ) : (
+          <>
+            <Copy className="w-3 h-3" />
+            <span>2FA</span>
+          </>
+        )}
+      </span>
+    </div>
+  );
+});
+
+const MobileTotpDetailBlock: React.FC<{
+  itemId: string;
+  dec?: SecretPayload | null;
+  onCopy: (e: React.MouseEvent, itemId: string) => void;
+}> = React.memo(({ itemId, dec, onCopy }) => {
+  const { t } = useMobileI18n();
+  const hasTotp = Boolean(dec?.totpSecret);
+  const nowSec = useSecondTicker(hasTotp);
+  if (!dec?.totpSecret) return null;
+  let totpSnap: ReturnType<typeof generateTotp> | null = null;
+  try {
+    totpSnap = generateTotp({
+      secret: dec.totpSecret,
+      algorithm: dec.totpAlgorithm ?? 'SHA1',
+      digits: dec.totpDigits ?? 6,
+      period: dec.totpPeriod ?? 30,
+      nowMs: nowSec * 1000,
+    });
+  } catch {
+    totpSnap = null;
+  }
+  if (!totpSnap) return null;
+  return (
+    <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-focus)] flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <TotpRing remainingSec={totpSnap.remainingSec} period={totpSnap.period} size={32} />
+        <div className="min-w-0">
+          <div className="text-[11px] text-[var(--k-ink-muted)]">{t('vault.totpBadge')}</div>
+          <div className="k-mono text-[19px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
+            {formatTotpCode(totpSnap.code)}
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={(e) => onCopy(e, itemId)}
+        className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold shrink-0"
+      >
+        <Copy className="w-3.5 h-3.5" />
+        {t('vault.copyWord')}
+      </button>
+    </div>
+  );
+});
+
+const MobileTotpFormPreview: React.FC<{ uriOrSecret: string }> = ({ uriOrSecret }) => {
+  const { t } = useMobileI18n();
+  const raw = uriOrSecret.trim();
+  const nowSec = useSecondTicker(Boolean(raw));
+  if (!raw) return null;
+  const parsed = parseOtpAuthUri(raw);
+  if (!parsed) {
+    return (
+      <div className="text-[11.5px] text-[var(--k-danger)] px-1">{t('vault.formTotpInvalid')}</div>
+    );
+  }
+  let snap: ReturnType<typeof generateTotp> | null = null;
+  try {
+    snap = generateTotp({ ...parsed, nowMs: nowSec * 1000 });
+  } catch {
+    snap = null;
+  }
+  if (!snap) {
+    return (
+      <div className="text-[11.5px] text-[var(--k-danger)] px-1">{t('vault.formTotpInvalid')}</div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-[var(--k-emerald-soft)] text-[12px] text-[var(--k-emerald)]">
+      <span>{t('vault.formTotpNow')}</span>
+      <span className="k-mono font-bold tracking-[0.12em]">
+        {formatTotpCode(snap.code)} · {t('common.secondsShort', { count: snap.remainingSec })}
+      </span>
+    </div>
+  );
+};
+
 interface VaultViewProps {
   items: VaultItem[];
   orbits: OrbitDef[];
@@ -174,7 +326,6 @@ export const VaultView: React.FC<VaultViewProps> = ({
   const [kindFilter, setKindFilter] = useState<'all' | SecretKind>('all');
   const [localSearch, setLocalSearch] = useState('');
   const [revealUntilById, setRevealUntilById] = useState<Record<string, number>>({});
-  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [payloadCache, setPayloadCache] = useState<
     Record<string, { rev: number; data: SecretPayload }>
   >({});
@@ -255,44 +406,32 @@ export const VaultView: React.FC<VaultViewProps> = ({
   const pendingCreateSignalRef = useRef(openCreateSignal);
   const wantCreateAfterUnlockRef = useRef(false);
 
-  const hasAnyTotp = useMemo(
-    () =>
-      allSecrets.some((s) => s.secretMeta?.hasTotp || Boolean(payloadCache[s.id]?.data.totpSecret)) ||
-      (editorMode !== 'closed' && isValidTotpInput(totpUriOrSecret)),
-    [allSecrets, payloadCache, editorMode, totpUriOrSecret]
-  );
-
-  const hasActiveReveal = Object.keys(revealUntilById).length > 0;
-
-  // Shared 1Hz ticker for live 2FA TOTP countdown rings + 30s auto-re-mask on revealed secrets
+  // Targeted single timeout for 30s auto-re-mask on revealed secrets (no 1Hz VaultView re-renders)
   useEffect(() => {
-    if (vaultLocked || (!hasAnyTotp && !hasActiveReveal)) return;
-    setNowMs(Date.now());
-    const id = setInterval(() => {
-      const now = Date.now();
-      setNowMs(now);
+    if (vaultLocked) return;
+    const entries = Object.entries(revealUntilById);
+    if (entries.length === 0) return;
+    const now = Date.now();
+    const minUntil = Math.min(...entries.map(([, until]) => until));
+    const delayMs = Math.max(20, minUntil - now + 15);
+    const id = setTimeout(() => {
+      const ts = Date.now();
       setRevealUntilById((prev) => {
         let changed = false;
         const next: Record<string, number> = {};
         for (const [k, until] of Object.entries(prev)) {
-          if (until > now) next[k] = until;
+          if (until > ts) next[k] = until;
           else changed = true;
         }
         return changed ? next : prev;
       });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [vaultLocked, hasAnyTotp, hasActiveReveal]);
+    }, delayMs);
+    return () => clearTimeout(id);
+  }, [vaultLocked, revealUntilById]);
 
   const isRevealed = (itemId: string): boolean => {
     const until = revealUntilById[itemId];
-    return typeof until === 'number' && until > nowMs;
-  };
-
-  const revealRemainingSec = (itemId: string): number => {
-    const until = revealUntilById[itemId];
-    if (typeof until !== 'number' || until <= nowMs) return 0;
-    return Math.max(1, Math.ceil((until - nowMs) / 1000));
+    return typeof until === 'number' && until > Date.now();
   };
 
   const runUnlockVault = async (): Promise<boolean> => {
@@ -468,7 +607,6 @@ export const VaultView: React.FC<VaultViewProps> = ({
     }
     mobileBridge.haptic('light');
     const now = Date.now();
-    setNowMs(now);
     setRevealUntilById((prev) => {
       if (prev[itemId] && prev[itemId]! > now) {
         const next = { ...prev };
@@ -567,19 +705,6 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
   // NOTE: every hook MUST stay above the `if (vaultLocked) return` early exit below —
   // otherwise locking/unlocking the Vault changes hook order and React throws #300/#310.
-  const totpFormPreview = useMemo(() => {
-    const raw = totpUriOrSecret.trim();
-    if (!raw) return null;
-    const parsed = parseOtpAuthUri(raw);
-    if (!parsed) return { error: true as const };
-    try {
-      const snap = generateTotp({ ...parsed, nowMs });
-      return { error: false as const, snap };
-    } catch {
-      return { error: true as const };
-    }
-  }, [totpUriOrSecret, nowMs]);
-
   const buildSecretActions = (item: VaultItem): ActionSheetEntry[] => {
     const isCard = item.secretMeta?.kind === 'bank_card';
     const revealed = isRevealed(item.id);
@@ -796,72 +921,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
     );
   };
 
-  const computeLiveTotp = (dec?: SecretPayload | null) => {
-    if (!dec?.totpSecret) return null;
-    try {
-      return generateTotp({
-        secret: dec.totpSecret,
-        algorithm: dec.totpAlgorithm ?? 'SHA1',
-        digits: dec.totpDigits ?? 6,
-        period: dec.totpPeriod ?? 30,
-        nowMs,
-      });
-    } catch {
-      return null;
-    }
-  };
-
-  const renderTotpCardRow = (itemId: string, dec?: SecretPayload | null) => {
-    const snap = computeLiveTotp(dec);
-    if (!snap) return null;
-    const isCopied = copyBadge?.key === `${itemId}:totp`;
-    return (
-      <div
-        data-testid={`mobile-totp-row-${itemId}`}
-        onClick={(e) => void handleCopy(e, itemId, 'totp', t('vault.totpLabel'))}
-        className="relative mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 border border-[var(--k-border-hairline)] px-3 py-2 cursor-pointer"
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <TotpRing remainingSec={snap.remainingSec} period={snap.period} size={26} />
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--k-ink-muted)]">
-              {t('vault.totpBadge')}
-            </div>
-            <div className="k-mono text-[16.5px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
-              {formatTotpCode(snap.code)}
-            </div>
-          </div>
-        </div>
-        <span
-          data-testid={`mobile-copy-totp-${itemId}`}
-          className={`inline-flex items-center gap-1 px-2 h-7 rounded-lg text-[11px] font-medium border shrink-0 ${
-            isCopied
-              ? 'bg-[var(--k-emerald-soft)] border-[var(--k-emerald)]/55 text-[var(--k-emerald)]'
-              : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-primary)]'
-          }`}
-        >
-          {isCopied ? (
-            <>
-              <Check weight="bold" className="w-3 h-3" />
-              <span className="k-mono">{t('common.secondsShort', { count: copyBadge.remainingSec })}</span>
-            </>
-          ) : (
-            <>
-              <Copy className="w-3 h-3" />
-              <span>2FA</span>
-            </>
-          )}
-        </span>
-      </div>
-    );
-  };
-
   const renderSecretCard = (item: VaultItem) => {
     const meta = item.secretMeta;
     const itemKind = meta?.kind ?? 'note';
     const dec = payloadCache[item.id]?.data;
     const revealed = isRevealed(item.id);
-    const remaskSec = revealed ? revealRemainingSec(item.id) : 0;
+    const revealUntil = revealUntilById[item.id] ?? 0;
     const isSelected = selectedSecretId === item.id;
 
     if (itemKind === 'bank_card') {
@@ -928,9 +993,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
-                {revealed && remaskSec > 0 ? (
+                {revealed && revealUntil > 0 ? (
                   <span className="k-mono text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]">
-                    {t('common.secondsShort', { count: remaskSec })}
+                    <MobileRevealCountdown
+                      untilMs={revealUntil}
+                      renderText={(sec) => t('common.secondsShort', { count: sec })}
+                    />
                   </span>
                 ) : null}
                 <button
@@ -974,7 +1042,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
               ) : null}
             </div>
 
-            {renderTotpCardRow(item.id, dec)}
+            <MobileTotpCardBlock
+              itemId={item.id}
+              dec={dec}
+              copyBadge={copyBadge}
+              onCopy={(e, id) => void handleCopy(e, id, 'totp', t('vault.totpLabel'))}
+            />
 
             {comment ? (
               <div
@@ -1058,9 +1131,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
-              {revealed && remaskSec > 0 ? (
+              {revealed && revealUntil > 0 ? (
                 <span className="k-mono text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]">
-                  {t('common.secondsShort', { count: remaskSec })}
+                  <MobileRevealCountdown
+                    untilMs={revealUntil}
+                    renderText={(sec) => t('common.secondsShort', { count: sec })}
+                  />
                 </span>
               ) : null}
               <button
@@ -1091,7 +1167,12 @@ export const VaultView: React.FC<VaultViewProps> = ({
             {revealed && dec?.secretValue ? dec.secretValue : '••••••••••••••••'}
           </div>
 
-          {renderTotpCardRow(item.id, dec)}
+          <MobileTotpCardBlock
+            itemId={item.id}
+            dec={dec}
+            copyBadge={copyBadge}
+            onCopy={(e, id) => void handleCopy(e, id, 'totp', t('vault.totpLabel'))}
+          />
 
           {comment ? (
             <div className="mb-2.5 text-[12px] text-[var(--k-ink-secondary)] line-clamp-2">{comment}</div>
@@ -1235,21 +1316,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             placeholder={t('vault.formTotpPlaceholder')}
             className="w-full h-11 px-3.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] focus:border-[var(--k-border-focus)] outline-none k-mono text-[13px] text-[var(--k-ink-primary)]"
           />
-          {totpFormPreview ? (
-            totpFormPreview.error ? (
-              <div className="text-[11.5px] text-[var(--k-danger)] px-1">
-                {t('vault.formTotpInvalid')}
-              </div>
-            ) : (
-              <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-[var(--k-emerald-soft)] text-[12px] text-[var(--k-emerald)]">
-                <span>{t('vault.formTotpNow')}</span>
-                <span className="k-mono font-bold tracking-[0.12em]">
-                  {formatTotpCode(totpFormPreview.snap.code)} ·{' '}
-                  {t('common.secondsShort', { count: totpFormPreview.snap.remainingSec })}
-                </span>
-              </div>
-            )
-          ) : null}
+          <MobileTotpFormPreview uriOrSecret={totpUriOrSecret} />
         </div>
       ) : null}
 
@@ -1313,8 +1380,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     const meta = item.secretMeta;
     const isCard = meta?.kind === 'bank_card';
     const revealed = isRevealed(item.id);
-    const remaskSec = revealed ? revealRemainingSec(item.id) : 0;
-    const totpSnap = computeLiveTotp(dec);
+    const revealUntil = revealUntilById[item.id] ?? 0;
 
     return (
       <div className="p-4 space-y-4">
@@ -1347,7 +1413,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
             >
               {revealed ? <EyeSlash className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               <span>
-                {revealed ? t('vault.revealRemaskBtn', { sec: remaskSec }) : t('vault.showWord')}
+                {revealed && revealUntil > 0 ? (
+                  <MobileRevealCountdown
+                    untilMs={revealUntil}
+                    renderText={(sec) => t('vault.revealRemaskBtn', { sec })}
+                  />
+                ) : (
+                  t('vault.showWord')
+                )}
               </span>
             </button>
             <button
@@ -1362,36 +1435,23 @@ export const VaultView: React.FC<VaultViewProps> = ({
         </div>
 
         <div className="space-y-2.5">
-          {totpSnap ? (
-            <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-focus)] flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <TotpRing remainingSec={totpSnap.remainingSec} period={totpSnap.period} size={32} />
-                <div className="min-w-0">
-                  <div className="text-[11px] text-[var(--k-ink-muted)]">{t('vault.totpBadge')}</div>
-                  <div className="k-mono text-[19px] font-bold tracking-[0.14em] text-[var(--k-ink-primary)]">
-                    {formatTotpCode(totpSnap.code)}
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => void handleCopy(e, item.id, 'totp', t('vault.totpLabel'))}
-                className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold shrink-0"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                {t('vault.copyWord')}
-              </button>
-            </div>
-          ) : null}
+          <MobileTotpDetailBlock
+            itemId={item.id}
+            dec={dec}
+            onCopy={(e, id) => void handleCopy(e, id, 'totp', t('vault.totpLabel'))}
+          />
 
           <div className="rounded-2xl p-3 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
             <div className="flex items-center justify-between gap-2 mb-1">
               <span className="text-[11px] text-[var(--k-ink-muted)]">
                 {isCard ? t('vault.cardPanLabel') : t('vault.valueLabel')}
               </span>
-              {revealed && remaskSec > 0 ? (
+              {revealed && revealUntil > 0 ? (
                 <span className="text-[10.5px] text-[var(--k-ink-muted)] k-mono">
-                  {t('vault.willHideIn', { sec: remaskSec })}
+                  <MobileRevealCountdown
+                    untilMs={revealUntil}
+                    renderText={(sec) => t('vault.willHideIn', { sec })}
+                  />
                 </span>
               ) : null}
             </div>
@@ -1585,11 +1645,13 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <AnimatePresence>
             {copyBadge && copyBadge.totalSec > 0 && copyBadge.remainingSec > 0 ? (
               <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
+                initial={{ opacity: 0, gridTemplateRows: '0fr' }}
+                animate={{ opacity: 1, gridTemplateRows: '1fr' }}
+                exit={{ opacity: 0, gridTemplateRows: '0fr' }}
+                transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                className="grid overflow-hidden"
               >
+                <div className="min-h-0 overflow-hidden">
                 <div className="rounded-xl px-3 py-2 bg-[var(--k-emerald-soft)] border border-[var(--k-emerald)]/30 space-y-1.5">
                   <div className="flex items-center justify-between text-[11.5px] font-medium text-[var(--k-emerald)]">
                     <span>{t('vault.inClipboard', { label: copyBadge.label })}</span>
@@ -1604,6 +1666,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
                       className="h-full rounded-full bg-[var(--k-emerald)]"
                     />
                   </div>
+                </div>
                 </div>
               </motion.div>
             ) : null}

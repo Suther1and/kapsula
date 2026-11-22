@@ -24,10 +24,9 @@ function sleep(ms) {
 function killStrayProcesses() {
   if (process.platform !== 'win32') return;
   try {
-    execSync(
-      'powershell -NoProfile -Command "Get-Process Kapsula,electron -ErrorAction SilentlyContinue | Stop-Process -Force"',
-      { stdio: 'ignore' }
-    );
+    const escapedRoot = ROOT_DIR.replace(/'/g, "''");
+    const psCmd = `Get-Process -ErrorAction SilentlyContinue | Where-Object { ($_.ProcessName -eq 'Kapsula' -or $_.ProcessName -eq 'electron') -and $_.Path -and $_.Path.StartsWith('${escapedRoot}', [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force`;
+    execSync(`powershell -NoProfile -Command "${psCmd}"`, { stdio: 'ignore' });
   } catch {
     // ignore if none running
   }
@@ -132,6 +131,7 @@ async function main() {
       env: {
         ...process.env,
         KAPSULA_DATA_DIR: tmpDataDir,
+        KAPSULA_ALLOW_MULTI: '1',
         KAPSULA_LOCALE: 'ru',
         KAPSULA_E2E_QUIT_ON_CLOSE: '1',
         KAPSULA_E2E_KEEP_HUD: '1',
@@ -789,7 +789,7 @@ async function main() {
     assert.ok(!lockedCardText.includes('742'), `Locked secret card MUST NOT expose plaintext CVV, got: ${lockedCardText}`);
     await vault.evaluate(async () => {
       await window.kapsula.unlockVaultPin('1234');
-      await window.kapsula.setMasterPin(null);
+      await window.kapsula.setMasterPin(null, '1234');
     });
     await vault.waitForTimeout(160);
 
@@ -799,7 +799,9 @@ async function main() {
     console.log('[e2e-v6] 10 - Auto-Calendar Capture (0ms delay), Badge Count & Rich CalendarEventSheet');
     await vault.getByTestId('nav-flow').click();
     await vault.waitForSelector('[data-testid="omni-composer-input"]', { timeout: 5000 });
-    await vault.getByTestId('omni-composer-input').fill('21.11 в 17:15 Чистка зубов на Ленина 14');
+    const todayDate = new Date();
+    const todayDdMm = `${String(todayDate.getDate()).padStart(2, '0')}.${String(todayDate.getMonth() + 1).padStart(2, '0')}`;
+    await vault.getByTestId('omni-composer-input').fill(`${todayDdMm} в 17:15 Чистка зубов на Ленина 14`);
     // Immediate click without waiting for any IPC debounce
     await vault.getByTestId('omni-save-btn').click();
     await vault.waitForFunction(
@@ -957,6 +959,9 @@ async function main() {
         dy: assertNearZero(b.y, stStartBox.y, `settings-y-${tabName}`),
         dh: assertNearZero(b.height, stStartBox.height, `settings-h-${tabName}`),
       });
+      if (tabName === 'ИИ') {
+        await saveShot(vault, '12b-settings-ai.png');
+      }
       if (tabName === 'Интеграции') {
         await saveShot(vault, '12-settings-integrations.png');
       }

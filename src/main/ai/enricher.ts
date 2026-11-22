@@ -20,7 +20,7 @@ import type {
 } from '@shared/types';
 import { DEFAULT_MONTHLY_CAP_USD, SECTION_COLOR_PALETTE } from '@shared/constants';
 import type { VaultRepository } from '../db/repository';
-import { redactSecrets } from '../security/secret-shield';
+import { sanitizeForCloudAi } from '../security/secret-shield';
 import {
   AiHttpError,
   postGeminiGenerateContent,
@@ -425,8 +425,21 @@ export async function runAiPipeline(params: {
     }
   }
 
+  const locale = params.repo.getLocale();
+  const isEn = locale === 'en';
   const cleanedInputText = sanitizeIngestedText(params.rawText, { stripCookieNoise: true });
-  const sanitizedText = redactSecrets(cleanedInputText || params.rawText).slice(0, 1800);
+  const inputShield = sanitizeForCloudAi(cleanedInputText || params.rawText, locale);
+  if (!inputShield.safe) {
+    return {
+      ...params.localBaseline,
+      suggestedNewSection: params.localBaseline.suggestedNewSection ?? null,
+      confidence: 0.72,
+      usedCloud: false,
+      fromCache: false,
+      budgetBlocked: false,
+    };
+  }
+  const sanitizedText = inputShield.text.slice(0, 1800);
 
   // 4. Tier 1: System-1 Decision Router
   const decision = await classifyWithDecisionApi({
@@ -441,6 +454,7 @@ export async function runAiPipeline(params: {
     orbits: params.orbits,
     fallbackOrbit: params.localBaseline.orbit,
     fallbackDna: params.localBaseline.dna,
+    locale,
     fetchFn: params.fetchFn,
   });
 
@@ -450,7 +464,8 @@ export async function runAiPipeline(params: {
       decision.modelUsed,
       decision.inputTokens,
       0,
-      decision.costUsd
+      decision.costUsd,
+      route.mode === 'cloud_proxy'
     );
   }
 
@@ -468,8 +483,6 @@ export async function runAiPipeline(params: {
   };
 
   // 5. Tier 2: Conditional Micro-Enrichment
-  const locale = params.repo.getLocale();
-  const isEn = locale === 'en';
   const updatedBudget =
     route.mode === 'personal'
       ? params.repo.getMonthBudgetSummary(route.provider, capUsd, true)
@@ -536,7 +549,8 @@ export async function runAiPipeline(params: {
         enriched.model,
         enriched.inputTokens,
         enriched.outputTokens,
-        enriched.costUsd
+        enriched.costUsd,
+        route.mode === 'cloud_proxy'
       );
 
       if (enriched.parsed) {
@@ -660,24 +674,33 @@ export async function askVaultWithAi(params: {
     }
   }
 
+  const questionShield = sanitizeForCloudAi(params.question, locale);
+  if (!questionShield.safe) {
+    return answerVaultLocally(params.question, candidates, inventory, vaultLocked, locale);
+  }
+
   const pool = candidates.slice(0, 10);
-  const contextRows = pool.map((item, idx) => {
-    let cleanTitle = decodeHtmlEntities(item.title || '');
-    let cleanSummary = decodeHtmlEntities(item.summary || '');
-    let cleanBody = decodeHtmlEntities(item.body || '');
-    if (item.platform === 'instagram' || (item.domain || '').includes('instagram.com')) {
-      const ig = cleanInstagramText(cleanTitle, cleanSummary || cleanBody);
-      if (ig.cleanTitle) cleanTitle = ig.cleanTitle;
-      if (ig.caption) cleanSummary = ig.caption;
-    }
-    const snippet = redactSecrets(
-      [cleanTitle, cleanSummary, item.mediaMeta?.transcript, cleanBody, item.ocrText, item.url]
-        .filter(Boolean)
-        .join(' | ')
-        .slice(0, 380)
-    );
-    return `[#${idx + 1} id=${item.id} dna=${item.dna} orbit=${item.orbit || 'unsorted'}] ${snippet}`;
-  });
+  const contextRows = pool
+    .map((item, idx) => {
+      let cleanTitle = decodeHtmlEntities(item.title || '');
+      let cleanSummary = decodeHtmlEntities(item.summary || '');
+      let cleanBody = decodeHtmlEntities(item.body || '');
+      if (item.platform === 'instagram' || (item.domain || '').includes('instagram.com')) {
+        const ig = cleanInstagramText(cleanTitle, cleanSummary || cleanBody);
+        if (ig.cleanTitle) cleanTitle = ig.cleanTitle;
+        if (ig.caption) cleanSummary = ig.caption;
+      }
+      const snippetShield = sanitizeForCloudAi(
+        [cleanTitle, cleanSummary, item.mediaMeta?.transcript, cleanBody, item.ocrText, item.url]
+          .filter(Boolean)
+          .join(' | ')
+          .slice(0, 380),
+        locale
+      );
+      if (!snippetShield.safe) return null;
+      return `[#${idx + 1} id=${item.id} dna=${item.dna} orbit=${item.orbit || 'unsorted'}] ${snippetShield.text}`;
+    })
+    .filter((row): row is string => Boolean(row));
 
   const asksFinanceOrCards = /(?:карт|виза|visa|mastercard|мир\b|банк|финанс|card|bank|finance)/i.test(
     params.question
@@ -690,11 +713,14 @@ export async function askVaultWithAi(params: {
     totalItems: inventory.totalItems,
     unassignedCount: inventory.unassignedCount,
     dueReminderCount: inventory.dueReminderCount,
-    dueReminders: (inventory.dueReminders ?? []).slice(0, 5).map((r) => ({
-      id: r.id,
-      title: redactSecrets(r.title),
-      remindAt: new Date(r.remindAt).toISOString(),
-    })),
+    dueReminders: (inventory.dueReminders ?? []).slice(0, 5).map((r) => {
+      const titleShield = sanitizeForCloudAi(r.title, locale);
+      return {
+        id: r.id,
+        title: titleShield.safe ? titleShield.text : '[REDACTED_SECRET]',
+        remindAt: new Date(r.remindAt).toISOString(),
+      };
+    }),
     sections: inventory.byOrbit,
     vaultLocked,
     bankCardCount:
@@ -707,10 +733,12 @@ export async function askVaultWithAi(params: {
 
   const historyLines = (params.history ?? [])
     .slice(-6)
-    .map(
-      (h) =>
-        `${h.role === 'user' ? (isEn ? 'User' : 'Пользователь') : isEn ? 'Assistant' : 'Ассистент'}: ${redactSecrets(h.content).slice(0, 260)}`
-    );
+    .map((h) => {
+      const turnShield = sanitizeForCloudAi(h.content, locale);
+      if (!turnShield.safe) return null;
+      return `${h.role === 'user' ? (isEn ? 'User' : 'Пользователь') : isEn ? 'Assistant' : 'Ассистент'}: ${turnShield.text.slice(0, 260)}`;
+    })
+    .filter((line): line is string => Boolean(line));
 
   const systemPrompt = isEn
     ? [
@@ -736,7 +764,7 @@ export async function askVaultWithAi(params: {
     ? [
         `Vault summary (safe metadata):\n${safeInventoryBlock}`,
         historyLines.length > 0 ? `Conversation context:\n${historyLines.join('\n')}` : '',
-        `User question: ${redactSecrets(params.question)}`,
+        `User question: ${questionShield.text}`,
         contextRows.length > 0 ? `Matched records:\n${contextRows.join('\n')}` : 'Matched records: (no search matches)',
       ]
         .filter(Boolean)
@@ -744,7 +772,7 @@ export async function askVaultWithAi(params: {
     : [
         `Сводка хранилища (безопасные метаданные):\n${safeInventoryBlock}`,
         historyLines.length > 0 ? `Контекст диалога:\n${historyLines.join('\n')}` : '',
-        `Вопрос пользователя: ${redactSecrets(params.question)}`,
+        `Вопрос пользователя: ${questionShield.text}`,
         contextRows.length > 0 ? `Найденные записи:\n${contextRows.join('\n')}` : 'Найденные записи: (совпадений по поиску нет)',
       ]
         .filter(Boolean)
@@ -766,7 +794,8 @@ export async function askVaultWithAi(params: {
       res.model,
       res.inputTokens,
       res.outputTokens,
-      res.costUsd
+      res.costUsd,
+      route.mode === 'cloud_proxy'
     );
 
     const parsed = res.parsed;
@@ -878,6 +907,11 @@ export async function analyzeImageWithVision(params: {
 
   const locale = params.repo.getLocale();
   const isEn = locale === 'en';
+  const captionShield = params.captionHint ? sanitizeForCloudAi(params.captionHint, locale) : null;
+  const ocrShield = params.ocrHint ? sanitizeForCloudAi(params.ocrHint, locale) : null;
+  if ((captionShield && !captionShield.safe) || (ocrShield && !ocrShield.safe)) {
+    return null;
+  }
   const orbitLines =
     params.orbits.length > 0
       ? params.orbits.map((o) => `${o.id} (${o.name}): ${o.description}`).join('\n')
@@ -897,8 +931,8 @@ export async function analyzeImageWithVision(params: {
           '- If the image shows websites, services, apps, or useful tools — include their exact official URLs (only if confident in the domain) and 1 helpful sentence for each in both bodyMarkdown and links!',
           `- User local time is: ${formatLocalIsoNow(Date.now(), 'en')}. If the screenshot shows a personal appointment, ticket, reservation, meeting, or call with date/time — fill calendarEvent (startIso in local ISO without Z, endIso=null if end omitted, location if address/link shown). For ordinary screenshots and news keep calendarEvent=null.`,
           `Available sections:\n${orbitLines}`,
-          params.captionHint ? `User caption: ${redactSecrets(params.captionHint).slice(0, 400)}` : '',
-          params.ocrHint ? `OCR hint: ${redactSecrets(params.ocrHint).slice(0, 600)}` : '',
+          captionShield?.text ? `User caption: ${captionShield.text.slice(0, 400)}` : '',
+          ocrShield?.text ? `OCR hint: ${ocrShield.text.slice(0, 600)}` : '',
         ]
       : [
           'Ты — визуальный аналитик личной базы знаний Kapsula.',
@@ -910,8 +944,8 @@ export async function analyzeImageWithVision(params: {
           '- Если на изображении показаны сайты, сервисы, приложения или полезные инструменты — укажи их точные официальные URL (только если уверен в домене) и по 1 полезному предложению про каждый прямо в bodyMarkdown и в массиве links!',
           `- Сейчас у пользователя локальное время: ${formatLocalIsoNow(Date.now(), 'ru')}. Если на скрине есть личная запись к врачу/мастеру, билет, бронь, встреча или созвон с датой/временем — заполни calendarEvent (startIso в локальном ISO без Z, endIso=null если окончание не указано, location если есть адрес/ссылка). Для обычных скриншотов и новостей оставляй calendarEvent=null.`,
           `Доступные разделы:\n${orbitLines}`,
-          params.captionHint ? `Подпись пользователя: ${redactSecrets(params.captionHint).slice(0, 400)}` : '',
-          params.ocrHint ? `Подсказка распознанного текста: ${redactSecrets(params.ocrHint).slice(0, 600)}` : '',
+          captionShield?.text ? `Подпись пользователя: ${captionShield.text.slice(0, 400)}` : '',
+          ocrShield?.text ? `Подсказка распознанного текста: ${ocrShield.text.slice(0, 600)}` : '',
         ]
   )
     .filter(Boolean)
@@ -1029,7 +1063,14 @@ export async function analyzeImageWithVision(params: {
           : (inTok / 1_000_000) * 0.15 + (outTok / 1_000_000) * 0.6;
     }
 
-    params.repo.logAiUsage(route.provider, modelName, inTok, outTok, costUsd);
+    params.repo.logAiUsage(
+      route.provider,
+      modelName,
+      inTok,
+      outTok,
+      costUsd,
+      route.mode === 'cloud_proxy'
+    );
     const parsed = parseJsonObjectFromText(rawText);
     if (!parsed) return null;
 
@@ -1195,9 +1236,16 @@ export async function synthesizeNotesWithAi(params: {
         table: 'Оформи сравнительную или сводную Markdown-таблицу (`| Поле | Значение | ... |`) с выжимкой сверху.',
       };
 
-  const sourceDump = safeItems
-    .map((item, idx) =>
-      redactSecrets(
+  const instructionShield = params.instruction
+    ? sanitizeForCloudAi(params.instruction, locale)
+    : null;
+  if (instructionShield && !instructionShield.safe) {
+    return buildLocalFallback();
+  }
+
+  const safeDumpParts = safeItems
+    .map((item, idx) => {
+      const shield = sanitizeForCloudAi(
         [
           `--- ${isEn ? 'Source' : 'Источник'} #${idx + 1} (id=${item.id}) ---`,
           `${isEn ? 'Title' : 'Заголовок'}: ${decodeHtmlEntities(item.title)}`,
@@ -1205,11 +1253,22 @@ export async function synthesizeNotesWithAi(params: {
           `${isEn ? 'Text' : 'Текст'}:\n${decodeHtmlEntities(item.body || item.summary || item.mediaMeta?.transcript || '')}`,
         ]
           .filter(Boolean)
-          .join('\n')
-      )
-    )
-    .join('\n\n')
-    .slice(0, 14_000);
+          .join('\n'),
+        locale
+      );
+      return shield.safe ? shield.text : null;
+    })
+    .filter((chunk): chunk is string => Boolean(chunk));
+
+  if (safeDumpParts.length === 0) {
+    return buildLocalFallback();
+  }
+
+  const sourceDump = safeDumpParts.join('\n\n').slice(0, 14_000);
+  const fullDumpShield = sanitizeForCloudAi(sourceDump, locale);
+  if (!fullDumpShield.safe) {
+    return buildLocalFallback();
+  }
 
   const systemPrompt = (
     isEn
@@ -1234,8 +1293,10 @@ export async function synthesizeNotesWithAi(params: {
   ).join('\n');
 
   const userPrompt = [
-    params.instruction ? `${isEn ? 'User instruction' : 'Пожелание пользователя'}: ${redactSecrets(params.instruction)}` : '',
-    `${isEn ? `Source notes (${safeItems.length})` : `Исходные записи (${safeItems.length})`}:\n\n${sourceDump}`,
+    instructionShield?.text
+      ? `${isEn ? 'User instruction' : 'Пожелание пользователя'}: ${instructionShield.text}`
+      : '',
+    `${isEn ? `Source notes (${safeDumpParts.length})` : `Исходные записи (${safeDumpParts.length})`}:\n\n${fullDumpShield.text}`,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -1252,7 +1313,14 @@ export async function synthesizeNotesWithAi(params: {
       timeoutMs: 35_000,
       fetchFn: params.fetchFn,
     });
-    params.repo.logAiUsage(route.provider, res.model, res.inputTokens, res.outputTokens, res.costUsd);
+    params.repo.logAiUsage(
+      route.provider,
+      res.model,
+      res.inputTokens,
+      res.outputTokens,
+      res.costUsd,
+      route.mode === 'cloud_proxy'
+    );
     const p = res.parsed;
     if (!p || typeof p.body !== 'string' || !p.body.trim()) {
       return buildLocalFallback();
@@ -1395,15 +1463,20 @@ export async function previewSmartTriageWithAi(params: {
       .filter((it) => it.dna !== 'secret' && it.orbit === o.id)
       .slice(0, 6)
       .map((it) => {
-        const safeTitle = redactSecrets(cleanBrokenTextArtifacts(it.title || '', true));
-        const safeSummary = it.summary
-          ? redactSecrets(cleanBrokenTextArtifacts(it.summary, true)).slice(0, 60)
-          : '';
-        return `"${safeTitle}"${safeSummary ? ` (${safeSummary})` : ''}`;
-      });
+        const titleShield = sanitizeForCloudAi(cleanBrokenTextArtifacts(it.title || '', true), locale);
+        if (!titleShield.safe) return null;
+        const summaryShield = it.summary
+          ? sanitizeForCloudAi(cleanBrokenTextArtifacts(it.summary, true), locale)
+          : { safe: true, text: '' };
+        const safeSummary = summaryShield.safe ? summaryShield.text.slice(0, 60) : '';
+        return `"${titleShield.text}"${safeSummary ? ` (${safeSummary})` : ''}`;
+      })
+      .filter((sample): sample is string => Boolean(sample));
+    const safeOrbitName = sanitizeForCloudAi(o.name, locale);
+    const safeOrbitDesc = sanitizeForCloudAi(o.description || '', locale);
     return isEn
-      ? `- Section id="${o.id}" | name="${redactSecrets(o.name)}" | description="${redactSecrets(o.description)}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
-      : `- Раздел id="${o.id}" | имя="${redactSecrets(o.name)}" | описание="${redactSecrets(o.description)}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
+      ? `- Section id="${o.id}" | name="${safeOrbitName.safe ? safeOrbitName.text : o.id}" | description="${safeOrbitDesc.safe ? safeOrbitDesc.text : ''}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
+      : `- Раздел id="${o.id}" | имя="${safeOrbitName.safe ? safeOrbitName.text : o.id}" | описание="${safeOrbitDesc.safe ? safeOrbitDesc.text : ''}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
   });
 
   const boardExamples = params.boards.map((b) => {
@@ -1411,32 +1484,58 @@ export async function previewSmartTriageWithAi(params: {
       .filter((it) => it.dna !== 'secret' && it.focusBoardId === b.id)
       .slice(0, 6)
       .map((it) => {
-        const safeTitle = redactSecrets(cleanBrokenTextArtifacts(it.title || '', true));
-        const safeBody = it.body
-          ? redactSecrets(cleanBrokenTextArtifacts(it.body, true)).slice(0, 50)
-          : '';
-        return `"${safeTitle}"${safeBody ? ` (${safeBody})` : ''}`;
-      });
+        const titleShield = sanitizeForCloudAi(cleanBrokenTextArtifacts(it.title || '', true), locale);
+        if (!titleShield.safe) return null;
+        const bodyShield = it.body
+          ? sanitizeForCloudAi(cleanBrokenTextArtifacts(it.body, true), locale)
+          : { safe: true, text: '' };
+        const safeBody = bodyShield.safe ? bodyShield.text.slice(0, 50) : '';
+        return `"${titleShield.text}"${safeBody ? ` (${safeBody})` : ''}`;
+      })
+      .filter((sample): sample is string => Boolean(sample));
+    const safeBoardName = sanitizeForCloudAi(b.name, locale);
+    const safeBoardDesc = sanitizeForCloudAi(b.description || '', locale);
     return isEn
-      ? `- Collection id="${b.id}" | name="${redactSecrets(b.name)}" | description="${redactSecrets(b.description || '')}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
-      : `- Подборка id="${b.id}" | имя="${redactSecrets(b.name)}" | описание="${redactSecrets(b.description || '')}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
+      ? `- Collection id="${b.id}" | name="${safeBoardName.safe ? safeBoardName.text : b.id}" | description="${safeBoardDesc.safe ? safeBoardDesc.text : ''}" | live examples: ${samples.length > 0 ? samples.join('; ') : 'empty so far'}`
+      : `- Подборка id="${b.id}" | имя="${safeBoardName.safe ? safeBoardName.text : b.id}" | описание="${safeBoardDesc.safe ? safeBoardDesc.text : ''}" | живые примеры внутри: ${samples.length > 0 ? samples.join('; ') : 'пока пусто'}`;
   });
 
   const orbitNameLookup = new Map(params.orbits.map((o) => [o.id, o.name]));
-  const inboxDump = targetPool.map((it) =>
-    redactSecrets(
-      JSON.stringify({
-        id: it.id,
-        dna: it.dna,
-        currentOrbitId: it.orbit || null,
-        currentOrbitName: it.orbit ? orbitNameLookup.get(it.orbit) ?? it.orbit : null,
-        currentBoardId: it.focusBoardId ?? null,
-        title: cleanBrokenTextArtifacts(it.title, true),
-        snippet: cleanBrokenTextArtifacts(it.body || it.summary || it.url || '', true).slice(0, 150),
-        tags: it.tags,
-      })
-    )
-  );
+  const safeTargetPool: VaultItem[] = [];
+  const inboxDump: string[] = [];
+  for (const it of targetPool) {
+    const rawTitle = cleanBrokenTextArtifacts(it.title, true);
+    const rawSnippet = cleanBrokenTextArtifacts(it.body || it.summary || it.url || '', true).slice(0, 150);
+    const titleShield = sanitizeForCloudAi(rawTitle, locale);
+    const snippetShield = sanitizeForCloudAi(rawSnippet, locale);
+    if (!titleShield.safe || !snippetShield.safe) continue;
+    const serialized = JSON.stringify({
+      id: it.id,
+      dna: it.dna,
+      currentOrbitId: it.orbit || null,
+      currentOrbitName: it.orbit ? orbitNameLookup.get(it.orbit) ?? it.orbit : null,
+      currentBoardId: it.focusBoardId ?? null,
+      title: titleShield.text,
+      snippet: snippetShield.text,
+      tags: it.tags,
+    });
+    const rowShield = sanitizeForCloudAi(serialized, locale);
+    if (!rowShield.safe) continue;
+    safeTargetPool.push(it);
+    inboxDump.push(rowShield.text);
+  }
+  if (inboxDump.length === 0) {
+    return {
+      configured: true,
+      usedCloud: false,
+      message: isEn
+        ? 'No non-sensitive items left to organize via cloud AI.'
+        : 'Не осталось обычных записей без конфиденциальных данных для облачного разбора.',
+      suggestions: [],
+      newOrbits: [],
+      mergeGroups: [],
+    };
+  }
 
   const systemPrompt = (
     isEn
@@ -1476,13 +1575,20 @@ export async function previewSmartTriageWithAi(params: {
       accessToken: route.accessToken,
       systemPrompt,
       userPrompt: isEn
-        ? `Items to review (${targetPool.length}):\n${inboxDump.join('\n')}`
-        : `Записи для проверки (${targetPool.length}):\n${inboxDump.join('\n')}`,
+        ? `Items to review (${safeTargetPool.length}):\n${inboxDump.join('\n')}`
+        : `Записи для проверки (${safeTargetPool.length}):\n${inboxDump.join('\n')}`,
       maxTokens: 4096,
       timeoutMs: 40_000,
       fetchFn: params.fetchFn,
     });
-    params.repo.logAiUsage(route.provider, res.model, res.inputTokens, res.outputTokens, res.costUsd);
+    params.repo.logAiUsage(
+      route.provider,
+      res.model,
+      res.inputTokens,
+      res.outputTokens,
+      res.costUsd,
+      route.mode === 'cloud_proxy'
+    );
 
     const parsed = res.parsed;
     if (!parsed) {
@@ -1498,7 +1604,7 @@ export async function previewSmartTriageWithAi(params: {
       };
     }
 
-    const itemMap = new Map(targetPool.map((i) => [i.id, i]));
+    const itemMap = new Map(safeTargetPool.map((i) => [i.id, i]));
     const orbitMap = new Map(params.orbits.map((o) => [o.id, o]));
     const boardMap = new Map(params.boards.map((b) => [b.id, b]));
 

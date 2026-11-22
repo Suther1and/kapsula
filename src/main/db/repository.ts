@@ -12,6 +12,7 @@ import {
   getOrganicSectionCatalog,
 } from '@shared/constants';
 import { detectLocale, normalizeLocale, translate } from '@shared/i18n';
+import { isUntitledPlaceholderTitle } from '@shared/item-helpers';
 import {
   extractWikiLinkTitles,
   getDefaultTaskBoardColumns,
@@ -108,6 +109,7 @@ export interface CreateItemRecordInput {
   canvasFrame?: string | null;
   annotations?: CanvasAnnotation[];
   linksOut?: string[];
+  skipSyncDirty?: boolean;
 }
 
 export interface UpdateItemPatch {
@@ -147,6 +149,7 @@ export interface UpdateItemPatch {
   canvasFrame?: string | null;
   annotations?: CanvasAnnotation[];
   linksOut?: string[];
+  skipSyncDirty?: boolean;
 }
 
 function levenshtein(a: string, b: string): number {
@@ -317,6 +320,7 @@ interface ItemRow {
   canvas_frame?: string | null;
   annotations_json?: string | null;
   links_out_json?: string | null;
+  title_norm?: string | null;
   sync_version?: number | null;
   last_device_id?: string | null;
 }
@@ -411,12 +415,24 @@ export class VaultRepository {
   public readonly db: DatabaseSync;
   private txDepth = 0;
   private tagUniverseCache: string[] | null = null;
+  private vaultMutationVersion = 0;
+  private tasksCache: { version: number; locale: AppLocale; tasks: VaultTaskEntry[] } | null = null;
+  private relatedCache = new Map<
+    string,
+    Array<{ item: VaultItem; reason: string; score: number }>
+  >();
   private ftsDeleteStmt: ReturnType<DatabaseSync['prepare']> | null = null;
   private ftsInsertStmt: ReturnType<DatabaseSync['prepare']> | null = null;
   private mutationListener: ((entityType: SyncEntityType, entityId: string) => void) | null = null;
   private dirtySeqCounter = 0;
   private localDeviceId: string | null = null;
   private defaultOsLocale?: string | null;
+
+  private bumpVaultMutationVersion(): void {
+    this.vaultMutationVersion += 1;
+    this.tasksCache = null;
+    this.relatedCache.clear();
+  }
 
   public setDefaultOsLocale(osLocale?: string | null): void {
     this.defaultOsLocale = osLocale ?? undefined;
@@ -452,7 +468,12 @@ export class VaultRepository {
     return prevUpdatedAt && prevUpdatedAt >= now ? prevUpdatedAt + 1 : now;
   }
 
+  public markItemDirty(itemId: string): void {
+    this.markDirty('item', itemId);
+  }
+
   public markDirty(entityType: SyncEntityType, entityId: string): void {
+    this.bumpVaultMutationVersion();
     try {
       const seq = this.nextDirtySeq();
       this.db
@@ -470,7 +491,7 @@ export class VaultRepository {
 
   constructor(dbPath: string) {
     if (dbPath !== ':memory:') {
-      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
     }
     this.db = new DatabaseSync(dbPath);
     this.db.function('lower_utf', (val: unknown) =>
@@ -478,15 +499,10 @@ export class VaultRepository {
     );
     initSchema(this.db);
     this.localDeviceId = this.getSyncState('device_id');
-    if (this.getSetting('fts_secret_meta_v1') !== 'true') {
+    if (this.getSetting('fts_secret_exclude_v1') !== 'true') {
       this.inTx(() => {
-        const secretRows = this.db
-          .prepare("SELECT * FROM items WHERE dna = 'secret'")
-          .all() as unknown as ItemRow[];
-        for (const r of secretRows) {
-          this.syncFtsRow(r);
-        }
-        this.setSetting('fts_secret_meta_v1', 'true');
+        this.db.exec("DELETE FROM items_fts WHERE id IN (SELECT id FROM items WHERE dna = 'secret')");
+        this.setSetting('fts_secret_exclude_v1', 'true');
       });
     }
   }
@@ -494,22 +510,68 @@ export class VaultRepository {
   private resolveWikiLinkIds(body: string | null | undefined, excludeId?: string): string[] {
     const titles = extractWikiLinkTitles(body);
     if (titles.length === 0) return [];
-    const stmt = this.db.prepare(
-      `SELECT id FROM items
-       WHERE deleted_at IS NULL
-         AND purged_at IS NULL
-         AND dna != 'secret'
-         AND lower_utf(trim(title)) = ?
-       ORDER BY created_at DESC
-       LIMIT 1`
-    );
-    const seen = new Set<string>();
-    const ids: string[] = [];
+    const orderedNorms: string[] = [];
+    const normSeen = new Set<string>();
     for (const rawTitle of titles) {
-      const target = stmt.get(rawTitle.trim().toLowerCase()) as { id: string } | undefined;
-      if (target && target.id !== excludeId && !seen.has(target.id)) {
-        seen.add(target.id);
-        ids.push(target.id);
+      const norm = rawTitle.trim().toLowerCase();
+      if (norm && !normSeen.has(norm)) {
+        normSeen.add(norm);
+        orderedNorms.push(norm);
+      }
+    }
+    if (orderedNorms.length === 0) return [];
+
+    const placeholders = orderedNorms.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT id, title_norm FROM items
+         WHERE deleted_at IS NULL
+           AND purged_at IS NULL
+           AND dna != 'secret'
+           AND title_norm IN (${placeholders})
+         ORDER BY created_at DESC`
+      )
+      .all(...orderedNorms) as Array<{ id: string; title_norm: string | null }>;
+
+    const bestByNorm = new Map<string, string>();
+    for (const row of rows) {
+      if (row.title_norm && !bestByNorm.has(row.title_norm)) {
+        bestByNorm.set(row.title_norm, row.id);
+      }
+    }
+
+    // Fallback for legacy/raw-SQL rows inserted without title_norm
+    if (bestByNorm.size < orderedNorms.length) {
+      const hasNullNorm = Boolean(
+        this.db.prepare('SELECT 1 FROM items WHERE title_norm IS NULL LIMIT 1').get()
+      );
+      if (hasNullNorm) {
+        const legacyStmt = this.db.prepare(
+          `SELECT id FROM items
+           WHERE deleted_at IS NULL
+             AND purged_at IS NULL
+             AND dna != 'secret'
+             AND title_norm IS NULL
+             AND lower_utf(trim(title)) = ?
+           ORDER BY created_at DESC
+           LIMIT 1`
+        );
+        for (const norm of orderedNorms) {
+          if (!bestByNorm.has(norm)) {
+            const hit = legacyStmt.get(norm) as { id: string } | undefined;
+            if (hit) bestByNorm.set(norm, hit.id);
+          }
+        }
+      }
+    }
+
+    const seenIds = new Set<string>();
+    const ids: string[] = [];
+    for (const norm of orderedNorms) {
+      const targetId = bestByNorm.get(norm);
+      if (targetId && targetId !== excludeId && !seenIds.has(targetId)) {
+        seenIds.add(targetId);
+        ids.push(targetId);
       }
     }
     return ids;
@@ -581,9 +643,15 @@ export class VaultRepository {
   }
 
   private syncFtsRow(row: ItemRow): void {
+    if (!this.ftsDeleteStmt) {
+      this.ftsDeleteStmt = this.db.prepare('DELETE FROM items_fts WHERE id = ?');
+    }
+    this.ftsDeleteStmt.run(row.id);
+    if (row.dna === 'secret') {
+      return;
+    }
     const tags = safeParseJson<string[]>(row.tags_json, []).join(' ');
     const meta = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
-    const secretMeta = safeParseJson<SecretMeta | null>(row.secret_meta_json, null);
     const extraSearch = [
       row.ocr_text,
       meta?.transcript ?? '',
@@ -594,21 +662,14 @@ export class VaultRepository {
       meta?.contactEmail ?? '',
       ...(meta?.keyPoints ?? []),
       ...(meta?.actionItems ?? []),
-      secretMeta?.service ?? '',
-      secretMeta?.cardBrand ?? '',
-      secretMeta?.last4 ?? '',
     ]
       .filter(Boolean)
       .join('\n');
-    if (!this.ftsDeleteStmt) {
-      this.ftsDeleteStmt = this.db.prepare('DELETE FROM items_fts WHERE id = ?');
-    }
     if (!this.ftsInsertStmt) {
       this.ftsInsertStmt = this.db.prepare(
         'INSERT INTO items_fts (id, title, summary, body, ocr_text, url, domain, tags_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       );
     }
-    this.ftsDeleteStmt.run(row.id);
     this.ftsInsertStmt.run(
       row.id,
       row.title,
@@ -644,7 +705,7 @@ export class VaultRepository {
         .prepare(
           `INSERT INTO items (
             id, dna, sub_kind, orbit, mode_captured, focus_board_id,
-            title, body, summary, url, domain, platform,
+            title, title_norm, body, summary, url, domain, platform,
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
@@ -652,7 +713,7 @@ export class VaultRepository {
             remind_at, reminded_at, created_at, updated_at, content_updated_at,
             deleted_at, purged_at, canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame,
             annotations_json, links_out_json, sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
         )
         .run(
           id,
@@ -662,6 +723,7 @@ export class VaultRepository {
           input.modeCaptured,
           input.focusBoardId ?? null,
           input.title,
+          (input.title || '').trim().toLowerCase(),
           bodyText,
           input.summary ?? '',
           input.url ?? null,
@@ -705,11 +767,11 @@ export class VaultRepository {
       const createdRow = this.db.prepare('SELECT * FROM items WHERE id = ?').get(id) as unknown as ItemRow;
       this.syncFtsRow(createdRow);
       this.tagUniverseCache = null;
+      if (!input.isDemo && !input.skipSyncDirty) {
+        this.markDirty('item', createdRow.id);
+      }
       return createdRow;
     });
-    if (!input.isDemo) {
-      this.markDirty('item', row.id);
-    }
     return mapRowToItem(row);
   }
 
@@ -750,6 +812,67 @@ export class VaultRepository {
     return row ? { ...row } : null;
   }
 
+  public getEntitySyncStamp(
+    entityType: SyncEntityType | string,
+    entityId: string
+  ): { updatedAt: number; syncVersion: number; deletedAt: number | null } | null {
+    if (entityType === 'item') {
+      const row = this.getRawRowById(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updated_at,
+        syncVersion: row.sync_version ?? 1,
+        deletedAt: row.purged_at ?? row.deleted_at ?? null,
+      };
+    }
+    if (entityType === 'orbit') {
+      const row = this.getRawOrbitById(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updated_at ?? row.created_at ?? 0,
+        syncVersion: row.sync_version ?? 1,
+        deletedAt: row.deleted_at ?? null,
+      };
+    }
+    if (entityType === 'focus_board') {
+      const row = this.getRawFocusBoardById(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updated_at ?? row.created_at ?? 0,
+        syncVersion: row.sync_version ?? 1,
+        deletedAt: row.deleted_at ?? null,
+      };
+    }
+    if (entityType === 'calendar_event') {
+      const row = this.getRawCalendarEventById(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'item_revision') {
+      const row = this.getRawItemRevisionById(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updated_at || row.created_at,
+        syncVersion: row.sync_version ?? 1,
+        deletedAt: row.deleted_at ?? null,
+      };
+    }
+    if (entityType === 'workspace_prefs') {
+      const updated = Number(this.getSetting('workspace_prefs_updated_at') || '0') || 0;
+      if (updated <= 0) return null;
+      return {
+        updatedAt: updated,
+        syncVersion: Number(this.getSetting('workspace_prefs_sync_version') || '1') || 1,
+        deletedAt: null,
+      };
+    }
+    return null;
+  }
+
   public restoreRawRow(row: ItemRow): VaultItem {
     const existingById = this.db.prepare('SELECT * FROM items WHERE id = ?').get(row.id) as
       | ItemRow
@@ -783,13 +906,15 @@ export class VaultRepository {
         .prepare(
           `INSERT INTO items (
             id, dna, sub_kind, orbit, mode_captured, focus_board_id,
-            title, body, summary, url, domain, platform,
+            title, title_norm, body, summary, url, domain, platform,
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
             content_hash, ai_status, ai_confidence, is_pinned, is_archived, is_demo,
-            remind_at, reminded_at, created_at, updated_at, content_updated_at, deleted_at, purged_at, sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
+            remind_at, reminded_at, created_at, updated_at, content_updated_at, deleted_at, purged_at,
+            canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame, annotations_json, links_out_json,
+            sync_version, last_device_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           row.id,
@@ -799,6 +924,7 @@ export class VaultRepository {
           row.mode_captured,
           safeBoardId,
           row.title,
+          (row.title || '').trim().toLowerCase(),
           row.body,
           row.summary,
           row.url,
@@ -830,17 +956,24 @@ export class VaultRepository {
           row.created_at,
           now,
           row.content_updated_at ?? row.updated_at ?? row.created_at,
+          row.canvas_x ?? null,
+          row.canvas_y ?? null,
+          row.canvas_w ?? null,
+          row.canvas_h ?? null,
+          row.canvas_frame ?? null,
+          row.annotations_json ?? '[]',
+          row.links_out_json ?? '[]',
           nextSyncVersion,
           this.localDeviceId
         );
       const next = this.db.prepare('SELECT * FROM items WHERE id = ?').get(row.id) as unknown as ItemRow;
       this.syncFtsRow(next);
       this.tagUniverseCache = null;
+      if (!next.is_demo) {
+        this.markDirty('item', next.id);
+      }
       return next;
     });
-    if (!inserted.is_demo) {
-      this.markDirty('item', inserted.id);
-    }
     return mapRowToItem(inserted);
   }
 
@@ -866,20 +999,18 @@ export class VaultRepository {
     const titleChanged =
       patch.title !== undefined &&
       patch.title !== current.title &&
-      current.title !== 'Новая заметка' &&
+      !isUntitledPlaceholderTitle(current.title) &&
       patch.aiStatus === undefined;
     const bodyChanged =
       patch.body !== undefined &&
       patch.body !== current.body &&
-      current.body !== '' &&
       patch.aiStatus === undefined;
     const secretChanged =
       patch.encryptedPayload !== undefined && patch.encryptedPayload !== current.encrypted_payload;
     const contentChanged =
       titleChanged ||
       bodyChanged ||
-      secretChanged ||
-      (patch.body !== undefined && current.body === '' && patch.aiStatus === undefined);
+      secretChanged;
 
     const nextContentUpdatedAt =
       contentChanged && !opts?.preserveContentUpdatedAt
@@ -893,85 +1024,96 @@ export class VaultRepository {
         ? JSON.stringify(patch.linksOut)
         : (current.links_out_json ?? '[]');
     if (patch.body !== undefined && current.dna !== 'secret') {
-      const oldWikiIds = new Set(this.resolveWikiLinkIds(current.body, id));
-      const newWikiIds = this.resolveWikiLinkIds(patch.body, id);
-      const baseLinks =
-        patch.linksOut !== undefined
-          ? patch.linksOut
-          : safeParseJson<string[]>(current.links_out_json, []);
-      const preserved = baseLinks.filter((linkId) => !oldWikiIds.has(linkId));
-      nextLinksOutJson = JSON.stringify(Array.from(new Set([...preserved, ...newWikiIds])));
-    }
-
-    // Auto-checkpoint item_revisions on meaningful title/body changes for non-secret items
-    if (
-      !opts?.skipAutoRevision &&
-      current.dna !== 'secret' &&
-      (patch.title !== undefined || patch.body !== undefined) &&
-      (nextTitle !== current.title || nextBody !== current.body)
-    ) {
-      const lastRev = this.db
-        .prepare(
-          `SELECT id, title, content, source, content_hash, created_at
-           FROM item_revisions
-           WHERE item_id = ? AND deleted_at IS NULL
-           ORDER BY created_at DESC, rowid DESC
-           LIMIT 1`
-        )
-        .get(id) as
-        | {
-            id: string;
-            title: string | null;
-            content: string;
-            source: ItemRevisionSource;
-            content_hash: string | null;
-            created_at: number;
-          }
-        | undefined;
-
-      const shouldCheckpoint =
-        !lastRev ||
-        now - lastRev.created_at >= AUTO_REVISION_INTERVAL_MS ||
-        Math.abs(nextBody.length - (lastRev.content?.length ?? 0)) >= AUTO_REVISION_LENGTH_DELTA;
-
-      if (shouldCheckpoint) {
-        const lastHash =
-          lastRev?.content_hash ??
-          (lastRev ? computeRevisionHash(lastRev.title, lastRev.content) : null);
-        const prevHash = computeRevisionHash(current.title, current.body);
-        const nextHash = computeRevisionHash(nextTitle, nextBody);
-        const isRecentSpecialRev =
-          Boolean(lastRev) &&
-          (lastRev!.source === 'beautify' ||
-            lastRev!.source === 'voice' ||
-            lastRev!.source === 'restore') &&
-          now - lastRev!.created_at < 5000;
-
-        if ((current.body.trim().length > 0 || current.title.trim().length > 0) && prevHash !== lastHash) {
-          this.saveItemRevision(
-            {
-              itemId: id,
-              title: current.title,
-              content: current.body,
-              source: 'auto',
-            },
-            { skipDirty: current.is_demo === 1 }
-          );
-        } else if (nextBody.trim().length > 0 && nextHash !== lastHash && !isRecentSpecialRev) {
-          this.saveItemRevision(
-            {
-              itemId: id,
-              title: nextTitle,
-              content: nextBody,
-              source: 'auto',
-            },
-            { skipDirty: current.is_demo === 1 }
-          );
-        }
+      const oldNormSet = new Set(
+        extractWikiLinkTitles(current.body).map((t) => t.trim().toLowerCase()).filter(Boolean)
+      );
+      const newNormSet = new Set(
+        extractWikiLinkTitles(patch.body).map((t) => t.trim().toLowerCase()).filter(Boolean)
+      );
+      const wikiTitlesChanged =
+        oldNormSet.size !== newNormSet.size ||
+        Array.from(oldNormSet).some((t) => !newNormSet.has(t));
+      if (wikiTitlesChanged) {
+        const oldWikiIds = new Set(this.resolveWikiLinkIds(current.body, id));
+        const newWikiIds = this.resolveWikiLinkIds(patch.body, id);
+        const baseLinks =
+          patch.linksOut !== undefined
+            ? patch.linksOut
+            : safeParseJson<string[]>(current.links_out_json, []);
+        const preserved = baseLinks.filter((linkId) => !oldWikiIds.has(linkId));
+        nextLinksOutJson = JSON.stringify(Array.from(new Set([...preserved, ...newWikiIds])));
       }
     }
 
     const updated = this.inTx(() => {
+      // Auto-checkpoint item_revisions on meaningful title/body changes for non-secret items inside the same transaction
+      if (
+        !opts?.skipAutoRevision &&
+        current.dna !== 'secret' &&
+        (patch.title !== undefined || patch.body !== undefined) &&
+        (nextTitle !== current.title || nextBody !== current.body)
+      ) {
+        const lastRev = this.db
+          .prepare(
+            `SELECT id, title, content, source, content_hash, created_at
+             FROM item_revisions
+             WHERE item_id = ? AND deleted_at IS NULL
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT 1`
+          )
+          .get(id) as
+          | {
+              id: string;
+              title: string | null;
+              content: string;
+              source: ItemRevisionSource;
+              content_hash: string | null;
+              created_at: number;
+            }
+          | undefined;
+
+        const shouldCheckpoint =
+          !lastRev ||
+          now - lastRev.created_at >= AUTO_REVISION_INTERVAL_MS ||
+          Math.abs(nextBody.length - (lastRev.content?.length ?? 0)) >= AUTO_REVISION_LENGTH_DELTA;
+
+        if (shouldCheckpoint) {
+          const lastHash =
+            lastRev?.content_hash ??
+            (lastRev ? computeRevisionHash(lastRev.title, lastRev.content) : null);
+          const prevHash = computeRevisionHash(current.title, current.body);
+          const nextHash = computeRevisionHash(nextTitle, nextBody);
+          const isRecentSpecialRev =
+            Boolean(lastRev) &&
+            (lastRev!.source === 'beautify' ||
+              lastRev!.source === 'voice' ||
+              lastRev!.source === 'restore') &&
+            now - lastRev!.created_at < 5000;
+
+          if ((current.body.trim().length > 0 || current.title.trim().length > 0) && prevHash !== lastHash) {
+            this.saveItemRevision(
+              {
+                itemId: id,
+                title: current.title,
+                content: current.body,
+                source: 'auto',
+              },
+              { skipDirty: current.is_demo === 1 }
+            );
+          } else if (nextBody.trim().length > 0 && nextHash !== lastHash && !isRecentSpecialRev) {
+            this.saveItemRevision(
+              {
+                itemId: id,
+                title: nextTitle,
+                content: nextBody,
+                source: 'auto',
+              },
+              { skipDirty: current.is_demo === 1 }
+            );
+          }
+        }
+      }
+
       this.db
         .prepare(
           `UPDATE items SET
@@ -980,6 +1122,7 @@ export class VaultRepository {
             orbit = ?,
             focus_board_id = ?,
             title = ?,
+            title_norm = ?,
             body = ?,
             summary = ?,
             url = ?,
@@ -1023,6 +1166,7 @@ export class VaultRepository {
           patch.orbit !== undefined ? patch.orbit : current.orbit,
           patch.focusBoardId !== undefined ? patch.focusBoardId : current.focus_board_id,
           nextTitle,
+          (nextTitle || '').trim().toLowerCase(),
           nextBody,
           patch.summary ?? current.summary,
           patch.url !== undefined ? patch.url : current.url,
@@ -1078,11 +1222,11 @@ export class VaultRepository {
       const next = this.db.prepare('SELECT * FROM items WHERE id = ?').get(id) as unknown as ItemRow;
       this.syncFtsRow(next);
       this.tagUniverseCache = null;
+      if (!next.is_demo) {
+        this.markDirty('item', next.id);
+      }
       return next;
     });
-    if (!updated.is_demo) {
-      this.markDirty('item', updated.id);
-    }
     return mapRowToItem(updated);
   }
 
@@ -1108,11 +1252,12 @@ export class VaultRepository {
         .run(now, now, this.localDeviceId, id);
       (this.ftsDeleteStmt ??= this.db.prepare('DELETE FROM items_fts WHERE id = ?')).run(id);
       this.tagUniverseCache = null;
-      return Number(res.changes) > 0;
+      const changed = Number(res.changes) > 0;
+      if (changed && !row.is_demo) {
+        this.markDirty('item', id);
+      }
+      return changed;
     });
-    if (deleted && !row.is_demo) {
-      this.markDirty('item', id);
-    }
     return deleted;
   }
 
@@ -1163,11 +1308,11 @@ export class VaultRepository {
       const next = this.db.prepare('SELECT * FROM items WHERE id = ?').get(id) as unknown as ItemRow;
       this.syncFtsRow(next);
       this.tagUniverseCache = null;
+      if (!next.is_demo) {
+        this.markDirty('item', next.id);
+      }
       return next;
     });
-    if (!restored.is_demo) {
-      this.markDirty('item', restored.id);
-    }
     return mapRowToItem(restored);
   }
 
@@ -1241,38 +1386,40 @@ export class VaultRepository {
         }
       }
       this.tagUniverseCache = null;
-    });
-
-    if (!row.is_demo) {
-      this.markDirty('item', id);
-      for (const revId of purgedRevisionIds) {
-        this.markDirty('item_revision', revId);
+      if (!row.is_demo) {
+        this.enqueuePendingBlobDeletes(freedMedia, id);
+        this.markDirty('item', id);
+        for (const revId of purgedRevisionIds) {
+          this.markDirty('item_revision', revId);
+        }
       }
-    }
+    });
 
     return { purged: true, freedMedia };
   }
 
   public emptyTrash(): { purgedCount: number; purgedIds: string[]; freedMedia: string[] } {
-    const trashed = this.db
-      .prepare('SELECT id FROM items WHERE deleted_at IS NOT NULL AND purged_at IS NULL')
-      .all() as Array<{ id: string }>;
-    const purgedIds: string[] = [];
-    const freedMediaSet = new Set<string>();
+    return this.inTx(() => {
+      const trashed = this.db
+        .prepare('SELECT id FROM items WHERE deleted_at IS NOT NULL AND purged_at IS NULL')
+        .all() as Array<{ id: string }>;
+      const purgedIds: string[] = [];
+      const freedMediaSet = new Set<string>();
 
-    for (const row of trashed) {
-      const res = this.purgeItemPermanently(row.id);
-      if (res.purged) {
-        purgedIds.push(row.id);
-        for (const m of res.freedMedia) freedMediaSet.add(m);
+      for (const row of trashed) {
+        const res = this.purgeItemPermanently(row.id);
+        if (res.purged) {
+          purgedIds.push(row.id);
+          for (const m of res.freedMedia) freedMediaSet.add(m);
+        }
       }
-    }
 
-    return {
-      purgedCount: purgedIds.length,
-      purgedIds,
-      freedMedia: Array.from(freedMediaSet),
-    };
+      return {
+        purgedCount: purgedIds.length,
+        purgedIds,
+        freedMedia: Array.from(freedMediaSet),
+      };
+    });
   }
 
   public purgeDeletedItem(id: string): boolean {
@@ -1282,17 +1429,34 @@ export class VaultRepository {
   public clearDemoItems(): number {
     return this.inTx(() => {
       const demoRows = this.db
-        .prepare('SELECT id FROM items WHERE is_demo = 1 AND deleted_at IS NULL')
+        .prepare('SELECT id FROM items WHERE is_demo = 1')
         .all() as Array<{ id: string }>;
       const ftsDel = (this.ftsDeleteStmt ??= this.db.prepare(
         'DELETE FROM items_fts WHERE id = ?'
       ));
+      const dirtyRevDel = this.db.prepare(
+        "DELETE FROM sync_dirty WHERE entity_type = 'item_revision' AND entity_id IN (SELECT id FROM item_revisions WHERE item_id = ?)"
+      );
+      const revDel = this.db.prepare('DELETE FROM item_revisions WHERE item_id = ?');
+      const dirtyItemDel = this.db.prepare(
+        "DELETE FROM sync_dirty WHERE entity_type = 'item' AND entity_id = ?"
+      );
+      const calUnlink = this.db.prepare(
+        'UPDATE calendar_events SET linked_item_id = NULL WHERE linked_item_id = ?'
+      );
       for (const r of demoRows) {
         ftsDel.run(r.id);
+        dirtyRevDel.run(r.id);
+        revDel.run(r.id);
+        dirtyItemDel.run(r.id);
+        calUnlink.run(r.id);
       }
       const res = this.db.prepare('DELETE FROM items WHERE is_demo = 1').run();
       this.setSetting('demo_dismissed', 'true');
       this.tagUniverseCache = null;
+      if (Number(res.changes) > 0) {
+        this.bumpVaultMutationVersion();
+      }
       return Number(res.changes);
     });
   }
@@ -1388,8 +1552,10 @@ export class VaultRepository {
     }
     if (q.tag) {
       const cleanTag = normalizeTagText(q.tag);
-      baseConditions.push('lower_utf(i.tags_json) LIKE ?');
-      baseParams.push(`%"${cleanTag}"%`);
+      if (cleanTag) {
+        baseConditions.push("lower_utf(i.tags_json) LIKE ? ESCAPE '\\'");
+        baseParams.push(`%"${escapeSqlLike(cleanTag)}"%`);
+      }
     }
     if (typeof q.createdBefore === 'number' && Number.isFinite(q.createdBefore)) {
       baseConditions.push('i.created_at < ?');
@@ -1449,20 +1615,29 @@ export class VaultRepository {
       }
     };
 
-    // 1. Gather bilingual FTS5 prefix candidates
+    // 1. Gather bilingual FTS5 prefix candidates (AND across token groups first so rare multi-token hits are never drowned by 400 common hits)
+    const tokenFtsGroups: string[] = [];
     const ftsSet = new Set<string>();
     for (const spec of tokenSpecs) {
+      const grpSet = new Set<string>();
       for (const v of spec.variants) {
         const sanitized = v.replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim();
         for (const word of sanitized.split(/\s+/)) {
-          if (word.length >= 2) ftsSet.add(`"${word}"*`);
+          if (word.length >= 2) {
+            const term = `"${word}"*`;
+            grpSet.add(term);
+            ftsSet.add(term);
+          }
         }
+      }
+      if (grpSet.size > 0) {
+        const grpList = Array.from(grpSet).slice(0, 12);
+        tokenFtsGroups.push(grpList.length === 1 ? grpList[0]! : `(${grpList.join(' OR ')})`);
       }
     }
     const ftsParts = Array.from(ftsSet).slice(0, 48);
 
-    if (ftsParts.length > 0) {
-      const ftsMatchExpr = ftsParts.join(' OR ');
+    const runFtsExpr = (expr: string) => {
       const ftsConditions = [
         ...baseConditions,
         'i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)',
@@ -1470,74 +1645,134 @@ export class VaultRepository {
       try {
         const rows = this.db
           .prepare(`SELECT i.* FROM items i WHERE ${ftsConditions.join(' AND ')} ${orderBy} LIMIT 400`)
-          .all(...baseParams, ftsMatchExpr) as unknown as ItemRow[];
+          .all(...baseParams, expr) as unknown as ItemRow[];
         addRows(rows);
       } catch {
         // Fallback to LIKE scan below for edge-case queries
       }
+    };
+
+    if (tokenFtsGroups.length > 1) {
+      runFtsExpr(tokenFtsGroups.slice(0, 8).join(' AND '));
+    }
+    if ((candidateRows.size === 0 || tokenFtsGroups.length <= 1) && ftsParts.length > 0) {
+      runFtsExpr(ftsParts.join(' OR '));
     }
 
-    // 2. Gather SQL LIKE bilingual variant, domain, secret_meta, OCR, stripped digit & semantic type candidates
+    // 2. Targeted semantic/digit predicates + gated 9-column SQL LIKE fallback for FTS edge cases
     const orClauses: string[] = [];
     const orParams: Array<string | number> = [];
+    const targetedClauses: string[] = [];
+    const targetedParams: Array<string | number> = [];
+    const perTokenLikeClauses: string[] = [];
+    const perTokenLikeParams: Array<string | number> = [];
     const seenLikeTerms = new Set<string>();
+    const makeLikePred = (term: string): { clause: string; params: string[] } => {
+      const pat = `%${escapeSqlLike(term)}%`;
+      return {
+        clause: `(
+          lower_utf(i.title) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.summary) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.body) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.ocr_text) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.secret_meta_json, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.url, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.domain, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.tags_json) LIKE ? ESCAPE '\\'
+        )`,
+        params: [pat, pat, pat, pat, pat, pat, pat, pat, pat],
+      };
+    };
     const addTextLike = (term: string) => {
       if (!term || seenLikeTerms.has(term) || seenLikeTerms.size >= 42) return;
       seenLikeTerms.add(term);
-      const pat = `%${term}%`;
-      orClauses.push(`(
-        lower_utf(i.title) LIKE ?
-        OR lower_utf(i.summary) LIKE ?
-        OR lower_utf(i.body) LIKE ?
-        OR lower_utf(i.ocr_text) LIKE ?
-        OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ?
-        OR lower_utf(COALESCE(i.secret_meta_json, '')) LIKE ?
-        OR lower_utf(COALESCE(i.url, '')) LIKE ?
-        OR lower_utf(COALESCE(i.domain, '')) LIKE ?
-        OR lower_utf(i.tags_json) LIKE ?
-      )`);
-      orParams.push(pat, pat, pat, pat, pat, pat, pat, pat, pat);
+      const pred = makeLikePred(term);
+      orClauses.push(pred.clause);
+      orParams.push(...pred.params);
     };
 
     addTextLike(qLower);
     for (const spec of tokenSpecs) {
+      const grpClauses: string[] = [];
+      const grpParams: string[] = [];
       for (const variant of spec.variants) {
         addTextLike(variant);
+        if (tokenSpecs.length > 1 && variant) {
+          const pred = makeLikePred(variant);
+          grpClauses.push(pred.clause);
+          grpParams.push(...pred.params);
+        }
+      }
+      if (tokenSpecs.length > 1 && grpClauses.length > 0 && perTokenLikeClauses.length < 6) {
+        perTokenLikeClauses.push(`(${grpClauses.join(' OR ')})`);
+        perTokenLikeParams.push(...grpParams);
       }
       if (spec.digits.length >= 3) {
-        const dPat = `%${spec.digits}%`;
-        orClauses.push(
-          `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(i.title || ' ' || i.body || ' ' || COALESCE(i.secret_meta_json, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?`
+        const dPat = `%${escapeSqlLike(spec.digits)}%`;
+        targetedClauses.push(
+          `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(i.title || ' ' || i.body || ' ' || COALESCE(i.secret_meta_json, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ? ESCAPE '\\'`
         );
-        orParams.push(dPat);
+        targetedParams.push(dPat);
       }
       for (const sem of spec.semantics) {
         if (sem === 'bank_card') {
-          orClauses.push(`(i.dna = 'secret' AND lower_utf(COALESCE(i.secret_meta_json, '')) LIKE '%"bank_card"%')`);
+          targetedClauses.push(`(i.dna = 'secret' AND lower_utf(COALESCE(i.secret_meta_json, '')) LIKE '%"bank_card"%')`);
         } else if (sem === 'secret') {
-          orClauses.push(`i.dna = 'secret'`);
+          targetedClauses.push(`i.dna = 'secret'`);
         } else if (sem === 'shot') {
-          orClauses.push(`i.dna = 'shot'`);
+          targetedClauses.push(`i.dna = 'shot'`);
         } else if (sem === 'link') {
-          orClauses.push(`(i.dna = 'link' OR i.url IS NOT NULL)`);
+          targetedClauses.push(`(i.dna = 'link' OR i.url IS NOT NULL)`);
         } else if (sem === 'voice') {
-          orClauses.push(`i.dna = 'voice'`);
+          targetedClauses.push(`i.dna = 'voice'`);
         } else if (sem === 'doc') {
-          orClauses.push(`i.dna = 'doc'`);
+          targetedClauses.push(`i.dna = 'doc'`);
         } else if (sem === 'contact') {
-          orClauses.push(`(i.sub_kind = 'contact' OR i.body LIKE '%+%' OR i.title LIKE '%+%')`);
+          targetedClauses.push(`(i.sub_kind = 'contact' OR i.body LIKE '%+%' OR i.title LIKE '%+%')`);
         } else if (sem === 'snippet') {
-          orClauses.push(`(i.dna = 'snippet' OR i.body LIKE '%\`\`\`%')`);
+          targetedClauses.push(`(i.dna = 'snippet' OR i.body LIKE '%\`\`\`%')`);
         }
       }
     }
 
-    if (orClauses.length > 0) {
-      const scanConditions = [...baseConditions, `(${orClauses.join(' OR ')})`];
-      const rows = this.db
-        .prepare(`SELECT i.* FROM items i WHERE ${scanConditions.join(' AND ')} ${orderBy} LIMIT 400`)
+    if (targetedClauses.length > 0) {
+      const targetedConditions = [...baseConditions, `(${targetedClauses.join(' OR ')})`];
+      const targetedRows = this.db
+        .prepare(`SELECT i.* FROM items i WHERE ${targetedConditions.join(' AND ')} ${orderBy} LIMIT 250`)
+        .all(...baseParams, ...targetedParams) as unknown as ItemRow[];
+      addRows(targetedRows);
+    }
+
+    const needHeavyTextLikeScan =
+      candidateRows.size < 15 ||
+      ftsParts.length === 0 ||
+      cleanTokens.some((t) => t.length < 2) ||
+      /[@+#/.]/.test(searchRaw) ||
+      q.dna === 'secret';
+
+    if (needHeavyTextLikeScan) {
+      if (tokenSpecs.length > 1 && perTokenLikeClauses.length > 1) {
+        const andScanConditions = [...baseConditions, perTokenLikeClauses.join(' AND ')];
+        const andRows = this.db
+          .prepare(`SELECT i.* FROM items i WHERE ${andScanConditions.join(' AND ')} ${orderBy} LIMIT 400`)
+          .all(...baseParams, ...perTokenLikeParams) as unknown as ItemRow[];
+        addRows(andRows);
+      }
+      if ((tokenSpecs.length <= 1 || candidateRows.size === 0) && orClauses.length > 0) {
+        const scanConditions = [...baseConditions, `(${orClauses.join(' OR ')})`];
+        const rows = this.db
+          .prepare(`SELECT i.* FROM items i WHERE ${scanConditions.join(' AND ')} ${orderBy} LIMIT 400`)
+          .all(...baseParams, ...orParams) as unknown as ItemRow[];
+        addRows(rows);
+      }
+    } else if (q.includeSecrets !== false && q.dna !== 'secret' && orClauses.length > 0) {
+      // Secrets are excluded from FTS5; scan only indexed secret rows so unindexed secrets still surface
+      const secretConditions = [...baseConditions, "i.dna = 'secret'", `(${orClauses.join(' OR ')})`];
+      const secretRows = this.db
+        .prepare(`SELECT i.* FROM items i WHERE ${secretConditions.join(' AND ')} ${orderBy} LIMIT 80`)
         .all(...baseParams, ...orParams) as unknown as ItemRow[];
-      addRows(rows);
+      addRows(secretRows);
     }
 
     // 3. Score & verify all bilingual token groups across candidate items
@@ -1704,41 +1939,59 @@ export class VaultRepository {
 
     if (ftsExpr) {
       try {
-        const ftsRows = this.db
+        const rankedRows = this.db
           .prepare(
-            `SELECT i.* FROM items i
-             WHERE i.deleted_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret'
-               AND i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)
-             ORDER BY i.created_at DESC
+            `SELECT i.* FROM items_fts
+             JOIN items i ON i.id = items_fts.id
+             WHERE items_fts MATCH ?
+               AND i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret'
+             ORDER BY bm25(items_fts)
              LIMIT 48`
           )
           .all(ftsExpr) as unknown as ItemRow[];
-        for (const r of ftsRows) candidateRows.set(r.id, r);
+        for (const r of rankedRows) candidateRows.set(r.id, r);
+
+        const recentFtsRows = this.db
+          .prepare(
+            `SELECT i.* FROM items i
+             WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret'
+               AND i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)
+             ORDER BY i.created_at DESC
+             LIMIT 32`
+          )
+          .all(ftsExpr) as unknown as ItemRow[];
+        for (const r of recentFtsRows) candidateRows.set(r.id, r);
       } catch {
         // Proceed with substring scan
       }
     }
 
-    for (const term of likeVariants) {
-      const pat = `%${term}%`;
+    if (candidateRows.size < Math.max(limit * 2, 16) && likeVariants.length > 0) {
+      const combinedClauses: string[] = [];
+      const combinedParams: string[] = [];
+      for (const term of likeVariants) {
+        const pat = `%${escapeSqlLike(term)}%`;
+        combinedClauses.push(`(
+          lower_utf(i.title) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.summary) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.body) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.ocr_text) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.url, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.domain, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.platform, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ? ESCAPE '\\'
+          OR lower_utf(i.tags_json) LIKE ? ESCAPE '\\'
+        )`);
+        combinedParams.push(pat, pat, pat, pat, pat, pat, pat, pat, pat);
+      }
       const likeRows = this.db
         .prepare(
           `SELECT i.* FROM items i
-           WHERE i.deleted_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND (
-             lower_utf(i.title) LIKE ?
-             OR lower_utf(i.summary) LIKE ?
-             OR lower_utf(i.body) LIKE ?
-             OR lower_utf(i.ocr_text) LIKE ?
-             OR lower_utf(COALESCE(i.url, '')) LIKE ?
-             OR lower_utf(COALESCE(i.domain, '')) LIKE ?
-             OR lower_utf(COALESCE(i.platform, '')) LIKE ?
-             OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ?
-             OR lower_utf(i.tags_json) LIKE ?
-           )
+           WHERE i.deleted_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND (${combinedClauses.join(' OR ')})
            ORDER BY i.created_at DESC
-           LIMIT 25`
+           LIMIT 60`
         )
-        .all(pat, pat, pat, pat, pat, pat, pat, pat, pat) as unknown as ItemRow[];
+        .all(...combinedParams) as unknown as ItemRow[];
       for (const r of likeRows) candidateRows.set(r.id, r);
     }
 
@@ -1890,37 +2143,42 @@ export class VaultRepository {
     byOrbit: Record<string, number>;
     byDna: Record<ContentDna, number>;
   } {
-    const counts = this.db
+    const rows = this.db
       .prepare(
         `SELECT
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 THEN 1 END) AS total,
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND (orbit = '' OR orbit = 'inbox') THEN 1 END) AS inbox_count,
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND is_demo = 1 THEN 1 END) AS demo_count,
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND is_pinned = 1 THEN 1 END) AS pinned_count,
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 1 THEN 1 END) AS archived_count,
-          COUNT(CASE WHEN deleted_at IS NOT NULL AND purged_at IS NULL THEN 1 END) AS trashed_count,
-          COUNT(CASE WHEN deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND remind_at IS NOT NULL AND remind_at <= ? THEN 1 END) AS due_reminders_count
-         FROM items`
+           CASE
+             WHEN deleted_at IS NOT NULL THEN 2
+             WHEN is_archived = 1 THEN 1
+             ELSE 0
+           END AS bucket,
+           orbit,
+           dna,
+           COUNT(*) AS cnt,
+           SUM(CASE WHEN is_demo = 1 THEN 1 ELSE 0 END) AS demo_cnt,
+           SUM(CASE WHEN is_pinned = 1 THEN 1 ELSE 0 END) AS pinned_cnt,
+           SUM(CASE WHEN remind_at IS NOT NULL AND remind_at <= ? THEN 1 ELSE 0 END) AS due_cnt
+         FROM items
+         WHERE purged_at IS NULL
+         GROUP BY bucket, orbit, dna`
       )
-      .get(now) as {
-      total: number;
-      inbox_count: number;
-      demo_count: number;
-      pinned_count: number;
-      archived_count: number;
-      trashed_count: number;
-      due_reminders_count: number;
-    };
+      .all(now) as Array<{
+      bucket: number;
+      orbit: string;
+      dna: ContentDna;
+      cnt: number;
+      demo_cnt: number;
+      pinned_cnt: number;
+      due_cnt: number;
+    }>;
 
-    const orbitRows = this.db
-      .prepare('SELECT orbit, COUNT(*) AS cnt FROM items WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 GROUP BY orbit')
-      .all() as Array<{ orbit: string; cnt: number }>;
+    let total = 0;
+    let inboxCount = 0;
+    let demoCount = 0;
+    let pinnedCount = 0;
+    let archivedCount = 0;
+    let trashedCount = 0;
+    let dueRemindersCount = 0;
     const byOrbit: Record<string, number> = {};
-    for (const r of orbitRows) byOrbit[r.orbit] = r.cnt;
-
-    const dnaRows = this.db
-      .prepare('SELECT dna, COUNT(*) AS cnt FROM items WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 GROUP BY dna')
-      .all() as Array<{ dna: ContentDna; cnt: number }>;
     const byDna: Record<ContentDna, number> = {
       link: 0,
       secret: 0,
@@ -1930,16 +2188,38 @@ export class VaultRepository {
       voice: 0,
       doc: 0,
     };
-    for (const r of dnaRows) byDna[r.dna] = r.cnt;
+
+    for (const r of rows) {
+      const cnt = Number(r.cnt ?? 0);
+      if (r.bucket === 2) {
+        trashedCount += cnt;
+      } else if (r.bucket === 1) {
+        archivedCount += cnt;
+      } else {
+        total += cnt;
+        if (r.orbit === '' || r.orbit === 'inbox') {
+          inboxCount += cnt;
+        }
+        demoCount += Number(r.demo_cnt ?? 0);
+        pinnedCount += Number(r.pinned_cnt ?? 0);
+        dueRemindersCount += Number(r.due_cnt ?? 0);
+        byOrbit[r.orbit] = (byOrbit[r.orbit] ?? 0) + cnt;
+        if (r.dna in byDna) {
+          byDna[r.dna] += cnt;
+        } else {
+          byDna[r.dna] = cnt;
+        }
+      }
+    }
 
     return {
-      total: Number(counts.total ?? 0),
-      inboxCount: Number(counts.inbox_count ?? 0),
-      demoCount: Number(counts.demo_count ?? 0),
-      pinnedCount: Number(counts.pinned_count ?? 0),
-      archivedCount: Number(counts.archived_count ?? 0),
-      trashedCount: Number(counts.trashed_count ?? 0),
-      dueRemindersCount: Number(counts.due_reminders_count ?? 0),
+      total,
+      inboxCount,
+      demoCount,
+      pinnedCount,
+      archivedCount,
+      trashedCount,
+      dueRemindersCount,
       byOrbit,
       byDna,
     };
@@ -2112,85 +2392,89 @@ export class VaultRepository {
     const cleanName = input.name.trim().slice(0, 32);
     if (!cleanName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
 
-    const countRow = this.db
-      .prepare('SELECT COUNT(*) AS cnt FROM orbits WHERE deleted_at IS NULL')
-      .get() as { cnt: number };
-    const id = input.id?.trim() || crypto.randomUUID();
-    const maxSort = this.db
-      .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM orbits WHERE deleted_at IS NULL')
-      .get() as { m: number };
-    const now = Date.now();
+    return this.inTx(() => {
+      const countRow = this.db
+        .prepare('SELECT COUNT(*) AS cnt FROM orbits WHERE deleted_at IS NULL')
+        .get() as { cnt: number };
+      const id = input.id?.trim() || crypto.randomUUID();
+      const maxSort = this.db
+        .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM orbits WHERE deleted_at IS NULL')
+        .get() as { m: number };
+      const now = Date.now();
 
-    const orbit: OrbitDef = {
-      id,
-      name: cleanName,
-      description: input.description.trim() || cleanName,
-      icon: input.icon || 'Folder',
-      color: input.color || SECTION_COLOR_PALETTE[countRow.cnt % SECTION_COLOR_PALETTE.length]!,
-      sortOrder: maxSort.m + 1,
-      isBuiltin: false,
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-      itemCount: 0,
-    };
+      const orbit: OrbitDef = {
+        id,
+        name: cleanName,
+        description: input.description.trim() || cleanName,
+        icon: input.icon || 'Folder',
+        color: input.color || SECTION_COLOR_PALETTE[countRow.cnt % SECTION_COLOR_PALETTE.length]!,
+        sortOrder: maxSort.m + 1,
+        isBuiltin: false,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        itemCount: 0,
+      };
 
-    this.db
-      .prepare(
-        `INSERT INTO orbits (id, name, description, icon, color, sort_order, is_builtin, created_at, updated_at, deleted_at, sync_version, last_device_id)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, 1, ?)`
-      )
-      .run(
-        orbit.id,
-        orbit.name,
-        orbit.description,
-        orbit.icon,
-        orbit.color,
-        orbit.sortOrder,
-        now,
-        now,
-        this.localDeviceId
-      );
+      this.db
+        .prepare(
+          `INSERT INTO orbits (id, name, description, icon, color, sort_order, is_builtin, created_at, updated_at, deleted_at, sync_version, last_device_id)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, 1, ?)`
+        )
+        .run(
+          orbit.id,
+          orbit.name,
+          orbit.description,
+          orbit.icon,
+          orbit.color,
+          orbit.sortOrder,
+          now,
+          now,
+          this.localDeviceId
+        );
 
-    this.markDirty('orbit', orbit.id);
-    return orbit;
+      this.markDirty('orbit', orbit.id);
+      return orbit;
+    });
   }
 
   public updateOrbit(id: string, patch: OrbitUpdateInput): OrbitDef | null {
-    const existing = this.db
-      .prepare('SELECT * FROM orbits WHERE id = ? AND deleted_at IS NULL')
-      .get(id) as
-      | {
-          id: string;
-          name: string;
-          description: string;
-          icon: string;
-          color: string;
-          sort_order: number;
-          updated_at?: number | null;
-        }
-      | undefined;
-    if (!existing) return null;
+    return this.inTx(() => {
+      const existing = this.db
+        .prepare('SELECT * FROM orbits WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as
+        | {
+            id: string;
+            name: string;
+            description: string;
+            icon: string;
+            color: string;
+            sort_order: number;
+            updated_at?: number | null;
+          }
+        | undefined;
+      if (!existing) return null;
 
-    const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 32) : existing.name;
-    if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
-    const nextDesc = patch.description !== undefined ? patch.description.trim().slice(0, 140) : existing.description;
-    const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
-    const nextIcon = patch.icon !== undefined ? patch.icon.trim() : existing.icon;
-    const nextSort =
-      typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)
-        ? patch.sortOrder
-        : existing.sort_order;
-    const now = this.monotonicTimestamp(existing.updated_at);
+      const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 32) : existing.name;
+      if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
+      const nextDesc = patch.description !== undefined ? patch.description.trim().slice(0, 140) : existing.description;
+      const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
+      const nextIcon = patch.icon !== undefined ? patch.icon.trim() : existing.icon;
+      const nextSort =
+        typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)
+          ? patch.sortOrder
+          : existing.sort_order;
+      const now = this.monotonicTimestamp(existing.updated_at);
 
-    this.db
-      .prepare(
-        'UPDATE orbits SET name = ?, description = ?, color = ?, icon = ?, sort_order = ?, is_builtin = 0, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
-      )
-      .run(nextName, nextDesc, nextColor, nextIcon, nextSort, now, this.localDeviceId, id);
+      this.db
+        .prepare(
+          'UPDATE orbits SET name = ?, description = ?, color = ?, icon = ?, sort_order = ?, is_builtin = 0, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
+        )
+        .run(nextName, nextDesc, nextColor, nextIcon, nextSort, now, this.localDeviceId, id);
 
-    this.markDirty('orbit', id);
-    return this.listOrbits().find((o) => o.id === id) ?? null;
+      this.markDirty('orbit', id);
+      return this.listOrbits().find((o) => o.id === id) ?? null;
+    });
   }
 
   public reorderOrbits(orderedIds: string[]): OrbitDef[] {
@@ -2204,23 +2488,23 @@ export class VaultRepository {
         const ts = this.monotonicTimestamp(cur?.updated_at);
         stmt.run(idx + 1, ts, this.localDeviceId, id);
       });
+      for (const id of orderedIds) {
+        this.markDirty('orbit', id);
+      }
     });
-    for (const id of orderedIds) {
-      this.markDirty('orbit', id);
-    }
     return this.listOrbits();
   }
 
   public deleteOrbit(id: string): boolean {
-    const row = this.db
-      .prepare('SELECT id, updated_at FROM orbits WHERE id = ? AND deleted_at IS NULL')
-      .get(id) as { id: string; updated_at?: number | null } | undefined;
-    if (!row) return false;
-    const now = this.monotonicTimestamp(row.updated_at);
-    const orphaned = this.db
-      .prepare("SELECT id, updated_at, is_demo FROM items WHERE orbit = ? AND deleted_at IS NULL AND purged_at IS NULL")
-      .all(id) as Array<{ id: string; updated_at: number; is_demo: number }>;
-    const ok = this.inTx(() => {
+    return this.inTx(() => {
+      const row = this.db
+        .prepare('SELECT id, updated_at FROM orbits WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as { id: string; updated_at?: number | null } | undefined;
+      if (!row) return false;
+      const now = this.monotonicTimestamp(row.updated_at);
+      const orphaned = this.db
+        .prepare("SELECT id, updated_at, is_demo FROM items WHERE orbit = ? AND deleted_at IS NULL AND purged_at IS NULL")
+        .all(id) as Array<{ id: string; updated_at: number; is_demo: number }>;
       // Orphaned items move cleanly to unassigned '' (still visible in «Все записи»)
       const orphanStmt = this.db.prepare(
         "UPDATE items SET orbit = '', updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?"
@@ -2234,17 +2518,17 @@ export class VaultRepository {
           'UPDATE orbits SET deleted_at = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
         )
         .run(now, now, this.localDeviceId, id);
-      return Number(res.changes) > 0;
-    });
-    if (ok) {
-      this.markDirty('orbit', id);
-      for (const item of orphaned) {
-        if (!item.is_demo) {
-          this.markDirty('item', item.id);
+      const ok = Number(res.changes) > 0;
+      if (ok) {
+        this.markDirty('orbit', id);
+        for (const item of orphaned) {
+          if (!item.is_demo) {
+            this.markDirty('item', item.id);
+          }
         }
       }
-    }
-    return ok;
+      return ok;
+    });
   }
 
   public listFocusBoards(): FocusBoard[] {
@@ -2305,6 +2589,7 @@ export class VaultRepository {
         )
         .run(id, clean, cleanDesc, icon, color, sortOrder, createdAt, createdAt, this.localDeviceId);
       this.setSetting('active_focus_board_id', id);
+      this.markDirty('focus_board', id);
       return {
         id,
         name: clean,
@@ -2319,46 +2604,47 @@ export class VaultRepository {
         itemCount: 0,
       };
     });
-    this.markDirty('focus_board', id);
     return created;
   }
 
   public updateFocusBoard(id: string, patch: FocusBoardUpdateInput): FocusBoard | null {
-    const existing = this.db
-      .prepare('SELECT * FROM focus_boards WHERE id = ? AND deleted_at IS NULL')
-      .get(id) as
-      | {
-          id: string;
-          name: string;
-          description?: string;
-          icon: string;
-          color: string;
-          sort_order?: number;
-          updated_at?: number | null;
-        }
-      | undefined;
-    if (!existing) return null;
+    return this.inTx(() => {
+      const existing = this.db
+        .prepare('SELECT * FROM focus_boards WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as
+        | {
+            id: string;
+            name: string;
+            description?: string;
+            icon: string;
+            color: string;
+            sort_order?: number;
+            updated_at?: number | null;
+          }
+        | undefined;
+      if (!existing) return null;
 
-    const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 36) : existing.name;
-    if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptyBoardName'));
-    const nextDesc =
-      patch.description !== undefined ? patch.description.trim().slice(0, 140) : (existing.description ?? '');
-    const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
-    const nextIcon = patch.icon !== undefined ? patch.icon.trim() : existing.icon;
-    const nextSort =
-      typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)
-        ? patch.sortOrder
-        : (existing.sort_order ?? 0);
-    const now = this.monotonicTimestamp(existing.updated_at);
+      const nextName = patch.name !== undefined ? patch.name.trim().slice(0, 36) : existing.name;
+      if (!nextName) throw new Error(translate(this.getLocale(), 'main.repo.emptyBoardName'));
+      const nextDesc =
+        patch.description !== undefined ? patch.description.trim().slice(0, 140) : (existing.description ?? '');
+      const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
+      const nextIcon = patch.icon !== undefined ? patch.icon.trim() : existing.icon;
+      const nextSort =
+        typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)
+          ? patch.sortOrder
+          : (existing.sort_order ?? 0);
+      const now = this.monotonicTimestamp(existing.updated_at);
 
-    this.db
-      .prepare(
-        'UPDATE focus_boards SET name = ?, description = ?, color = ?, icon = ?, sort_order = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
-      )
-      .run(nextName, nextDesc, nextColor, nextIcon, nextSort, now, this.localDeviceId, id);
+      this.db
+        .prepare(
+          'UPDATE focus_boards SET name = ?, description = ?, color = ?, icon = ?, sort_order = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
+        )
+        .run(nextName, nextDesc, nextColor, nextIcon, nextSort, now, this.localDeviceId, id);
 
-    this.markDirty('focus_board', id);
-    return this.listFocusBoards().find((b) => b.id === id) ?? null;
+      this.markDirty('focus_board', id);
+      return this.listFocusBoards().find((b) => b.id === id) ?? null;
+    });
   }
 
   public reorderFocusBoards(orderedIds: string[]): FocusBoard[] {
@@ -2372,10 +2658,10 @@ export class VaultRepository {
         const ts = this.monotonicTimestamp(cur?.updated_at);
         stmt.run(idx + 1, ts, this.localDeviceId, id);
       });
+      for (const id of orderedIds) {
+        this.markDirty('focus_board', id);
+      }
     });
-    for (const id of orderedIds) {
-      this.markDirty('focus_board', id);
-    }
     return this.listFocusBoards();
   }
 
@@ -2392,15 +2678,15 @@ export class VaultRepository {
   }
 
   public deleteFocusBoard(id: string): boolean {
-    const boardRow = this.db
-      .prepare('SELECT id, updated_at FROM focus_boards WHERE id = ? AND deleted_at IS NULL')
-      .get(id) as { id: string; updated_at?: number | null } | undefined;
-    if (!boardRow) return false;
-    const now = this.monotonicTimestamp(boardRow.updated_at);
-    const orphaned = this.db
-      .prepare('SELECT id, updated_at, is_demo FROM items WHERE focus_board_id = ? AND deleted_at IS NULL AND purged_at IS NULL')
-      .all(id) as Array<{ id: string; updated_at: number; is_demo: number }>;
-    const ok = this.inTx(() => {
+    return this.inTx(() => {
+      const boardRow = this.db
+        .prepare('SELECT id, updated_at FROM focus_boards WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as { id: string; updated_at?: number | null } | undefined;
+      if (!boardRow) return false;
+      const now = this.monotonicTimestamp(boardRow.updated_at);
+      const orphaned = this.db
+        .prepare('SELECT id, updated_at, is_demo FROM items WHERE focus_board_id = ? AND deleted_at IS NULL AND purged_at IS NULL')
+        .all(id) as Array<{ id: string; updated_at: number; is_demo: number }>;
       const orphanStmt = this.db.prepare(
         'UPDATE items SET focus_board_id = NULL, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
       );
@@ -2416,17 +2702,17 @@ export class VaultRepository {
       if (this.getSetting('active_focus_board_id') === id) {
         this.setSetting('active_focus_board_id', '');
       }
-      return Number(res.changes) > 0;
-    });
-    if (ok) {
-      this.markDirty('focus_board', id);
-      for (const item of orphaned) {
-        if (!item.is_demo) {
-          this.markDirty('item', item.id);
+      const ok = Number(res.changes) > 0;
+      if (ok) {
+        this.markDirty('focus_board', id);
+        for (const item of orphaned) {
+          if (!item.is_demo) {
+            this.markDirty('item', item.id);
+          }
         }
       }
-    }
-    return ok;
+      return ok;
+    });
   }
 
   public getCachedAi(contentHash: string): unknown | null {
@@ -2448,8 +2734,13 @@ export class VaultRepository {
     model: string,
     inputTokens: number,
     outputTokens: number,
-    costUsd: number
+    costUsd: number,
+    isCloudProxy = false
   ): void {
+    const storedModel =
+      isCloudProxy && model !== 'cache_hit' && !model.startsWith('cloud_proxy:')
+        ? `cloud_proxy:${model}`
+        : model;
     this.db
       .prepare(
         'INSERT INTO ai_usage_log (id, provider, model, input_tokens, output_tokens, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -2457,7 +2748,7 @@ export class VaultRepository {
       .run(
         crypto.randomUUID(),
         provider,
-        model,
+        storedModel,
         inputTokens,
         outputTokens,
         costUsd,
@@ -2477,7 +2768,7 @@ export class VaultRepository {
       .prepare(
         `SELECT COALESCE(SUM(cost_usd), 0) AS spent, COUNT(*) AS calls
          FROM ai_usage_log
-         WHERE created_at >= ? AND model != 'cache_hit'`
+         WHERE created_at >= ? AND model != 'cache_hit' AND model NOT LIKE 'cloud_proxy:%'`
       )
       .get(startOfMonth) as { spent: number; calls: number };
     const cacheRow = this.db
@@ -2619,16 +2910,16 @@ export class VaultRepository {
              )`
         )
         .run(rev.itemId, rev.itemId, MAX_REVISIONS_PER_ITEM);
-    });
 
-    if (!opts?.skipDirty) {
-      const parent = this.db
-        .prepare('SELECT is_demo, dna FROM items WHERE id = ?')
-        .get(rev.itemId) as { is_demo: number; dna: ContentDna } | undefined;
-      if (parent && !parent.is_demo && parent.dna !== 'secret') {
-        this.markDirty('item_revision', rev.id);
+      if (!opts?.skipDirty) {
+        const parent = this.db
+          .prepare('SELECT is_demo, dna FROM items WHERE id = ?')
+          .get(rev.itemId) as { is_demo: number; dna: ContentDna } | undefined;
+        if (parent && !parent.is_demo && parent.dna !== 'secret') {
+          this.markDirty('item_revision', rev.id);
+        }
       }
-    }
+    });
 
     return rev;
   }
@@ -2776,17 +3067,20 @@ export class VaultRepository {
   }
 
   private bumpWorkspacePrefsSyncMeta(skipDirty = false): void {
-    const prevUpdated = Number(this.getSetting('workspace_prefs_updated_at') || '0') || 0;
-    const prevVer = Number(this.getSetting('workspace_prefs_sync_version') || '0') || 0;
-    const nextTs = this.monotonicTimestamp(prevUpdated);
-    this.setSetting('workspace_prefs_updated_at', String(nextTs));
-    this.setSetting('workspace_prefs_sync_version', String(prevVer + 1));
-    if (this.localDeviceId) {
-      this.setSetting('workspace_prefs_last_device_id', this.localDeviceId);
-    }
-    if (!skipDirty) {
-      this.markDirty('workspace_prefs', 'default');
-    }
+    this.bumpVaultMutationVersion();
+    this.inTx(() => {
+      const prevUpdated = Number(this.getSetting('workspace_prefs_updated_at') || '0') || 0;
+      const prevVer = Number(this.getSetting('workspace_prefs_sync_version') || '0') || 0;
+      const nextTs = this.monotonicTimestamp(prevUpdated);
+      this.setSetting('workspace_prefs_updated_at', String(nextTs));
+      this.setSetting('workspace_prefs_sync_version', String(prevVer + 1));
+      if (this.localDeviceId) {
+        this.setSetting('workspace_prefs_last_device_id', this.localDeviceId);
+      }
+      if (!skipDirty) {
+        this.markDirty('workspace_prefs', 'default');
+      }
+    });
   }
 
   public saveTaskBoardColumns(
@@ -2794,8 +3088,10 @@ export class VaultRepository {
     opts?: { skipDirty?: boolean }
   ): TaskBoardColumn[] {
     const sanitized = this.sanitizeTaskBoardColumns(columns);
-    this.setSetting('task_board_columns_json', JSON.stringify(sanitized));
-    this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+    this.inTx(() => {
+      this.setSetting('task_board_columns_json', JSON.stringify(sanitized));
+      this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+    });
     return sanitized;
   }
 
@@ -2837,13 +3133,15 @@ export class VaultRepository {
     patch: Partial<AppearanceConfig>,
     opts?: { skipDirty?: boolean }
   ): AppearanceConfig {
-    const merged: AppearanceConfig = {
-      ...this.getAppearanceConfig(),
-      ...patch,
-    };
-    this.setSetting('appearance_config_json', JSON.stringify(merged));
-    this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
-    return merged;
+    return this.inTx(() => {
+      const merged: AppearanceConfig = {
+        ...this.getAppearanceConfig(),
+        ...patch,
+      };
+      this.setSetting('appearance_config_json', JSON.stringify(merged));
+      this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+      return merged;
+    });
   }
 
   public getLocale(osLocale?: string | null): AppLocale {
@@ -2859,8 +3157,11 @@ export class VaultRepository {
 
   public setLocale(locale: AppLocale, opts?: { skipDirty?: boolean }): AppLocale {
     const normalized = normalizeLocale(locale);
-    this.setSetting('locale', normalized);
-    this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+    this.inTx(() => {
+      this.setSetting('locale', normalized);
+      this.bumpWorkspacePrefsSyncMeta(Boolean(opts?.skipDirty));
+    });
+    this.bumpVaultMutationVersion();
     return normalized;
   }
 
@@ -2923,13 +3224,27 @@ export class VaultRepository {
   }
 
   public listVaultTasks(): VaultTaskEntry[] {
+    const locale = this.getLocale();
+    if (
+      this.tasksCache &&
+      this.tasksCache.version === this.vaultMutationVersion &&
+      this.tasksCache.locale === locale
+    ) {
+      return this.tasksCache.tasks.slice();
+    }
+
     const rows = this.db
       .prepare(
         `SELECT id, title, body, orbit, remind_at, media_meta_json, COALESCE(content_updated_at, updated_at) AS effective_ts
          FROM items
          WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret'
+           AND (
+             body LIKE '%[ ]%' OR body LIKE '%[x]%' OR body LIKE '%[X]%'
+             OR body LIKE '%\\[ \\]%' ESCAPE '\\' OR body LIKE '%\\[x\\]%' ESCAPE '\\' OR body LIKE '%\\[X\\]%' ESCAPE '\\'
+             OR COALESCE(media_meta_json, '') LIKE '%"actionItems"%'
+           )
          ORDER BY effective_ts DESC
-         LIMIT 500`
+         LIMIT 5000`
       )
       .all() as Array<{
       id: string;
@@ -2945,7 +3260,7 @@ export class VaultRepository {
     const tasks: VaultTaskEntry[] = [];
 
     for (const row of rows) {
-      const itemTitle = row.title?.trim() || translate(this.getLocale(), 'main.repo.untitledNote');
+      const itemTitle = row.title?.trim() || translate(locale, 'main.repo.untitledNote');
       const meta = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
       const parsed = this.collectItemTasksForReconcile(row.body || '', meta);
       if (parsed.length === 0) continue;
@@ -2984,7 +3299,8 @@ export class VaultRepository {
       }
       return b.updatedAt - a.updatedAt;
     });
-    return tasks;
+    this.tasksCache = { version: this.vaultMutationVersion, locale, tasks };
+    return tasks.slice();
   }
 
   public toggleVaultTask(input: {
@@ -3212,7 +3528,7 @@ export class VaultRepository {
     taskKey: string;
     text: string;
   }): VaultItem | null {
-    const nextText = (input.text || '').trim();
+    const nextText = (input.text || '').replace(/[\r\n]+/g, ' ').trim();
     if (!nextText) return null;
     const current = this.getItemById(input.itemId);
     if (!current || current.dna === 'secret') return null;
@@ -3298,9 +3614,16 @@ export class VaultRepository {
       const remainingBody = lines.join('\n').trim();
       const hasAttachments = Boolean(current.imagePath || current.mediaPath || current.url);
       const hasVoiceActions = Boolean(meta.actionItems && meta.actionItems.length > 0);
+      const hasPreservedMeta =
+        current.tags.length > 0 ||
+        Boolean(current.remindAt) ||
+        Boolean(current.annotations && current.annotations.length > 0) ||
+        Boolean(current.linksOut && current.linksOut.length > 0) ||
+        (!isUntitledPlaceholderTitle(current.title) &&
+          current.title.trim() !== target.text.trim());
       const mdCount = beforeTasks.filter((t) => t.sourceType === 'markdown').length;
 
-      if (!remainingBody && !hasAttachments && !hasVoiceActions && mdCount === 1) {
+      if (!remainingBody && !hasAttachments && !hasVoiceActions && !hasPreservedMeta && mdCount === 1) {
         this.deleteItem(current.id);
         return { item: null, deletedItemId: current.id };
       }
@@ -3432,6 +3755,7 @@ export class VaultRepository {
       externalId?: string | null;
       etag?: string | null;
       deletedAt?: number | null;
+      resurrectDeleted?: boolean;
     }
   ): CalendarEvent {
     const baseNow = Date.now();
@@ -3439,113 +3763,122 @@ export class VaultRepository {
     const startAt = Number.isFinite(input.startAt) ? input.startAt : baseNow;
     const endAt = Math.max(startAt, Number.isFinite(input.endAt) ? input.endAt : startAt + 3_600_000);
 
-    let existing = input.id ? this.getCalendarEventById(input.id) : null;
-    if (!existing && input.externalSource && input.externalId) {
-      existing = this.findCalendarEventByExternalId(input.externalSource, input.externalId);
-    }
-    if (!existing && input.externalSource === 'vault_auto' && input.linkedItemId) {
-      existing = this.findCalendarEventByLinkedItemId(input.linkedItemId);
-    }
+    return this.inTx(() => {
+      let existing = input.id ? this.getCalendarEventById(input.id) : null;
+      if (!existing && input.externalSource && input.externalId) {
+        existing = this.findCalendarEventByExternalId(input.externalSource, input.externalId);
+      }
+      if (!existing && input.externalSource === 'vault_auto' && input.linkedItemId) {
+        existing = this.findCalendarEventByLinkedItemId(input.linkedItemId);
+      }
 
-    const now = this.monotonicTimestamp(existing?.updatedAt);
-    const id = existing?.id || input.id || crypto.randomUUID();
-    if (existing) {
-      const nextChecklist = input.checklist !== undefined ? input.checklist : existing.checklist;
-      const nextAttachments = input.attachments !== undefined ? input.attachments : existing.attachments;
+      // Guard against resurrecting a locally deleted external (.ics/Google) event unless caller explicitly restores it
+      if (existing && existing.deletedAt != null && input.deletedAt === undefined && !input.resurrectDeleted) {
+        return existing;
+      }
+
+      const now = this.monotonicTimestamp(existing?.updatedAt);
+      const id = existing?.id || input.id || crypto.randomUUID();
+      if (existing) {
+        const nextChecklist = input.checklist !== undefined ? input.checklist : existing.checklist;
+        const nextAttachments = input.attachments !== undefined ? input.attachments : existing.attachments;
+        this.db
+          .prepare(
+            `UPDATE calendar_events SET
+              title = ?, notes = ?, location = ?, start_at = ?, end_at = ?, all_day = ?, has_end_time = ?,
+              color = ?, kind = ?, recurrence = ?, is_done = ?, linked_item_id = ?, checklist_json = ?, attachments_json = ?,
+              external_source = ?, external_id = ?, etag = ?,
+              updated_at = ?, deleted_at = ?, sync_version = sync_version + 1, last_device_id = ?
+             WHERE id = ?`
+          )
+          .run(
+            cleanTitle,
+            (input.notes ?? existing.notes).trim(),
+            (input.location ?? existing.location).trim(),
+            startAt,
+            endAt,
+            input.allDay !== undefined ? (input.allDay ? 1 : 0) : existing.allDay ? 1 : 0,
+            input.hasEndTime !== undefined ? (input.hasEndTime ? 1 : 0) : existing.hasEndTime ? 1 : 0,
+            input.color ?? existing.color,
+            input.kind ?? existing.kind,
+            input.recurrence ?? existing.recurrence ?? 'none',
+            input.isDone !== undefined ? (input.isDone ? 1 : 0) : existing.isDone ? 1 : 0,
+            input.linkedItemId !== undefined ? input.linkedItemId : existing.linkedItemId,
+            JSON.stringify(nextChecklist),
+            JSON.stringify(nextAttachments),
+            input.externalSource !== undefined ? input.externalSource : existing.externalSource,
+            input.externalId !== undefined ? input.externalId : existing.externalId,
+            input.etag !== undefined ? input.etag : existing.etag,
+            now,
+            input.deletedAt !== undefined ? input.deletedAt : null,
+            this.localDeviceId,
+            id
+          );
+        this.markDirty('calendar_event', id);
+        return (
+          this.getCalendarEventById(id) ?? {
+            ...existing,
+            title: cleanTitle,
+            deletedAt: input.deletedAt ?? null,
+          }
+        );
+      }
+
       this.db
         .prepare(
-          `UPDATE calendar_events SET
-            title = ?, notes = ?, location = ?, start_at = ?, end_at = ?, all_day = ?, has_end_time = ?,
-            color = ?, kind = ?, recurrence = ?, is_done = ?, linked_item_id = ?, checklist_json = ?, attachments_json = ?,
-            external_source = ?, external_id = ?, etag = ?,
-            updated_at = ?, deleted_at = ?, sync_version = sync_version + 1, last_device_id = ?
-           WHERE id = ?`
+          `INSERT INTO calendar_events (
+            id, title, notes, location, start_at, end_at, all_day, has_end_time, color, kind, recurrence, is_done,
+            linked_item_id, checklist_json, attachments_json, external_source, external_id, etag,
+            created_at, updated_at, deleted_at, sync_version, last_device_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
         )
         .run(
+          id,
           cleanTitle,
-          (input.notes ?? existing.notes).trim(),
-          (input.location ?? existing.location).trim(),
+          (input.notes ?? '').trim(),
+          (input.location ?? '').trim(),
           startAt,
           endAt,
-          input.allDay !== undefined ? (input.allDay ? 1 : 0) : existing.allDay ? 1 : 0,
-          input.hasEndTime !== undefined ? (input.hasEndTime ? 1 : 0) : existing.hasEndTime ? 1 : 0,
-          input.color ?? existing.color,
-          input.kind ?? existing.kind,
-          input.recurrence ?? existing.recurrence ?? 'none',
-          input.isDone !== undefined ? (input.isDone ? 1 : 0) : existing.isDone ? 1 : 0,
-          input.linkedItemId !== undefined ? input.linkedItemId : existing.linkedItemId,
-          JSON.stringify(nextChecklist),
-          JSON.stringify(nextAttachments),
-          input.externalSource !== undefined ? input.externalSource : existing.externalSource,
-          input.externalId !== undefined ? input.externalId : existing.externalId,
-          input.etag !== undefined ? input.etag : existing.etag,
+          input.allDay ? 1 : 0,
+          input.hasEndTime ? 1 : 0,
+          input.color ?? '#E86A33',
+          input.kind ?? 'event',
+          input.recurrence ?? 'none',
+          input.isDone ? 1 : 0,
+          input.linkedItemId ?? null,
+          JSON.stringify(input.checklist ?? []),
+          JSON.stringify(input.attachments ?? []),
+          input.externalSource ?? null,
+          input.externalId ?? null,
+          input.etag ?? null,
           now,
-          input.deletedAt !== undefined ? input.deletedAt : null,
-          this.localDeviceId,
-          id
+          now,
+          input.deletedAt ?? null,
+          this.localDeviceId
         );
       this.markDirty('calendar_event', id);
-      return (
-        this.getCalendarEventById(id) ?? {
-          ...existing,
-          title: cleanTitle,
-          deletedAt: input.deletedAt ?? null,
-        }
-      );
-    }
-
-    this.db
-      .prepare(
-        `INSERT INTO calendar_events (
-          id, title, notes, location, start_at, end_at, all_day, has_end_time, color, kind, recurrence, is_done,
-          linked_item_id, checklist_json, attachments_json, external_source, external_id, etag,
-          created_at, updated_at, deleted_at, sync_version, last_device_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
-      )
-      .run(
-        id,
-        cleanTitle,
-        (input.notes ?? '').trim(),
-        (input.location ?? '').trim(),
-        startAt,
-        endAt,
-        input.allDay ? 1 : 0,
-        input.hasEndTime ? 1 : 0,
-        input.color ?? '#E86A33',
-        input.kind ?? 'event',
-        input.recurrence ?? 'none',
-        input.isDone ? 1 : 0,
-        input.linkedItemId ?? null,
-        JSON.stringify(input.checklist ?? []),
-        JSON.stringify(input.attachments ?? []),
-        input.externalSource ?? null,
-        input.externalId ?? null,
-        input.etag ?? null,
-        now,
-        now,
-        input.deletedAt ?? null,
-        this.localDeviceId
-      );
-    this.markDirty('calendar_event', id);
-    return this.getCalendarEventById(id)!;
+      return this.getCalendarEventById(id)!;
+    });
   }
 
   public deleteCalendarEvent(id: string): boolean {
-    const existing = this.db
-      .prepare('SELECT updated_at FROM calendar_events WHERE id = ? AND deleted_at IS NULL')
-      .get(id) as { updated_at: number } | undefined;
-    if (!existing) return false;
-    const now = this.monotonicTimestamp(existing.updated_at);
-    const res = this.db
-      .prepare(
-        'UPDATE calendar_events SET deleted_at = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ? AND deleted_at IS NULL'
-      )
-      .run(now, now, this.localDeviceId, id);
-    const ok = Number(res.changes) > 0;
-    if (ok) {
-      this.markDirty('calendar_event', id);
-    }
-    return ok;
+    return this.inTx(() => {
+      const existing = this.db
+        .prepare('SELECT updated_at FROM calendar_events WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as { updated_at: number } | undefined;
+      if (!existing) return false;
+      const now = this.monotonicTimestamp(existing.updated_at);
+      const res = this.db
+        .prepare(
+          'UPDATE calendar_events SET deleted_at = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ? AND deleted_at IS NULL'
+        )
+        .run(now, now, this.localDeviceId, id);
+      const ok = Number(res.changes) > 0;
+      if (ok) {
+        this.markDirty('calendar_event', id);
+      }
+      return ok;
+    });
   }
 
   // ==================== Related Items & Wiki Backlinks ====================
@@ -3564,6 +3897,11 @@ export class VaultRepository {
   }
 
   public listRelatedItems(itemId: string, limit = 5): Array<{ item: VaultItem; reason: string; score: number }> {
+    const locale = this.getLocale();
+    const cacheKey = `${this.vaultMutationVersion}:${locale}:${itemId}:${limit}`;
+    const cached = this.relatedCache.get(cacheKey);
+    if (cached) return cached.slice();
+
     const target = this.getItemById(itemId);
     if (!target || target.dna === 'secret') return [];
 
@@ -3579,18 +3917,106 @@ export class VaultRepository {
     const targetTags = new Set(target.tags.map((t) => t.toLowerCase()));
     const targetLinks = new Set(target.linksOut);
 
-    const candidates = this.db
+    const candMap = new Map<string, ItemRow>();
+    const addCandidateRows = (rows: ItemRow[]) => {
+      for (const r of rows) {
+        if (r.id !== itemId && !candMap.has(r.id)) {
+          candMap.set(r.id, r);
+        }
+      }
+    };
+
+    // 1. Direct forward wiki-links
+    if (target.linksOut.length > 0) {
+      const linkIds = target.linksOut.filter((id) => id && id !== itemId).slice(0, 60);
+      if (linkIds.length > 0) {
+        const placeholders = linkIds.map(() => '?').join(', ');
+        const forwardRows = this.db
+          .prepare(
+            `SELECT * FROM items
+             WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret'
+               AND id IN (${placeholders})`
+          )
+          .all(...linkIds) as unknown as ItemRow[];
+        addCandidateRows(forwardRows);
+      }
+    }
+
+    // 2. Direct wiki backlinks
+    const backlinkRows = this.db
       .prepare(
         `SELECT * FROM items
-         WHERE deleted_at IS NULL AND is_archived = 0 AND dna != 'secret' AND id != ?
+         WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret'
+           AND id != ? AND lower_utf(links_out_json) LIKE ?
          ORDER BY created_at DESC
-         LIMIT 250`
+         LIMIT 20`
       )
-      .all(itemId) as unknown as ItemRow[];
+      .all(itemId, `%"${itemId.toLowerCase()}"%`) as unknown as ItemRow[];
+    addCandidateRows(backlinkRows);
 
-    const locale = this.getLocale();
+    // 3. Same Focus Board (indexed via idx_items_focus_board_active)
+    if (target.focusBoardId) {
+      const boardRows = this.db
+        .prepare(
+          `SELECT * FROM items
+           WHERE focus_board_id = ? AND is_archived = 0 AND deleted_at IS NULL AND purged_at IS NULL
+             AND dna != 'secret' AND id != ?
+           ORDER BY created_at DESC
+           LIMIT 40`
+        )
+        .all(target.focusBoardId, itemId) as unknown as ItemRow[];
+      addCandidateRows(boardRows);
+    }
+
+    // 4. Shared topic/tag matches via FTS5
+    const ftsTermSet = new Set<string>();
+    for (const tag of target.tags.slice(0, 8)) {
+      const clean = tag.replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim();
+      for (const w of clean.split(/\s+/)) {
+        if (w.length >= 2) ftsTermSet.add(`"${w.toLowerCase()}"*`);
+      }
+    }
+    for (const grp of groups.slice(0, 12)) {
+      for (const v of grp.variants.slice(0, 3)) {
+        const clean = v.replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim();
+        for (const w of clean.split(/\s+/)) {
+          if (w.length >= 2) ftsTermSet.add(`"${w.toLowerCase()}"*`);
+        }
+      }
+    }
+    const ftsExpr = Array.from(ftsTermSet).slice(0, 36).join(' OR ');
+    if (ftsExpr) {
+      try {
+        const ftsRows = this.db
+          .prepare(
+            `SELECT i.* FROM items i
+             WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND i.id != ?
+               AND i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)
+             ORDER BY i.created_at DESC
+             LIMIT 100`
+          )
+          .all(itemId, ftsExpr) as unknown as ItemRow[];
+        addCandidateRows(ftsRows);
+      } catch {
+        // Fallback handled below
+      }
+    }
+
+    // 5. Small recent fallback when targeted hits are sparse
+    if (candMap.size < 40) {
+      const recentRows = this.db
+        .prepare(
+          `SELECT * FROM items
+           WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret' AND id != ?
+           ORDER BY created_at DESC
+           LIMIT 40`
+        )
+        .all(itemId) as unknown as ItemRow[];
+      addCandidateRows(recentRows);
+    }
+
     const scored: Array<{ item: VaultItem; reason: string; score: number }> = [];
-    for (const row of candidates) {
+    for (const row of candMap.values()) {
       const cand = mapRowToItem(row);
       let score = 0;
       const reasons: string[] = [];
@@ -3644,7 +4070,13 @@ export class VaultRepository {
       }
     }
 
-    return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+    const result = scored.sort((a, b) => b.score - a.score).slice(0, limit);
+    if (this.relatedCache.size >= 64) {
+      const oldestKey = this.relatedCache.keys().next().value;
+      if (oldestKey) this.relatedCache.delete(oldestKey);
+    }
+    this.relatedCache.set(cacheKey, result);
+    return result.slice();
   }
 
   // ==================== E2EE Cloud Sync Persistence & LWW Merge ====================
@@ -4096,6 +4528,7 @@ export class VaultRepository {
         .run();
     });
 
+    this.bumpVaultMutationVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -4297,6 +4730,136 @@ export class VaultRepository {
     this.db.prepare('DELETE FROM sync_blob_cache').run();
   }
 
+  private isMediaReferencedElsewhere(localName: string, excludeItemId?: string): boolean {
+    const activeItems = this.db
+      .prepare('SELECT id, image_path, thumb_path, media_path, media_meta_json, body FROM items WHERE purged_at IS NULL AND id != ?')
+      .all(excludeItemId ?? '') as Array<{
+      id: string;
+      image_path: string | null;
+      thumb_path: string | null;
+      media_path: string | null;
+      media_meta_json: string | null;
+      body: string;
+    }>;
+    for (const row of activeItems) {
+      if (row.image_path === localName || row.thumb_path === localName || row.media_path === localName) {
+        return true;
+      }
+      if (row.media_meta_json && row.media_meta_json.includes(localName)) {
+        const meta = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
+        if (meta?.galleryPaths?.includes(localName)) return true;
+      }
+      if (row.body && row.body.includes(localName)) {
+        if (extractInlineMediaFilenames(row.body).includes(localName)) return true;
+      }
+    }
+    const calRows = this.db
+      .prepare('SELECT attachments_json FROM calendar_events WHERE deleted_at IS NULL')
+      .all() as Array<{ attachments_json: string }>;
+    for (const c of calRows) {
+      if (c.attachments_json && c.attachments_json.includes(localName)) {
+        const list = safeParseJson<string[]>(c.attachments_json, []);
+        if (list.includes(localName)) return true;
+      }
+    }
+    return false;
+  }
+
+  public getPendingBlobDeletes(): string[] {
+    const raw = this.getSyncState('pending_blob_deletes');
+    if (!raw) return [];
+    const parsed = safeParseJson<unknown>(raw, []);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/i.test(v));
+  }
+
+  public removePendingBlobDeletes(blobIds: string[]): void {
+    if (blobIds.length === 0) return;
+    const drop = new Set(blobIds);
+    const remaining = this.getPendingBlobDeletes().filter((id) => !drop.has(id));
+    if (remaining.length === 0) {
+      this.deleteSyncState('pending_blob_deletes');
+    } else {
+      this.setSyncState('pending_blob_deletes', JSON.stringify(remaining));
+    }
+  }
+
+  public enqueuePendingBlobDeletes(localNames: string[], excludeItemId?: string): void {
+    if (!localNames || localNames.length === 0) return;
+    const queue = new Set(this.getPendingBlobDeletes());
+    let changed = false;
+
+    for (const rawName of localNames) {
+      const name = (rawName || '').trim();
+      if (!name) continue;
+      if (this.isMediaReferencedElsewhere(name, excludeItemId)) continue;
+
+      const cached = this.getBlobCache(name);
+      if (!cached || !/^[a-f0-9]{64}$/i.test(cached.blobId)) continue;
+
+      // Ensure no other live/trashed media file maps to the same deduplicated content-addressed blobId
+      const siblings = this.db
+        .prepare('SELECT local_name FROM sync_blob_cache WHERE blob_id = ? AND local_name != ?')
+        .all(cached.blobId, name) as Array<{ local_name: string }>;
+      const sharedStillUsed = siblings.some((s) =>
+        this.isMediaReferencedElsewhere(s.local_name, excludeItemId)
+      );
+      if (sharedStillUsed) continue;
+
+      if (!queue.has(cached.blobId)) {
+        queue.add(cached.blobId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.setSyncState('pending_blob_deletes', JSON.stringify(Array.from(queue)));
+    }
+  }
+
+  /**
+   * Decision #2 (SYNC-01): Wipes all personal user records, secrets, integrations, and AI caches
+   * on sign-out / account deletion / account switch while preserving device identity & UI prefs.
+   */
+  public wipeAllUserData(): void {
+    this.inTx(() => {
+      this.db.exec(`
+        DELETE FROM items;
+        DELETE FROM items_fts;
+        DELETE FROM item_revisions;
+        DELETE FROM orbits;
+        DELETE FROM focus_boards;
+        DELETE FROM calendar_events;
+        DELETE FROM ai_cache;
+        DELETE FROM ai_usage_log;
+        DELETE FROM sync_dirty;
+        DELETE FROM sync_blob_cache;
+      `);
+
+      this.db
+        .prepare(
+          "DELETE FROM sync_state WHERE key NOT IN ('device_id', 'device_name', 'custom_supabase_url')"
+        )
+        .run();
+
+      this.db
+        .prepare(
+          `DELETE FROM settings WHERE
+             key LIKE 'api_key_%'
+             OR key LIKE 'gcal_%'
+             OR key LIKE 'tg_%'
+             OR key LIKE 'pin_%'
+             OR key = 'master_pin_hash'
+             OR key = 'clipper_paired_origins'
+             OR key = 'email_inbound_token'
+             OR key LIKE 'ai_provider%'`
+        )
+        .run();
+      this.tagUniverseCache = null;
+      this.bumpVaultMutationVersion();
+    });
+  }
+
   private compareLww(
     local: { updatedAt: number; syncVersion: number; deletedAt: number | null; deviceId: string } | null,
     remote: { updatedAt: number; syncVersion: number; deletedAt: number | null; deviceId: string }
@@ -4363,6 +4926,7 @@ export class VaultRepository {
         .prepare("DELETE FROM sync_dirty WHERE entity_type = 'orbit' AND entity_id = ?")
         .run(payload.id);
     });
+    this.bumpVaultMutationVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -4419,6 +4983,7 @@ export class VaultRepository {
         .prepare("DELETE FROM sync_dirty WHERE entity_type = 'focus_board' AND entity_id = ?")
         .run(payload.id);
     });
+    this.bumpVaultMutationVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -4496,6 +5061,7 @@ export class VaultRepository {
         .prepare("DELETE FROM sync_dirty WHERE entity_type = 'calendar_event' AND entity_id = ?")
         .run(payload.id);
     });
+    this.bumpVaultMutationVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -4540,7 +5106,37 @@ export class VaultRepository {
     });
 
     if (cmp !== 'remote') {
-      // Preserve losing remote live edit in item_revisions (source = 'sync_conflict') if content differs
+      const existingMeta = existing ? safeParseJson<MediaMeta | null>(existing.media_meta_json, null) : null;
+      const existingTags = existing ? safeParseJson<string[]>(existing.tags_json, []) : [];
+      const existingActions = existing
+        ? safeParseJson<ExtractedAction[]>(existing.extracted_actions_json, [])
+        : [];
+      const remoteContentDiffers = Boolean(
+        existing &&
+          (existing.deleted_at != null ||
+            (payload.title ?? '') !== (existing.title ?? '') ||
+            (payload.body ?? '') !== (existing.body ?? '') ||
+            (payload.orbit ?? '') !== (existing.orbit ?? '') ||
+            (payload.remindAt ?? null) !== (existing.remind_at ?? null) ||
+            JSON.stringify(payload.tags ?? []) !== JSON.stringify(existingTags) ||
+            (payload.mediaMeta?.transcript ?? '') !== (existingMeta?.transcript ?? '') ||
+            JSON.stringify(payload.extractedActions ?? []) !== JSON.stringify(existingActions))
+      );
+      const remoteTextChangedOrRestored = Boolean(
+        existing &&
+          (existing.deleted_at != null ||
+            (payload.title ?? '') !== (existing.title ?? '') ||
+            (payload.body ?? '') !== (existing.body ?? ''))
+      );
+      const remoteRevHash = computeRevisionHash(payload.title, payload.body);
+      const alreadyInRevisions = Boolean(
+        this.db
+          .prepare(
+            'SELECT 1 FROM item_revisions WHERE item_id = ? AND content_hash = ? AND deleted_at IS NULL LIMIT 1'
+          )
+          .get(payload.id, remoteRevHash)
+      );
+      // Preserve losing remote live edit in item_revisions (source = 'sync_conflict') if its text wasn't already captured
       if (
         cmp === 'local' &&
         existing &&
@@ -4548,8 +5144,10 @@ export class VaultRepository {
         !existing.purged_at &&
         !effectiveRemoteDeletedAt &&
         !remotePurgedAt &&
-        (payload.body || '').trim().length > 0 &&
-        (existing.deleted_at != null || (payload.body ?? '') !== existing.body)
+        ((payload.body || '').trim().length > 0 || (payload.title || '').trim().length > 0) &&
+        remoteContentDiffers &&
+        remoteTextChangedOrRestored &&
+        !alreadyInRevisions
       ) {
         this.saveItemRevision({
           itemId: payload.id,
@@ -4572,6 +5170,28 @@ export class VaultRepository {
     const isPurged = remotePurgedAt != null;
     const freedMedia = isPurged && existing ? this.collectItemMediaRefs(existing) : [];
 
+    const existingMetaForLocal = existing ? safeParseJson<MediaMeta | null>(existing.media_meta_json, null) : null;
+    const existingTagsForLocal = existing ? safeParseJson<string[]>(existing.tags_json, []) : [];
+    const existingActionsForLocal = existing
+      ? safeParseJson<ExtractedAction[]>(existing.extracted_actions_json, [])
+      : [];
+    const localContentDiffers = Boolean(
+      existing &&
+        (effectiveRemoteDeletedAt != null ||
+          (payload.title ?? '') !== (existing.title ?? '') ||
+          (payload.body ?? '') !== (existing.body ?? '') ||
+          (payload.orbit ?? '') !== (existing.orbit ?? '') ||
+          (payload.remindAt ?? null) !== (existing.remind_at ?? null) ||
+          JSON.stringify(payload.tags ?? []) !== JSON.stringify(existingTagsForLocal) ||
+          (payload.mediaMeta?.transcript ?? '') !== (existingMetaForLocal?.transcript ?? '') ||
+          JSON.stringify(payload.extractedActions ?? []) !== JSON.stringify(existingActionsForLocal))
+    );
+    const isConcurrentLocalEdit = Boolean(
+      existing &&
+        (this.isEntityDirty('item', payload.id) ||
+          (existing.last_device_id === localDeviceId && remoteDeviceId !== localDeviceId))
+    );
+
     // Preserve losing local edit in item_revisions (source = 'sync_conflict') before overwriting
     if (
       !isPurged &&
@@ -4579,16 +5199,43 @@ export class VaultRepository {
       !existing.deleted_at &&
       !existing.purged_at &&
       existing.dna !== 'secret' &&
-      existing.body.trim().length > 0 &&
-      (this.isEntityDirty('item', payload.id) ||
-        (existing.last_device_id === localDeviceId && remoteDeviceId !== localDeviceId)) &&
-      (effectiveRemoteDeletedAt != null || (payload.body ?? '') !== existing.body)
+      (existing.body.trim().length > 0 || existing.title.trim().length > 0) &&
+      isConcurrentLocalEdit &&
+      localContentDiffers
     ) {
       this.saveItemRevision({
         itemId: payload.id,
         title: existing.title,
         content: existing.body,
         source: 'sync_conflict',
+      });
+    } else if (
+      !isPurged &&
+      existing &&
+      !existing.deleted_at &&
+      !existing.purged_at &&
+      existing.dna === 'secret' &&
+      existing.encrypted_payload &&
+      localEncryptedPayload &&
+      existing.encrypted_payload !== localEncryptedPayload &&
+      isConcurrentLocalEdit
+    ) {
+      // Concurrent secret edit: preserve losing local encrypted payload in an encrypted conflict copy without plaintext leak
+      const conflictSuffix = this.getLocale() === 'en' ? 'conflict copy' : 'конфликтная копия';
+      const conflictTitle = `${existing.title || 'Secret'} (${conflictSuffix})`.slice(0, 140);
+      this.createItem({
+        dna: 'secret',
+        subKind: (existing.sub_kind as ItemSubKind | null) ?? undefined,
+        orbit: existing.orbit,
+        modeCaptured: (existing.mode_captured as CaptureMode) || 'ghost',
+        focusBoardId: existing.focus_board_id,
+        title: conflictTitle,
+        body: existing.body,
+        encryptedPayload: existing.encrypted_payload,
+        secretMeta: safeParseJson<SecretMeta | null>(existing.secret_meta_json, null),
+        tags: existingTagsForLocal,
+        source: 'sync_conflict' as ItemSource,
+        contentHash: `conflict:${existing.id}:${existing.sync_version}:${Date.now()}`,
       });
     }
 
@@ -4607,7 +5254,7 @@ export class VaultRepository {
         .prepare(
           `INSERT OR REPLACE INTO items (
             id, dna, sub_kind, orbit, mode_captured, focus_board_id,
-            title, body, summary, url, domain, platform,
+            title, title_norm, body, summary, url, domain, platform,
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
@@ -4615,7 +5262,7 @@ export class VaultRepository {
             remind_at, reminded_at, created_at, updated_at, content_updated_at,
             deleted_at, purged_at, canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame,
             annotations_json, links_out_json, sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           payload.id,
@@ -4625,6 +5272,7 @@ export class VaultRepository {
           payload.modeCaptured,
           isPurged ? null : payload.focusBoardId,
           isPurged ? '' : payload.title,
+          isPurged ? '' : (payload.title || '').trim().toLowerCase(),
           isPurged ? '' : payload.body,
           isPurged ? '' : payload.summary,
           isPurged ? null : payload.url,
@@ -4690,6 +5338,11 @@ export class VaultRepository {
       return saved;
     });
 
+    if (isPurged && freedMedia.length > 0) {
+      this.enqueuePendingBlobDeletes(freedMedia, payload.id);
+    }
+
+    this.bumpVaultMutationVersion();
     return {
       applied: true,
       localStrictlyNewer: false,

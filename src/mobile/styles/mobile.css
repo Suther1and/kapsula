@@ -8,7 +8,7 @@
   --k-caret: color-mix(in srgb, var(--k-ink-primary) 58%, var(--k-accent) 42%);
   --k-info: #38bdf8;
   --k-info-soft: rgba(56, 189, 248, 0.14);
-  --k-dock-bg: color-mix(in srgb, var(--k-bg-surface-1) 92%, transparent);
+  --k-dock-bg: color-mix(in srgb, var(--k-bg-surface-1) 95%, transparent);
   --k-dock-border: color-mix(in srgb, var(--k-ink-primary) 13%, transparent);
   --k-dock-shadow: 0 14px 36px rgba(0, 0, 0, 0.56), 0 1px 0 rgba(255, 255, 255, 0.07) inset;
   --k-scrim-bottom: linear-gradient(
@@ -27,7 +27,7 @@
   --k-info-soft: rgba(3, 105, 161, 0.11);
   --k-amber: #945705;
   --k-danger: #c13232;
-  --k-dock-bg: color-mix(in srgb, var(--k-bg-surface-1) 92%, transparent);
+  --k-dock-bg: color-mix(in srgb, var(--k-bg-surface-1) 95%, transparent);
   --k-dock-border: color-mix(in srgb, var(--k-ink-primary) 12%, transparent);
   --k-dock-shadow: 0 12px 32px rgba(20, 20, 28, 0.14), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
   --k-scrim-bottom: linear-gradient(

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowCounterClockwise,
   ArrowSquareOut,
@@ -75,7 +75,10 @@ import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectMenu } from '../ui/SelectMenu';
 import { ShortcutRecorder } from '../ui/ShortcutRecorder';
 import { SwitchToggle } from '../ui/SwitchToggle';
-import { SyncSettingsPanel } from './SyncSettingsPanel';
+
+const SyncSettingsPanel = lazy(() =>
+  import('./SyncSettingsPanel').then((m) => ({ default: m.SyncSettingsPanel }))
+);
 
 export type SettingsTab =
   | 'appearance'
@@ -116,19 +119,6 @@ function formatSyncTimestamp(
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-function buildBookmarkletCode(
-  port: number,
-  token: string,
-  savedAlert: string,
-  openAlert: string
-): string {
-  const safePort = port > 0 ? port : 41731;
-  const safeToken = (token || '').replace(/['"\\]/g, '');
-  const safeSaved = savedAlert.replace(/['"\\]/g, '');
-  const safeOpen = openAlert.replace(/['"\\]/g, '');
-  return `javascript:(function(){var t=(window.getSelection&&window.getSelection().toString())||'';fetch('http://127.0.0.1:${safePort}/clip',{method:'POST',headers:{'Content-Type':'application/json','X-Kapsula-Token':'${safeToken}'},body:JSON.stringify({url:location.href,title:document.title,text:t||document.title})}).then(function(){alert('${safeSaved}');}).catch(function(){alert('${safeOpen}');});})();`;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -177,7 +167,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [showCustomGcalClient, setShowCustomGcalClient] = useState(false);
 
   // Integrations busy state
-  const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
+  const [copiedPairCode, setCopiedPairCode] = useState(false);
+  const [clipperPairingInfo, setClipperPairingInfo] = useState<{
+    pairingCode: string;
+    pairedCount: number;
+  } | null>(null);
   const [importBusy, setImportBusy] = useState<string | null>(null);
 
   // Cloud Updates & Diagnostics
@@ -186,6 +180,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Security PIN & Cloud Sync one-time Recovery Key
   const [pinDraft, setPinDraft] = useState('');
+  const [currentPinDraft, setCurrentPinDraft] = useState('');
   const [pinSaving, setPinSaving] = useState(false);
   const [freshRecoveryKey, setFreshRecoveryKey] = useState<string | null>(null);
 
@@ -237,6 +232,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     refreshCloudQuota();
     window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
     window.kapsula.getUpdaterState().then(setUpdaterState).catch(() => {});
+    window.kapsula.getClipperPairingInfo?.().then(setClipperPairingInfo).catch(() => {});
     window.kapsula
       .getCalendarStatus()
       .then((st) => {
@@ -282,12 +278,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!settings) return null;
 
-  const patch = async (delta: Record<string, unknown>) => {
+  const patch = async (delta: Record<string, unknown>): Promise<boolean> => {
     try {
       const next = await window.kapsula.updateSettings(delta);
       onSettingsUpdated(next);
+      return true;
     } catch (err) {
       toast.error(friendlyErrorMessage(err, t('settings.saveErr'), locale));
+      return false;
     }
   };
 
@@ -310,12 +308,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     const cleaned = apiKeyDraft.trim();
     if (!cleaned) return;
-    const next = await window.kapsula.setApiKey(keyProviderTarget, cleaned);
-    onSettingsUpdated(next);
-    setApiKeyDraft('');
-    toast.success(t('settings.ai.keySavedToast'));
-    window.kapsula.getBudget().then(setBudget).catch(() => {});
-    refreshCloudQuota();
+    try {
+      const next = await window.kapsula.setApiKey(keyProviderTarget, cleaned);
+      onSettingsUpdated(next);
+      setApiKeyDraft('');
+      toast.success(t('settings.ai.keySavedToast'));
+      window.kapsula.getBudget().then(setBudget).catch(() => {});
+      refreshCloudQuota();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
   };
 
   const handleTestKey = async () => {
@@ -341,13 +343,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       toast.info(t('settings.security.pinMinError'));
       return;
     }
+    const cleanCurrent = currentPinDraft.trim();
+    if (settings?.hasMasterPin && !cleanCurrent) {
+      toast.info(t('settings.security.currentPinRequired'));
+      return;
+    }
     setPinSaving(true);
     try {
-      await window.kapsula.setMasterPin(clean);
+      await window.kapsula.setMasterPin(clean, settings?.hasMasterPin ? cleanCurrent : undefined);
       const next = await window.kapsula.getSettings();
       onSettingsUpdated(next);
       setPinDraft('');
+      setCurrentPinDraft('');
       toast.success(t('settings.security.pinSetToast'));
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('settings.security.wrongCurrentPin'), locale));
     } finally {
       setPinSaving(false);
     }
@@ -917,12 +927,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* 2. SYNC */}
           {tab === 'sync' ? (
-            <SyncSettingsPanel
-              onVaultChanged={onVaultChanged}
-              onAuthChanged={refreshCloudQuota}
-              freshRecoveryKey={freshRecoveryKey}
-              onFreshRecoveryKeyChange={setFreshRecoveryKey}
-            />
+            <Suspense fallback={null}>
+              <SyncSettingsPanel
+                onVaultChanged={onVaultChanged}
+                onAuthChanged={refreshCloudQuota}
+                freshRecoveryKey={freshRecoveryKey}
+                onFreshRecoveryKeyChange={setFreshRecoveryKey}
+              />
+            </Suspense>
           ) : null}
 
           {/* 3. SECURITY */}
@@ -944,18 +956,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {settings.hasMasterPin ? (
                     <button
                       type="button"
+                      disabled={pinSaving || !currentPinDraft.trim()}
                       onClick={async () => {
-                        await window.kapsula.setMasterPin(null);
-                        const next = await window.kapsula.getSettings();
-                        onSettingsUpdated(next);
-                        toast.success(t('settings.security.pinDisabledToast'));
+                        const cleanCurrent = currentPinDraft.trim();
+                        if (!cleanCurrent) {
+                          toast.info(t('settings.security.currentPinRequired'));
+                          return;
+                        }
+                        setPinSaving(true);
+                        try {
+                          await window.kapsula.setMasterPin(null, cleanCurrent);
+                          const next = await window.kapsula.getSettings();
+                          onSettingsUpdated(next);
+                          setCurrentPinDraft('');
+                          setPinDraft('');
+                          toast.success(t('settings.security.pinDisabledToast'));
+                        } catch (err) {
+                          toast.error(
+                            friendlyErrorMessage(err, t('settings.security.wrongCurrentPin'), locale)
+                          );
+                        } finally {
+                          setPinSaving(false);
+                        }
                       }}
-                      className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-danger)] cursor-pointer"
+                      className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] text-[var(--k-danger)] cursor-pointer disabled:opacity-50 disabled:cursor-default"
                     >
                       {t('settings.security.pinRemoveBtn')}
                     </button>
                   ) : null}
                 </div>
+
+                {settings.hasMasterPin ? (
+                  <input
+                    type="password"
+                    value={currentPinDraft}
+                    onChange={(e) => setCurrentPinDraft(e.target.value)}
+                    placeholder={t('settings.security.currentPinPlaceholder')}
+                    className="h-9 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[13px] outline-none focus:border-[var(--k-border-focus)]"
+                  />
+                ) : null}
 
                 <div className="flex items-center gap-2">
                   <input
@@ -971,7 +1010,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                   <button
                     type="submit"
-                    disabled={pinSaving || pinDraft.trim().length < 4}
+                    disabled={pinSaving || pinDraft.trim().length < 4 || (Boolean(settings.hasMasterPin) && !currentPinDraft.trim())}
                     className="k-interactive h-9 px-3.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                   >
                     {t('common.save')}
@@ -1204,6 +1243,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     ) : null}
                   </div>
                 ) : null}
+
+                {cloudQuota?.signedIn &&
+                settings.aiProvider === 'local' &&
+                !settings.hasGoogleAiKey &&
+                !settings.hasOpenRouterKey ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/75 px-3 py-2.5">
+                    <div className="text-[11.5px] leading-relaxed text-[var(--k-ink-secondary)] flex-1 min-w-[200px]">
+                      {t('settings.ai.localSignedInBanner')}
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="enable-builtin-ai-btn"
+                      onClick={async () => {
+                        const ok = await patch({ aiProvider: 'google_ai_studio' });
+                        if (ok) toast.success(t('settings.ai.builtInEnabledToast'));
+                      }}
+                      className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer shrink-0"
+                    >
+                      {t('settings.ai.enableBuiltInBtn')}
+                    </button>
+                  </div>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-2.5">
@@ -1223,6 +1284,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       { value: 'openrouter', label: 'OpenRouter' },
                     ]}
                   />
+                </div>
+
+                <div className="text-[11.5px] text-[var(--k-ink-muted)] leading-relaxed">
+                  {settings.aiProvider === 'local'
+                    ? t('settings.ai.localPrivacyHint')
+                    : t('settings.ai.cloudPrivacyHint')}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-[12px] text-[var(--k-ink-secondary)] pt-1">
@@ -1294,10 +1361,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       title={t('settings.ai.deleteKeyTitle')}
                       onClick={async () => {
-                        const next = await window.kapsula.setApiKey(keyProviderTarget, '');
-                        onSettingsUpdated(next);
-                        toast.success(t('settings.ai.keyDeletedToast'));
-                        refreshCloudQuota();
+                        try {
+                          const next = await window.kapsula.setApiKey(keyProviderTarget, '');
+                          onSettingsUpdated(next);
+                          toast.success(t('settings.ai.keyDeletedToast'));
+                          refreshCloudQuota();
+                        } catch (err) {
+                          toast.error(friendlyErrorMessage(err, undefined, locale));
+                        }
                       }}
                       className="k-interactive w-9 h-9 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-danger)] inline-flex items-center justify-center cursor-pointer"
                     >
@@ -1599,10 +1670,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            const r = await window.kapsula.importCalendarIcs();
-                            if (r.imported > 0) {
-                              toast.success(t('settings.integrations.eventsImported', { count: r.imported }));
-                              onVaultChanged?.();
+                            try {
+                              const r = await window.kapsula.importCalendarIcs();
+                              if (r.imported > 0) {
+                                toast.success(t('settings.integrations.eventsImported', { count: r.imported }));
+                                onVaultChanged?.();
+                              }
+                            } catch (err) {
+                              toast.error(friendlyErrorMessage(err, undefined, locale));
                             }
                           }}
                           className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] cursor-pointer"
@@ -1613,8 +1688,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            const r = await window.kapsula.exportCalendarIcs();
-                            if (r.path) toast.success(t('settings.integrations.eventsExported', { count: r.exported }));
+                            try {
+                              const r = await window.kapsula.exportCalendarIcs();
+                              if (r.path) toast.success(t('settings.integrations.eventsExported', { count: r.exported }));
+                            } catch (err) {
+                              toast.error(friendlyErrorMessage(err, undefined, locale));
+                            }
                           }}
                           className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[11.5px] cursor-pointer"
                         >
@@ -1626,11 +1705,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            const st = await window.kapsula.disconnectGoogleCalendar();
-                            setCalStatus(st);
-                            setGcalIcalDraft('');
-                            setShowGcalSetup(false);
-                            toast.success(t('settings.integrations.calDisconnectedToast'));
+                            try {
+                              const st = await window.kapsula.disconnectGoogleCalendar();
+                              setCalStatus(st);
+                              setGcalIcalDraft('');
+                              setShowGcalSetup(false);
+                              toast.success(t('settings.integrations.calDisconnectedToast'));
+                            } catch (err) {
+                              toast.error(friendlyErrorMessage(err, undefined, locale));
+                            }
                           }}
                           className="k-interactive h-7.5 px-2.5 rounded-lg text-[12px] text-[var(--k-danger)] cursor-pointer"
                         >
@@ -1650,7 +1733,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
-              {/* 2. Browser Extension + 3-step install + live port + 1-click Bookmarklet */}
+              {/* 2. Browser Extension + 3-step install + live port + pairing code */}
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1687,6 +1770,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
+                {clipperPairingInfo?.pairingCode ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/80 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-[11.5px] font-medium text-[var(--k-ink-primary)]">
+                        {t('settings.integrations.extPairLabel')}:{' '}
+                        <code className="px-1.5 py-0.5 rounded bg-[var(--k-bg-surface-2)] font-mono tracking-wider text-[12.5px]">
+                          {clipperPairingInfo.pairingCode}
+                        </code>
+                        {clipperPairingInfo.pairedCount > 0 ? (
+                          <span className="ml-2 text-[11px] text-[var(--k-ink-secondary)]">
+                            · {t('settings.integrations.extPairedCount', { count: clipperPairingInfo.pairedCount })}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="text-[11px] text-[var(--k-ink-secondary)] mt-0.5">
+                        {t('settings.integrations.extPairHint')}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        data-testid="copy-clipper-pair-code-btn"
+                        onClick={async () => {
+                          await window.kapsula.copyText(clipperPairingInfo.pairingCode);
+                          setCopiedPairCode(true);
+                          toast.success(t('settings.integrations.extPairCodeCopied'));
+                          window.setTimeout(() => setCopiedPairCode(false), 2000);
+                        }}
+                        className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[11px] font-medium text-[var(--k-ink-primary)] cursor-pointer"
+                      >
+                        {copiedPairCode ? (
+                          <Check weight="bold" className="w-3 h-3 text-[var(--k-emerald)]" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        <span>
+                          {copiedPairCode ? t('common.copied') : t('settings.integrations.extCopyPairCode')}
+                        </span>
+                      </button>
+                      {clipperPairingInfo.pairedCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const next = await window.kapsula.resetClipperPairing();
+                              setClipperPairingInfo(next);
+                              toast.success(t('settings.integrations.extResetPairToast'));
+                            } catch {
+                              toast.error(t('error.generic'));
+                            }
+                          }}
+                          className="k-interactive h-7 px-2.5 rounded-md border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[11px] text-[var(--k-ink-secondary)] cursor-pointer"
+                        >
+                          {t('settings.integrations.extResetPairBtn')}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -1696,32 +1839,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <FolderOpen className="w-3.5 h-3.5" />
                     <span>{t('settings.integrations.extOpenFolder')}</span>
                     <ArrowSquareOut className="w-3 h-3 opacity-80" />
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="copy-bookmarklet-btn"
-                    onClick={async () => {
-                      const code = buildBookmarkletCode(
-                        settings.clipperPort,
-                        settings.clipperToken,
-                        t('settings.integrations.bookmarkletSavedAlert'),
-                        t('settings.integrations.bookmarkletOpenAlert')
-                      );
-                      await window.kapsula.copyText(code);
-                      setCopiedBookmarklet(true);
-                      toast.success(t('settings.integrations.bookmarkletCopied'));
-                      window.setTimeout(() => setCopiedBookmarklet(false), 2000);
-                    }}
-                    className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] text-[12px] font-medium cursor-pointer"
-                  >
-                    {copiedBookmarklet ? (
-                      <Check weight="bold" className="w-3.5 h-3.5 text-[var(--k-emerald)]" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                    <span>
-                      {copiedBookmarklet ? t('common.copied') : t('settings.integrations.bookmarkletCopy')}
-                    </span>
                   </button>
                 </div>
               </div>

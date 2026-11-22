@@ -20,7 +20,7 @@ interface VoiceMemoCardProps {
   onItemUpdated?: (updated: VaultItem) => void;
 }
 
-export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
+export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
   item,
   compactList = false,
   onToggleVoiceAction,
@@ -200,4 +200,4 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = ({
       ) : null}
     </div>
   );
-};
+});

@@ -63,23 +63,13 @@ import { MobileAudioPlayer } from './MobileAudioPlayer';
 import { MobileMediaImage } from './MobileMediaImage';
 import { MobilePickerSheet, PickerTriggerChip } from './MobilePickerSheet';
 
-export const DRAFT_NOTE_ID = '__kapsula_new_draft__';
+import {
+  DRAFT_NOTE_ID,
+  type MaterializeDraftInput,
+  type NoteDraftBuffer,
+} from '../lib/note-draft-types';
 
-export interface NoteDraftBuffer {
-  title: string;
-  body: string;
-  rev: number;
-}
-
-export interface MaterializeDraftInput {
-  title: string;
-  body: string;
-  orbit: string;
-  focusBoardId: string | null;
-  isPinned: boolean;
-  tags: string[];
-  remindAt: number | null;
-}
+export { DRAFT_NOTE_ID, type MaterializeDraftInput, type NoteDraftBuffer };
 
 interface MobileNoteEditorProps {
   item: VaultItem;
@@ -258,6 +248,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   const dirtyRef = useRef(false);
   const deletedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bodySnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncingEditorRef = useRef(false);
   const titleAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -308,16 +299,31 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     [boards, effBoardId]
   );
 
+  const lastTitleLayoutRef = useRef<{ title: string; showBackButton: boolean } | null>(null);
+
   const autoResizeTitle = useCallback(() => {
     const el = titleAreaRef.current;
     if (!el) return;
+    if (
+      typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('field-sizing', 'content')
+    ) {
+      (el.style as CSSStyleDeclaration & { fieldSizing?: string }).fieldSizing = 'content';
+      el.style.minHeight = '32px';
+      el.style.height = '';
+      return;
+    }
+    const prev = lastTitleLayoutRef.current;
+    if (prev && prev.title === title && prev.showBackButton === showBackButton) return;
+    lastTitleLayoutRef.current = { title, showBackButton };
     el.style.height = 'auto';
     el.style.height = `${Math.max(32, el.scrollHeight)}px`;
-  }, []);
+  }, [title, showBackButton]);
 
   useLayoutEffect(() => {
     autoResizeTitle();
-  }, [title, showBackButton, autoResizeTitle]);
+  }, [autoResizeTitle]);
 
   const ensureMaterializedId = useCallback(
     async (forceEvenIfEmpty = false, expectedGen = sessionGenRef.current): Promise<string | null> => {
@@ -368,6 +374,11 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    if (bodySnapTimerRef.current) {
+      clearTimeout(bodySnapTimerRef.current);
+      bodySnapTimerRef.current = null;
+    }
+    setBodySnapshot(bodyRef.current);
 
     while (
       gen === sessionGenRef.current &&
@@ -554,7 +565,13 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           ? (ed as unknown as { getMarkdown: () => string }).getMarkdown()
           : ed.getText();
       bodyRef.current = md;
-      setBodySnapshot(md);
+      if (bodySnapTimerRef.current) {
+        clearTimeout(bodySnapTimerRef.current);
+      }
+      bodySnapTimerRef.current = setTimeout(() => {
+        bodySnapTimerRef.current = null;
+        setBodySnapshot(bodyRef.current);
+      }, 180);
       draftRevRef.current += 1;
       const activeKey = materializedIdRef.current ?? DRAFT_NOTE_ID;
       onDraftChange(activeKey, {
@@ -697,6 +714,10 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
   useEffect(() => {
     return () => {
+      if (bodySnapTimerRef.current) {
+        clearTimeout(bodySnapTimerRef.current);
+        bodySnapTimerRef.current = null;
+      }
       if (dirtyRef.current && !deletedRef.current) {
         void flushSave();
       }

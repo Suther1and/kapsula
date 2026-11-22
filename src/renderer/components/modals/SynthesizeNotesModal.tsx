@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, FileText, ListChecks, Sparkle, Table } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { OrbitDef, SynthesizeMode, VaultItem } from '@shared/types';
@@ -41,9 +41,12 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
   const [usedCloud, setUsedCloud] = useState(false);
 
   const validItems = items.filter((i) => i.dna !== 'secret');
+  const selectionKey = validItems.map((i) => i.id).join(',');
+  const previewReqRef = useRef(0);
 
   const runPreview = async (nextMode = mode, customInstr = instruction) => {
     if (validItems.length === 0) return;
+    const reqId = ++previewReqRef.current;
     setGenerating(true);
     try {
       const res = await window.kapsula.synthesizeNotes({
@@ -52,6 +55,7 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
         instruction: customInstr.trim() || undefined,
         save: false,
       });
+      if (reqId !== previewReqRef.current) return;
       setDraftTitle(res.preview.title);
       setDraftBody(res.preview.body);
       setUsedCloud(res.preview.usedCloud);
@@ -59,19 +63,34 @@ export const SynthesizeNotesModal: React.FC<SynthesizeNotesModalProps> = ({
         setTargetOrbit(res.preview.orbit);
       }
     } catch (err) {
+      if (reqId !== previewReqRef.current) return;
       toast.error(friendlyErrorMessage(err, t('synth.errGenerate'), locale));
     } finally {
-      setGenerating(false);
+      if (reqId === previewReqRef.current) {
+        setGenerating(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      previewReqRef.current += 1;
+      setDraftTitle('');
+      setDraftBody('');
+      setInstruction('');
+      setUsedCloud(false);
+      setGenerating(false);
+      return;
+    }
+    setDraftTitle('');
+    setDraftBody('');
+    setInstruction('');
+    setUsedCloud(false);
     setTargetOrbit(activeOrbitId || validItems.find((i) => i.orbit)?.orbit || '');
     setArchiveSources(false);
-    void runPreview(mode, instruction);
+    void runPreview(mode, '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, selectionKey]);
 
   const handleSave = async () => {
     if (validItems.length === 0 || !draftBody.trim() || saving) return;

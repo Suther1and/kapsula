@@ -1,5 +1,8 @@
 import { normalizeCardExpiry } from '@shared/russian-event-parser';
+import { maskLoginHint } from '@shared/secret-helpers';
 import type { AppLocale, SecretMeta, SecretPayload } from '@shared/types';
+
+export { maskLoginHint };
 
 export interface SecretAnalysis {
   isSecret: boolean;
@@ -9,7 +12,10 @@ export interface SecretAnalysis {
 }
 
 const API_TOKEN_PATTERNS: Array<{ label: string; regex: RegExp }> = [
-  { label: 'Private Key (PEM)', regex: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ },
+  {
+    label: 'Private Key (PEM)',
+    regex: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----)?/,
+  },
   { label: 'OpenAI / OpenRouter Key', regex: /\bsk-(?:or-v1-|proj-)?[A-Za-z0-9_-]{20,}\b/ },
   { label: 'Stripe Key', regex: /\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b/ },
   { label: 'AWS Access Key', regex: /\bAKIA[0-9A-Z]{16}\b/ },
@@ -254,17 +260,6 @@ export function detectBankCard(
   return null;
 }
 
-export function maskLoginHint(login: string): string {
-  const trimmed = login.trim();
-  if (!trimmed) return '';
-  const atIdx = trimmed.indexOf('@');
-  if (atIdx > 1) {
-    return `${trimmed[0]}***${trimmed.slice(atIdx)}`;
-  }
-  if (trimmed.length <= 3) return `${trimmed[0]}**`;
-  return `${trimmed.slice(0, 2)}***${trimmed.slice(-1)}`;
-}
-
 function isLikelySeedPhrase(text: string): boolean {
   const normalized = text.trim();
   if (/https?:\/\//i.test(normalized)) return false;
@@ -478,7 +473,8 @@ export function analyzeForSecret(
 export function redactSecrets(input: string): string {
   let out = input;
   for (const pat of API_TOKEN_PATTERNS) {
-    out = out.replace(new RegExp(pat.regex.source, 'g'), '[REDACTED_SECRET]');
+    const flags = pat.regex.flags.includes('g') ? pat.regex.flags : `${pat.regex.flags}g`;
+    out = out.replace(new RegExp(pat.regex.source, flags), '[REDACTED_SECRET]');
   }
   // Redact Basic Auth credentials inside URLs and Bearer headers
   out = out.replace(/https?:\/\/[^\s/:@]+:[^\s/@]+@/gi, 'https://[REDACTED_AUTH]@');
@@ -517,4 +513,23 @@ export function redactSecrets(input: string): string {
     .map((line) => (isLikelySeedPhrase(line) ? '[REDACTED_SEED_PHRASE]' : line))
     .join('\n');
   return out;
+}
+
+/**
+ * Redacts known secret formats and then verifies fail-closed that no secret pattern remains
+ * before allowing text to be transmitted to cloud AI endpoints.
+ */
+export function sanitizeForCloudAi(
+  input: string,
+  locale: AppLocale = 'ru'
+): { safe: boolean; text: string; reason: string | null } {
+  if (!input) {
+    return { safe: true, text: '', reason: null };
+  }
+  const redacted = redactSecrets(input);
+  const residual = analyzeForSecret(redacted, { locale });
+  if (residual.isSecret) {
+    return { safe: false, text: '', reason: residual.reason };
+  }
+  return { safe: true, text: redacted, reason: null };
 }

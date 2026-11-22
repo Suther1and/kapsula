@@ -316,8 +316,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   const [optimisticMap, setOptimisticMap] = useState<
     Record<string, Partial<VaultTaskEntry> & { deleted?: boolean }>
   >({});
-  const inFlightToggleSeqRef = useRef<Map<string, number>>(new Map());
-  const toggleSeqCounterRef = useRef(0);
+  const inFlightMutationSeqRef = useRef<Map<string, number>>(new Map());
+  const mutationSeqCounterRef = useRef(0);
   useEffect(() => {
     setOptimisticMap((prev) => {
       const keys = Object.keys(prev);
@@ -325,7 +325,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       let changed = false;
       const next: Record<string, Partial<VaultTaskEntry> & { deleted?: boolean }> = {};
       for (const id of keys) {
-        if (inFlightToggleSeqRef.current.has(id)) {
+        if (inFlightMutationSeqRef.current.has(id)) {
           next[id] = prev[id]!;
         } else {
           changed = true;
@@ -395,6 +395,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   const boardScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [dragVisual, setDragVisual] = useState<DragState | null>(null);
+  const dragOverlayRef = useRef<HTMLDivElement | null>(null);
+  const moveRafRef = useRef<number | null>(null);
   const autoScrollRafRef = useRef<number | null>(null);
   const lastDragEndAtRef = useRef<number>(0);
 
@@ -531,6 +533,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             ? (colCards[colCards.length - 1]!.boardOrder ?? colCards.length * 1000) + 1000
             : 1000;
 
+      const moveSeq = ++mutationSeqCounterRef.current;
+      inFlightMutationSeqRef.current.set(task.id, moveSeq);
       setOptimisticMap((prev) => ({
         ...prev,
         [task.id]: {
@@ -548,13 +552,19 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           columnId: targetColumnId,
           boardOrder: resolvedOrder,
         });
+        if (inFlightMutationSeqRef.current.get(task.id) === moveSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+        }
         onTasksChanged?.();
       } catch (err) {
-        setOptimisticMap((prev) => {
-          const next = { ...prev };
-          delete next[task.id];
-          return next;
-        });
+        if (inFlightMutationSeqRef.current.get(task.id) === moveSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+          setOptimisticMap((prev) => {
+            const next = { ...prev };
+            delete next[task.id];
+            return next;
+          });
+        }
         toast.error(friendlyErrorMessage(err, t('tasks.err.moveTask'), locale));
       }
     },
@@ -567,9 +577,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       const nextDone = !wasDone;
       const prevColId =
         task.columnId && !isDoneColumn(task.columnId, sortedColumns) ? task.columnId : inboxColId;
-      const seq = ++toggleSeqCounterRef.current;
+      const seq = ++mutationSeqCounterRef.current;
 
-      inFlightToggleSeqRef.current.set(task.id, seq);
+      inFlightMutationSeqRef.current.set(task.id, seq);
       setOptimisticMap((prev) => ({
         ...prev,
         [task.id]: {
@@ -581,16 +591,16 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
 
       try {
         await onToggleTask(task);
-        if (inFlightToggleSeqRef.current.get(task.id) === seq) {
-          inFlightToggleSeqRef.current.delete(task.id);
+        if (inFlightMutationSeqRef.current.get(task.id) === seq) {
+          inFlightMutationSeqRef.current.delete(task.id);
         }
         if (!wasDone) {
           toast(t('tasks.toast.done'), {
             action: {
               label: t('common.undo'),
               onClick: () => {
-                const undoSeq = ++toggleSeqCounterRef.current;
-                inFlightToggleSeqRef.current.set(task.id, undoSeq);
+                const undoSeq = ++mutationSeqCounterRef.current;
+                inFlightMutationSeqRef.current.set(task.id, undoSeq);
                 setOptimisticMap((prev) => ({
                   ...prev,
                   [task.id]: {
@@ -601,13 +611,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                 }));
                 void onToggleTask({ ...task, done: true })
                   .then(() => {
-                    if (inFlightToggleSeqRef.current.get(task.id) === undoSeq) {
-                      inFlightToggleSeqRef.current.delete(task.id);
+                    if (inFlightMutationSeqRef.current.get(task.id) === undoSeq) {
+                      inFlightMutationSeqRef.current.delete(task.id);
                     }
                   })
                   .catch(() => {
-                    if (inFlightToggleSeqRef.current.get(task.id) === undoSeq) {
-                      inFlightToggleSeqRef.current.delete(task.id);
+                    if (inFlightMutationSeqRef.current.get(task.id) === undoSeq) {
+                      inFlightMutationSeqRef.current.delete(task.id);
                       setOptimisticMap((prev) => {
                         const next = { ...prev };
                         delete next[task.id];
@@ -620,8 +630,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           });
         }
       } catch {
-        if (inFlightToggleSeqRef.current.get(task.id) === seq) {
-          inFlightToggleSeqRef.current.delete(task.id);
+        if (inFlightMutationSeqRef.current.get(task.id) === seq) {
+          inFlightMutationSeqRef.current.delete(task.id);
           setOptimisticMap((prev) => {
             const next = { ...prev };
             delete next[task.id];
@@ -684,6 +694,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       setEditingTaskId(null);
       if (!clean || clean === task.text) return;
       const taskKey = getCanonicalTaskKey(task);
+      const renameSeq = ++mutationSeqCounterRef.current;
+      inFlightMutationSeqRef.current.set(task.id, renameSeq);
       setOptimisticMap((prev) => ({
         ...prev,
         [task.id]: { ...prev[task.id], text: clean },
@@ -694,8 +706,19 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           taskKey,
           text: clean,
         });
+        if (inFlightMutationSeqRef.current.get(task.id) === renameSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+        }
         onTasksChanged?.();
       } catch (err) {
+        if (inFlightMutationSeqRef.current.get(task.id) === renameSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+          setOptimisticMap((prev) => {
+            const next = { ...prev };
+            delete next[task.id];
+            return next;
+          });
+        }
         toast.error(friendlyErrorMessage(err, t('tasks.err.rename'), locale));
       }
     },
@@ -705,6 +728,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   const handleDeleteTask = useCallback(
     async (task: VaultTaskEntry) => {
       const taskKey = getCanonicalTaskKey(task);
+      const deleteSeq = ++mutationSeqCounterRef.current;
+      inFlightMutationSeqRef.current.set(task.id, deleteSeq);
       setOptimisticMap((prev) => ({
         ...prev,
         [task.id]: { deleted: true },
@@ -714,14 +739,20 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           itemId: task.itemId,
           taskKey,
         });
+        if (inFlightMutationSeqRef.current.get(task.id) === deleteSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+        }
         toast.success(t('tasks.toast.deleted'));
         onTasksChanged?.();
       } catch (err) {
-        setOptimisticMap((prev) => {
-          const next = { ...prev };
-          delete next[task.id];
-          return next;
-        });
+        if (inFlightMutationSeqRef.current.get(task.id) === deleteSeq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+          setOptimisticMap((prev) => {
+            const next = { ...prev };
+            delete next[task.id];
+            return next;
+          });
+        }
         toast.error(friendlyErrorMessage(err, t('tasks.err.delete'), locale));
       }
     },
@@ -790,17 +821,15 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     }
     setOpenColMenuId(null);
     const affected = tasksByColumn.get(col.id) ?? [];
-    if (affected.length > 0) {
-      await Promise.all(
-        affected.map((t, idx) =>
-          window.kapsula.moveTaskOnBoard({
-            itemId: t.itemId,
-            taskKey: getCanonicalTaskKey(t),
-            columnId: inboxColId,
-            boardOrder: Date.now() + idx * 10,
-          })
-        )
-      );
+    // Serialize moves sequentially so tasks sharing the same parent note never overwrite each other's media_meta_json
+    for (let idx = 0; idx < affected.length; idx++) {
+      const tEntry = affected[idx]!;
+      await window.kapsula.moveTaskOnBoard({
+        itemId: tEntry.itemId,
+        taskKey: getCanonicalTaskKey(tEntry),
+        columnId: inboxColId,
+        boardOrder: Date.now() + idx * 10,
+      });
     }
     const nextCols = sortedColumns.filter((c) => c.id !== col.id);
     await persistColumns(nextCols);
@@ -840,6 +869,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       }
     }
     return { targetColumnId, insertIndex };
+  }, []);
+
+  const stopMoveRaf = useCallback(() => {
+    if (moveRafRef.current !== null) {
+      cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = null;
+    }
   }, []);
 
   const stopAutoScroll = useCallback(() => {
@@ -905,7 +941,8 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       if (!cur || ev.pointerId !== cur.pointerId) return;
       const dx = ev.clientX - cur.startX;
       const dy = ev.clientY - cur.startY;
-      if (!cur.active) {
+      const justActivated = !cur.active;
+      if (justActivated) {
         if (Math.hypot(dx, dy) < 6) return;
         cur.active = true;
         try {
@@ -917,10 +954,35 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       }
       cur.x = ev.clientX - cur.offsetX;
       cur.y = ev.clientY - cur.offsetY;
-      const hit = computeDropTarget(ev.clientX, ev.clientY, cur.task.id);
-      cur.targetColumnId = hit.targetColumnId;
-      cur.insertIndex = hit.insertIndex;
-      setDragVisual({ ...cur });
+      if (justActivated) {
+        const hit = computeDropTarget(ev.clientX, ev.clientY, cur.task.id);
+        cur.targetColumnId = hit.targetColumnId;
+        cur.insertIndex = hit.insertIndex;
+        setDragVisual({ ...cur });
+      }
+      if (moveRafRef.current === null) {
+        moveRafRef.current = requestAnimationFrame(() => {
+          moveRafRef.current = null;
+          const active = dragRef.current;
+          if (!active || !active.active) return;
+          if (dragOverlayRef.current) {
+            dragOverlayRef.current.style.transform = `translate3d(${active.x}px, ${active.y}px, 0) scale(1.02) rotate(0.5deg)`;
+          }
+          const hit = computeDropTarget(
+            active.x + active.offsetX,
+            active.y + active.offsetY,
+            active.task.id
+          );
+          if (
+            hit.targetColumnId !== active.targetColumnId ||
+            hit.insertIndex !== active.insertIndex
+          ) {
+            active.targetColumnId = hit.targetColumnId;
+            active.insertIndex = hit.insertIndex;
+            setDragVisual({ ...active });
+          }
+        });
+      }
     };
 
     const finishDrag = (ev: PointerEvent, cancelled: boolean) => {
@@ -929,6 +991,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
+      stopMoveRaf();
       stopAutoScroll();
       try {
         if (cardEl.hasPointerCapture(ev.pointerId)) {
@@ -968,7 +1031,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     window.addEventListener('pointercancel', onCancel);
   };
 
-  useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
+  useEffect(
+    () => () => {
+      stopAutoScroll();
+      stopMoveRaf();
+    },
+    [stopAutoScroll, stopMoveRaf]
+  );
 
   // Task Right-Click Context Menu
   const buildTaskContextMenu = (task: VaultTaskEntry): ContextMenuEntry[] => [
@@ -1986,6 +2055,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           {/* Floating Lifted Pointer Drag Overlay */}
           {dragVisual?.active ? (
             <div
+              ref={dragOverlayRef}
               data-testid="kanban-drag-overlay"
               style={{
                 position: 'fixed',

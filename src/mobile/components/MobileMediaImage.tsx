@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useMobileMediaCache } from '../lib/media-cache-context';
 
 interface MobileMediaImageProps {
   localName?: string | null;
@@ -25,6 +26,7 @@ export const MobileMediaImage: React.FC<MobileMediaImageProps> = ({
   onImageClick,
   children,
 }) => {
+  const { retainMediaUrl, releaseMediaUrl } = useMobileMediaCache();
   const [src, setSrc] = useState<string | null>(
     localName && /^(?:https?:|data:|blob:)/i.test(localName)
       ? localName
@@ -45,6 +47,7 @@ export const MobileMediaImage: React.FC<MobileMediaImageProps> = ({
       return;
     }
     let cancelled = false;
+    retainMediaUrl(localName);
     void ensureMediaUrl(localName).then((resolved) => {
       if (!cancelled) {
         setSrc(resolved || fallbackUrl || null);
@@ -52,8 +55,9 @@ export const MobileMediaImage: React.FC<MobileMediaImageProps> = ({
     });
     return () => {
       cancelled = true;
+      releaseMediaUrl(localName);
     };
-  }, [localName, fallbackUrl, ensureMediaUrl]);
+  }, [localName, fallbackUrl, ensureMediaUrl, retainMediaUrl, releaseMediaUrl]);
 
   if (!src || broken) return null;
 

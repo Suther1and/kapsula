@@ -1,6 +1,6 @@
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import type { AppLocale, ContentDna, OrbitDef } from '@shared/types';
-import { redactSecrets } from '../security/secret-shield';
+import { sanitizeForCloudAi } from '../security/secret-shield';
 import {
   postGeminiGenerateContent,
   postOpenRouterChatCompletions,
@@ -55,7 +55,20 @@ export async function classifyWithDecisionApi(params: {
   locale?: AppLocale;
   fetchFn?: FetchLike;
 }): Promise<DecisionApiResult> {
-  const sanitizedInput = redactSecrets(params.text).slice(0, 1400);
+  const shielded = sanitizeForCloudAi(params.text, params.locale);
+  if (!shielded.safe) {
+    return {
+      orbit: params.fallbackOrbit,
+      dna: params.fallbackDna,
+      needsEnrichment: false,
+      confidence: 0,
+      inputTokens: 0,
+      costUsd: 0,
+      modelUsed: 'local-secret-shield',
+      fallbackToChat: true,
+    };
+  }
+  const sanitizedInput = shielded.text.slice(0, 1400);
   const orbitLines =
     params.orbits.length > 0
       ? params.orbits.map((o) => `- ${o.id}: ${o.name} (${o.description})`).join('\n')

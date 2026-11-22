@@ -489,13 +489,25 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
     expect(sanitizeDiagnosticsError(`Bearer ${fakeJwt}`)).not.toContain('eyJhbGci');
   });
 
-  it('wires AndroidManifest, FileProvider, build.gradle, MainActivity, and KapsulaNativePlugin for OAuth & APK updates', () => {
+  it('wires AndroidManifest, flavors (play vs direct), FileProvider, MainActivity, and KapsulaNativePlugin for OAuth & APK updates', () => {
     const manifest = fs.readFileSync(
       path.resolve('android/app/src/main/AndroidManifest.xml'),
       'utf8'
     );
-    const filePaths = fs.readFileSync(
+    const directManifest = fs.readFileSync(
+      path.resolve('android/app/src/direct/AndroidManifest.xml'),
+      'utf8'
+    );
+    const playManifest = fs.readFileSync(
+      path.resolve('android/app/src/play/AndroidManifest.xml'),
+      'utf8'
+    );
+    const mainFilePaths = fs.readFileSync(
       path.resolve('android/app/src/main/res/xml/file_paths.xml'),
+      'utf8'
+    );
+    const directFilePaths = fs.readFileSync(
+      path.resolve('android/app/src/direct/res/xml/file_paths.xml'),
       'utf8'
     );
     const mainActivity = fs.readFileSync(
@@ -507,15 +519,25 @@ describe('Mobile Cloud AI Proxy, OAuth, Updater & Redacted Diagnostics', () => {
       'utf8'
     );
 
-    expect(manifest).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
+    expect(manifest).not.toContain('REQUEST_INSTALL_PACKAGES');
+    expect(manifest).not.toContain('android.permission.CAMERA');
+    expect(manifest).toContain('android:usesCleartextTraffic="false"');
     expect(manifest).toContain('android:scheme="com.notesplus.kapsula"');
     expect(manifest).toContain('android:host="auth-callback"');
-    expect(filePaths).toContain('name="apk_updates"');
-    expect(filePaths).toContain('path="updates/"');
+    expect(directManifest).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
+    expect(playManifest).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
+    expect(playManifest).toContain('tools:node="remove"');
+    expect(mainFilePaths).toContain('path="camera/"');
+    expect(mainFilePaths).not.toContain('external-path');
+    expect(mainFilePaths).not.toContain('apk_updates');
+    expect(directFilePaths).toContain('name="apk_updates"');
+    expect(directFilePaths).toContain('path="updates/"');
     expect(mainActivity).toContain('enqueueAuthCallbackUrl');
     expect(plugin).toContain('consumePendingAuthCallback');
     expect(plugin).toContain('getAppVersion');
     expect(plugin).toContain('downloadAndInstallApk');
+    expect(plugin).toContain('verifyApkSignatureMatchesCurrentApp');
+    expect(plugin).toContain('BuildConfig.ALLOW_SELF_UPDATE');
     expect(plugin).toContain('apkDownloadProgress');
     expect(plugin).toContain('ACTION_MANAGE_UNKNOWN_APP_SOURCES');
     expect(plugin).toContain('https://github.com/Suther1and/kapsula/');

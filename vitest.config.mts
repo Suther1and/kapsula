@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,7 @@ const pkgJson = JSON.parse(
 const appVersion = String(pkgJson.version || '1.0.2').trim();
 
 export default defineConfig({
+  plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
@@ -23,7 +25,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     testTimeout: 20000,
   },
 });

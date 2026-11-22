@@ -133,13 +133,13 @@ export function generateThumbnailAndAnalyze(
       });
     }
 
-    fs.mkdirSync(mediaDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
     const ext = hasAlphaEdges ? 'png' : 'jpg';
     const thumbFilename = `thumb_${fileStem}.${ext}`;
     const outBuf = hasAlphaEdges ? thumbImg.toPNG() : thumbImg.toJPEG(84);
 
     if (outBuf.length > 0) {
-      fs.writeFileSync(path.join(mediaDir, thumbFilename), outBuf);
+      fs.writeFileSync(path.join(mediaDir, thumbFilename), outBuf, { mode: 0o600 });
       return {
         thumbPath: thumbFilename,
         isLightBanner,

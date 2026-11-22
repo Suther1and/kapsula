@@ -94,6 +94,30 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
   const [connectMode, setConnectMode] = useState(false);
   const [connectFromId, setConnectFromId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const boardLayerRef = useRef<HTMLDivElement | null>(null);
+  const boardGridRef = useRef<HTMLDivElement | null>(null);
+  const cardElMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const boardMoveRafRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingCardPosRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const pendingCardResizeRef = useRef<{ id: string; w: number } | null>(null);
+  const pendingFrameUpdateRef = useRef<{
+    id: string;
+    mode: 'move' | 'resize';
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (boardMoveRafRef.current !== null) {
+        cancelAnimationFrame(boardMoveRafRef.current);
+        boardMoveRafRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setFrames(loadFrames(framesStorageKey));
@@ -317,41 +341,81 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
         if (cardResizeRef.current) {
           const r = cardResizeRef.current;
           const nextW = Math.max(210, Math.min(520, Math.round(r.origW + (e.clientX - r.startX) / zoom)));
-          setLocalSizes((prev) => ({ ...prev, [r.id]: { ...prev[r.id], w: nextW } }));
-          return;
-        }
-        if (cardDragRef.current) {
+          pendingCardResizeRef.current = { id: r.id, w: nextW };
+        } else if (cardDragRef.current) {
           const d = cardDragRef.current;
           const x = Math.round(d.origX + (e.clientX - d.startX) / zoom);
           const y = Math.round(d.origY + (e.clientY - d.startY) / zoom);
-          setLocalCoords((prev) => ({ ...prev, [d.id]: { x, y } }));
-          return;
-        }
-        if (frameDragRef.current) {
+          pendingCardPosRef.current = { id: d.id, x, y };
+        } else if (frameDragRef.current) {
           const f = frameDragRef.current;
           const dx = Math.round((e.clientX - f.startX) / zoom);
           const dy = Math.round((e.clientY - f.startY) / zoom);
-          setFrames((prev) =>
-            prev.map((item) => {
-              if (item.id !== f.id) return item;
-              if (f.mode === 'move') {
-                return { ...item, x: f.origX + dx, y: f.origY + dy };
-              }
-              return {
-                ...item,
-                w: Math.max(240, f.origW + dx),
-                h: Math.max(180, f.origH + dy),
-              };
-            })
-          );
+          pendingFrameUpdateRef.current =
+            f.mode === 'move'
+              ? { id: f.id, mode: 'move', x: f.origX + dx, y: f.origY + dy }
+              : { id: f.id, mode: 'resize', w: Math.max(240, f.origW + dx), h: Math.max(180, f.origH + dy) };
+        } else if (panDragRef.current) {
+          const p = panDragRef.current;
+          pendingPanRef.current = {
+            x: p.origX + (e.clientX - p.startX),
+            y: p.origY + (e.clientY - p.startY),
+          };
+        } else {
           return;
         }
-        if (panDragRef.current) {
-          const p = panDragRef.current;
-          setPan({ x: p.origX + (e.clientX - p.startX), y: p.origY + (e.clientY - p.startY) });
+
+        if (boardMoveRafRef.current === null) {
+          boardMoveRafRef.current = requestAnimationFrame(() => {
+            boardMoveRafRef.current = null;
+            if (pendingCardPosRef.current && cardDragRef.current) {
+              const { id, x, y } = pendingCardPosRef.current;
+              const d = cardDragRef.current;
+              const el = cardElMapRef.current.get(id);
+              if (el) {
+                el.style.transform = `translate3d(${x - d.origX}px, ${y - d.origY}px, 0)`;
+              } else {
+                setLocalCoords((prev) => ({ ...prev, [id]: { x, y } }));
+              }
+            }
+            if (pendingPanRef.current) {
+              const { x, y } = pendingPanRef.current;
+              if (boardLayerRef.current) {
+                boardLayerRef.current.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${zoom})`;
+              }
+              if (boardGridRef.current) {
+                boardGridRef.current.style.backgroundPosition = `${x}px ${y}px`;
+              }
+              if (!boardLayerRef.current) {
+                setPan({ x, y });
+              }
+            }
+            if (pendingCardResizeRef.current) {
+              const next = pendingCardResizeRef.current;
+              pendingCardResizeRef.current = null;
+              setLocalSizes((prev) => ({ ...prev, [next.id]: { ...prev[next.id], w: next.w } }));
+            }
+            if (pendingFrameUpdateRef.current) {
+              const upd = pendingFrameUpdateRef.current;
+              pendingFrameUpdateRef.current = null;
+              setFrames((prev) =>
+                prev.map((item) => {
+                  if (item.id !== upd.id) return item;
+                  if (upd.mode === 'move') {
+                    return { ...item, x: upd.x ?? item.x, y: upd.y ?? item.y };
+                  }
+                  return { ...item, w: upd.w ?? item.w, h: upd.h ?? item.h };
+                })
+              );
+            }
+          });
         }
       }}
       onPointerUp={(e) => {
+        if (boardMoveRafRef.current !== null) {
+          cancelAnimationFrame(boardMoveRafRef.current);
+          boardMoveRafRef.current = null;
+        }
         try {
           if (e.currentTarget.hasPointerCapture(e.pointerId)) {
             e.currentTarget.releasePointerCapture(e.pointerId);
@@ -361,26 +425,85 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
         }
         if (cardResizeRef.current) {
           const id = cardResizeRef.current.id;
-          const sz = localSizes[id];
-          if (sz) {
-            if (onUpdateSize) onUpdateSize(id, sz.w, sz.h ?? 0);
-            else void window.kapsula.updateItem(id, { canvasW: sz.w });
+          const pendingSz = pendingCardResizeRef.current;
+          pendingCardResizeRef.current = null;
+          const nextW = pendingSz?.id === id ? pendingSz.w : localSizes[id]?.w;
+          if (pendingSz?.id === id) {
+            setLocalSizes((prev) => ({ ...prev, [id]: { ...prev[id], w: pendingSz.w } }));
+          }
+          if (nextW !== undefined) {
+            const nextH = localSizes[id]?.h ?? 0;
+            if (onUpdateSize) onUpdateSize(id, nextW, nextH);
+            else void window.kapsula.updateItem(id, { canvasW: nextW });
           }
           cardResizeRef.current = null;
         }
         if (cardDragRef.current) {
           const id = cardDragRef.current.id;
-          const pos = localCoords[id];
-          if (pos) onUpdatePosition(id, pos.x, pos.y);
+          const el = cardElMapRef.current.get(id);
+          if (el) el.style.transform = '';
+          const pendingPos = pendingCardPosRef.current;
+          pendingCardPosRef.current = null;
+          const pos = pendingPos?.id === id ? { x: pendingPos.x, y: pendingPos.y } : localCoords[id];
+          if (pos) {
+            if (pendingPos?.id === id) {
+              setLocalCoords((prev) => ({ ...prev, [id]: pos }));
+            }
+            onUpdatePosition(id, pos.x, pos.y);
+          }
           cardDragRef.current = null;
         }
         if (frameDragRef.current) {
+          const pendingFrame = pendingFrameUpdateRef.current;
+          pendingFrameUpdateRef.current = null;
+          let nextFrames = frames;
+          if (pendingFrame) {
+            nextFrames = frames.map((item) => {
+              if (item.id !== pendingFrame.id) return item;
+              if (pendingFrame.mode === 'move') {
+                return { ...item, x: pendingFrame.x ?? item.x, y: pendingFrame.y ?? item.y };
+              }
+              return { ...item, w: pendingFrame.w ?? item.w, h: pendingFrame.h ?? item.h };
+            });
+          }
           frameDragRef.current = null;
-          persistFrames(frames);
+          persistFrames(nextFrames);
+        }
+        if (pendingPanRef.current) {
+          const committedPan = pendingPanRef.current;
+          pendingPanRef.current = null;
+          setPan(committedPan);
         }
         panDragRef.current = null;
       }}
-      onPointerCancel={() => {
+      onPointerCancel={(e) => {
+        if (boardMoveRafRef.current !== null) {
+          cancelAnimationFrame(boardMoveRafRef.current);
+          boardMoveRafRef.current = null;
+        }
+        if (cardDragRef.current) {
+          const el = cardElMapRef.current.get(cardDragRef.current.id);
+          if (el) el.style.transform = '';
+        }
+        if (pendingPanRef.current) {
+          if (boardLayerRef.current) {
+            boardLayerRef.current.style.transform = `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`;
+          }
+          if (boardGridRef.current) {
+            boardGridRef.current.style.backgroundPosition = `${pan.x}px ${pan.y}px`;
+          }
+        }
+        pendingPanRef.current = null;
+        pendingCardPosRef.current = null;
+        pendingCardResizeRef.current = null;
+        pendingFrameUpdateRef.current = null;
+        try {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+        } catch {
+          // ignore
+        }
         cardDragRef.current = null;
         cardResizeRef.current = null;
         frameDragRef.current = null;
@@ -389,6 +512,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
     >
       {/* Subtle dotted grid background */}
       <div
+        ref={boardGridRef}
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 opacity-25"
         style={{
@@ -490,9 +614,10 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
 
       {/* Transformed Canvas Layer */}
       <div
+        ref={boardLayerRef}
         data-board-layer="true"
         style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
           transformOrigin: '0 0',
         }}
         className="relative w-full h-full"
@@ -660,7 +785,7 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
           return (
             <ContextMenuSurface
               key={item.id}
-              entries={(() => {
+              entries={() => {
                 const menu: ContextMenuEntry[] = [
                   {
                     type: 'item',
@@ -760,9 +885,13 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   });
                 }
                 return menu;
-              })()}
+              }}
             >
               <div
+                ref={(node) => {
+                  if (node) cardElMapRef.current.set(item.id, node);
+                  else cardElMapRef.current.delete(item.id);
+                }}
                 data-board-card="true"
                 data-testid={`board-card-${item.id}`}
                 style={{

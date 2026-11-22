@@ -43,10 +43,16 @@ export function decodeHtmlEntities(input: string): string {
   if (!input) return '';
   let out = input.replace(/[\u00AD\u200B\uFEFF]/g, '');
   if (!out.includes('&')) return out;
+  const isSafeCodePoint = (cp: number): boolean =>
+    Number.isFinite(cp) &&
+    cp <= 0x10ffff &&
+    !(cp >= 0xd800 && cp <= 0xdfff) &&
+    (cp >= 0x20 || cp === 0x09 || cp === 0x0a || cp === 0x0d) &&
+    cp !== 0x7f;
   out = out.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (full, entity: string) => {
     if (entity.startsWith('#x') || entity.startsWith('#X')) {
       const cp = Number.parseInt(entity.slice(2), 16);
-      if (Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff) {
+      if (isSafeCodePoint(cp)) {
         try {
           return String.fromCodePoint(cp);
         } catch {
@@ -57,7 +63,7 @@ export function decodeHtmlEntities(input: string): string {
     }
     if (entity.startsWith('#')) {
       const cp = Number.parseInt(entity.slice(1), 10);
-      if (Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff) {
+      if (isSafeCodePoint(cp)) {
         try {
           return String.fromCodePoint(cp);
         } catch {
@@ -104,9 +110,11 @@ export function cleanBrokenTextArtifacts(input: string, stripAllMarkdown = false
  */
 export function truncateAtWordBoundary(raw: string, maxChars = 92): string {
   const clean = decodeHtmlEntities(raw || '').replace(/\s+/g, ' ').trim();
-  if (!clean || clean.length <= maxChars) return clean;
-  const head = clean.slice(0, maxChars);
-  const minBreak = Math.floor(maxChars * 0.5);
+  if (!clean) return clean;
+  const chars = Array.from(clean);
+  if (chars.length <= maxChars) return clean;
+  const head = chars.slice(0, maxChars).join('');
+  const minBreak = Math.floor(head.length * 0.5);
   let clauseEnd = -1;
   for (const sep of ['. ', '! ', '? ', ' — ', ': ', '; ']) {
     const idx = head.lastIndexOf(sep);
@@ -117,11 +125,11 @@ export function truncateAtWordBoundary(raw: string, maxChars = 92): string {
   if (clauseEnd >= minBreak) {
     return `${head.slice(0, clauseEnd).replace(/[,:;.\-—–\s]+$/, '')}…`;
   }
-  if (/\s/.test(clean[maxChars] || '')) {
+  if (/\s/.test(chars[maxChars] || '')) {
     return `${head.replace(/[,:;.\-—–\s]+$/, '')}…`;
   }
   const lastSpace = head.lastIndexOf(' ');
-  const cutIdx = lastSpace >= Math.floor(maxChars * 0.55) ? lastSpace : maxChars;
+  const cutIdx = lastSpace >= Math.floor(head.length * 0.55) ? lastSpace : head.length;
   return `${head.slice(0, cutIdx).replace(/[,:;.\-—–\s]+$/, '')}…`;
 }
 

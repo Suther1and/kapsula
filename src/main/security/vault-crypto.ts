@@ -90,13 +90,20 @@ export class VaultCrypto {
   private readonly configKeyPath: string;
   private readonly configSaltPath: string;
   private readonly usingDpapi: boolean;
+  private readonly isPackaged: boolean;
   private locale: AppLocale;
 
-  constructor(dataDir: string, dpapi?: DpapiBridge | null, locale: AppLocale = 'ru') {
-    fs.mkdirSync(dataDir, { recursive: true });
+  constructor(
+    dataDir: string,
+    dpapi?: DpapiBridge | null,
+    locale: AppLocale = 'ru',
+    options?: { isPackaged?: boolean }
+  ) {
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.dataDir = dataDir;
     this.dpapi = dpapi ?? null;
     this.locale = locale === 'en' ? 'en' : 'ru';
+    this.isPackaged = Boolean(options?.isPackaged);
     this.keyPath = path.join(dataDir, 'master.key.dpapi');
     this.pinKeyPath = path.join(dataDir, 'vault.vdk.pin.json');
     this.bioKeyPath = path.join(dataDir, 'vault.vdk.bio.dpapi');
@@ -136,16 +143,25 @@ export class VaultCrypto {
       throw new Error(translate(this.locale, 'main.vault.keychainUnavailable'));
     }
 
+    if (this.isPackaged) {
+      // Packaged builds without OS keychain/safeStorage must fail closed until Master PIN is set
+      this.masterKey = null;
+      return;
+    }
+
     if (fs.existsSync(this.localWrappedPath)) {
       this.masterKey = this.unwrapLocalVdk();
       return;
     }
 
-    // Deterministic machine-scoped key fallback for test / headless environments without PIN
+    // Deterministic machine-scoped key fallback for test / non-packaged headless environments without PIN
     this.masterKey = this.deriveLocalFallbackKey(this.fallbackSaltPath, 'kapsula-local-v1');
   }
 
   private deriveLocalFallbackKey(saltPath: string, domain: string): Buffer {
+    if (this.isPackaged) {
+      throw new Error(translate(this.locale, 'main.vault.keychainUnavailable'));
+    }
     let salt: Buffer;
     if (fs.existsSync(saltPath)) {
       salt = fs.readFileSync(saltPath);
@@ -230,6 +246,10 @@ export class VaultCrypto {
       this.configKey = fresh;
       return fresh;
     }
+    if (this.isPackaged) {
+      this.configKey = crypto.randomBytes(32);
+      return this.configKey;
+    }
     this.configKey = this.deriveLocalFallbackKey(this.configSaltPath, 'kapsula-config-v1');
     return this.configKey;
   }
@@ -257,23 +277,26 @@ export class VaultCrypto {
     return fs.existsSync(this.bioKeyPath);
   }
 
-  /**
-   * Wraps the 256-bit Vault Data Key (VDK) with a scrypt-derived PIN-KEK (N=65536, r=8, p=1)
-   * and removes the plain OS safeStorage unwrap file so deleting SQLite rows cannot unlock secrets.
-   */
-  public setPinProtection(pin: string, opts?: { enableBiometric?: boolean }): void {
-    const cleanPin = pin.trim();
-    if (cleanPin.length < 4) {
-      throw new Error(translate(this.locale, 'main.ipc.pinMinChars'));
-    }
-    const vdk = this.requireUnlockedVdk();
-    const salt = crypto.randomBytes(16);
-    const pinKek = crypto.scryptSync(cleanPin, salt, 32, {
-      N: PIN_SCRYPT_N,
-      r: PIN_SCRYPT_R,
-      p: PIN_SCRYPT_P,
-      maxmem: PIN_SCRYPT_MAXMEM,
+  private static scryptAsync(
+    password: crypto.BinaryLike,
+    salt: crypto.BinaryLike,
+    keylen: number,
+    options?: crypto.ScryptOptions
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const cb = (err: Error | null, derivedKey: Buffer) => {
+        if (err) reject(err);
+        else resolve(derivedKey);
+      };
+      if (options) {
+        crypto.scrypt(password, salt, keylen, options, cb);
+      } else {
+        crypto.scrypt(password, salt, keylen, cb);
+      }
     });
+  }
+
+  private wrapVdkWithPinKek(vdk: Buffer, salt: Buffer, pinKek: Buffer): void {
     try {
       const iv = crypto.randomBytes(12);
       const cipher = crypto.createCipheriv('aes-256-gcm', pinKek, iv, { authTagLength: 16 });
@@ -297,7 +320,9 @@ export class VaultCrypto {
     } finally {
       pinKek.fill(0);
     }
+  }
 
+  private finalizePinProtection(opts?: { enableBiometric?: boolean }): void {
     // Remove plain OS safeStorage & local fallback unwraps so DB tampering cannot bypass PIN
     unlinkIfExists(this.keyPath);
     unlinkIfExists(this.localWrappedPath);
@@ -312,6 +337,159 @@ export class VaultCrypto {
     this.pinProtected = true;
   }
 
+  private readPinWrappedEnvelope(): {
+    parsed: PinWrappedVdkFile;
+    salt: Buffer;
+    iv: Buffer;
+    tag: Buffer;
+    scryptN: number;
+    scryptR: number;
+    scryptP: number;
+  } | null {
+    if (!fs.existsSync(this.pinKeyPath)) {
+      return null;
+    }
+    let parsed: PinWrappedVdkFile;
+    try {
+      parsed = JSON.parse(fs.readFileSync(this.pinKeyPath, 'utf8')) as PinWrappedVdkFile;
+    } catch {
+      return null;
+    }
+    if (!parsed || parsed.v !== 2 || parsed.alg !== 'aes-256-gcm' || parsed.kdf !== 'scrypt') {
+      return null;
+    }
+    const salt = Buffer.from(parsed.salt, 'base64');
+    const iv = Buffer.from(parsed.iv, 'base64');
+    const tag = Buffer.from(parsed.tag, 'base64');
+    if (salt.length < 16 || iv.length !== 12 || tag.length !== 16) {
+      return null;
+    }
+    return {
+      parsed,
+      salt,
+      iv,
+      tag,
+      scryptN: Number.isInteger(parsed.N) && parsed.N >= 16384 ? parsed.N : PIN_SCRYPT_N,
+      scryptR: Number.isInteger(parsed.r) && parsed.r >= 1 ? parsed.r : PIN_SCRYPT_R,
+      scryptP: Number.isInteger(parsed.p) && parsed.p >= 1 ? parsed.p : PIN_SCRYPT_P,
+    };
+  }
+
+  private decryptPinWrappedEnvelope(
+    env: NonNullable<ReturnType<VaultCrypto['readPinWrappedEnvelope']>>,
+    pinKek: Buffer
+  ): Buffer | null {
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', pinKek, env.iv, { authTagLength: 16 });
+      decipher.setAAD(PIN_VDK_AAD);
+      decipher.setAuthTag(env.tag);
+      const vdk = Buffer.concat([
+        decipher.update(Buffer.from(env.parsed.data, 'base64')),
+        decipher.final(),
+      ]);
+      if (vdk.length !== 32) {
+        vdk.fill(0);
+        return null;
+      }
+      return vdk;
+    } catch {
+      return null;
+    } finally {
+      pinKek.fill(0);
+    }
+  }
+
+  /**
+   * Wraps the 256-bit Vault Data Key (VDK) with a scrypt-derived PIN-KEK (N=65536, r=8, p=1)
+   * and removes the plain OS safeStorage unwrap file so deleting SQLite rows cannot unlock secrets.
+   */
+  public setPinProtection(pin: string, opts?: { enableBiometric?: boolean }): void {
+    const cleanPin = pin.trim();
+    if (cleanPin.length < 4) {
+      throw new Error(translate(this.locale, 'main.ipc.pinMinChars'));
+    }
+    const vdk = this.requireUnlockedVdk();
+    const salt = crypto.randomBytes(16);
+    const pinKek = crypto.scryptSync(cleanPin, salt, 32, {
+      N: PIN_SCRYPT_N,
+      r: PIN_SCRYPT_R,
+      p: PIN_SCRYPT_P,
+      maxmem: PIN_SCRYPT_MAXMEM,
+    });
+    this.wrapVdkWithPinKek(vdk, salt, pinKek);
+    this.finalizePinProtection(opts);
+  }
+
+  /**
+   * Async worker-pool variant of setPinProtection so scrypt does not stall Electron's main event loop.
+   */
+  public async setPinProtectionAsync(
+    pin: string,
+    opts?: { enableBiometric?: boolean }
+  ): Promise<void> {
+    const cleanPin = pin.trim();
+    if (cleanPin.length < 4) {
+      throw new Error(translate(this.locale, 'main.ipc.pinMinChars'));
+    }
+    const vdk = this.requireUnlockedVdk();
+    const salt = crypto.randomBytes(16);
+    const pinKek = await VaultCrypto.scryptAsync(cleanPin, salt, 32, {
+      N: PIN_SCRYPT_N,
+      r: PIN_SCRYPT_R,
+      p: PIN_SCRYPT_P,
+      maxmem: PIN_SCRYPT_MAXMEM,
+    });
+    this.wrapVdkWithPinKek(vdk, salt, pinKek);
+    this.finalizePinProtection(opts);
+  }
+
+  /**
+   * Unwraps the PIN-protected VDK into a freshly allocated Buffer, or returns null on mismatch.
+   */
+  private unwrapPinKeyBuffer(pin: string): Buffer | null {
+    const env = this.readPinWrappedEnvelope();
+    if (!env) return null;
+    const pinKek = crypto.scryptSync(pin.trim(), env.salt, 32, {
+      N: env.scryptN,
+      r: env.scryptR,
+      p: env.scryptP,
+      maxmem: PIN_SCRYPT_MAXMEM,
+    });
+    return this.decryptPinWrappedEnvelope(env, pinKek);
+  }
+
+  private async unwrapPinKeyBufferAsync(pin: string): Promise<Buffer | null> {
+    const env = this.readPinWrappedEnvelope();
+    if (!env) return null;
+    const pinKek = await VaultCrypto.scryptAsync(pin.trim(), env.salt, 32, {
+      N: env.scryptN,
+      r: env.scryptR,
+      p: env.scryptP,
+      maxmem: PIN_SCRYPT_MAXMEM,
+    });
+    return this.decryptPinWrappedEnvelope(env, pinKek);
+  }
+
+  /**
+   * Verifies the provided PIN against the PIN-KEK envelope without mutating unlock state.
+   */
+  public verifyPinProtection(pin: string): boolean {
+    const vdk = this.unwrapPinKeyBuffer(pin);
+    if (!vdk) return false;
+    vdk.fill(0);
+    return true;
+  }
+
+  /**
+   * Async worker-pool variant of verifyPinProtection.
+   */
+  public async verifyPinProtectionAsync(pin: string): Promise<boolean> {
+    const vdk = await this.unwrapPinKeyBufferAsync(pin);
+    if (!vdk) return false;
+    vdk.fill(0);
+    return true;
+  }
+
   /**
    * Disables Master PIN cryptographic wrapping while unlocked and restores OS safeStorage protection.
    */
@@ -320,6 +498,8 @@ export class VaultCrypto {
     if (this.dpapi && this.dpapi.isEncryptionAvailable()) {
       const sealed = this.dpapi.encryptString(vdk.toString('hex'));
       atomicWriteFile(this.keyPath, sealed);
+    } else if (this.isPackaged) {
+      throw new Error(translate(this.locale, 'main.vault.keychainUnavailable'));
     } else {
       this.wrapLocalVdk(vdk);
     }
@@ -329,61 +509,61 @@ export class VaultCrypto {
   }
 
   /**
+   * Unconditionally zeroes keys and deletes PIN/VDK local material during account wipe.
+   * Safe to invoke even when Vault is locked.
+   */
+  public resetForAccountWipe(): void {
+    if (this.masterKey) {
+      this.masterKey.fill(0);
+      this.masterKey = null;
+    }
+    this.pinProtected = false;
+    unlinkIfExists(this.pinKeyPath);
+    unlinkIfExists(this.bioKeyPath);
+    unlinkIfExists(this.keyPath);
+    unlinkIfExists(this.localWrappedPath);
+    unlinkIfExists(this.fallbackSaltPath);
+
+    if (this.dpapi && this.dpapi.isEncryptionAvailable()) {
+      const fresh = crypto.randomBytes(32);
+      const sealed = this.dpapi.encryptString(fresh.toString('hex'));
+      atomicWriteFile(this.keyPath, sealed);
+      this.masterKey = fresh;
+    } else if (!this.isPackaged) {
+      this.masterKey = this.deriveLocalFallbackKey(this.fallbackSaltPath, 'kapsula-local-v1');
+    }
+  }
+
+  /**
    * Attempts to unwrap VDK into RAM using the provided Master PIN.
    */
   public unlockWithPin(pin: string): boolean {
     if (!fs.existsSync(this.pinKeyPath)) {
       return this.masterKey !== null;
     }
-    let parsed: PinWrappedVdkFile;
-    try {
-      parsed = JSON.parse(fs.readFileSync(this.pinKeyPath, 'utf8')) as PinWrappedVdkFile;
-    } catch {
-      return false;
-    }
-    if (!parsed || parsed.v !== 2 || parsed.alg !== 'aes-256-gcm' || parsed.kdf !== 'scrypt') {
-      return false;
-    }
-    const salt = Buffer.from(parsed.salt, 'base64');
-    const iv = Buffer.from(parsed.iv, 'base64');
-    const tag = Buffer.from(parsed.tag, 'base64');
-    if (salt.length < 16 || iv.length !== 12 || tag.length !== 16) {
-      return false;
-    }
+    const vdk = this.unwrapPinKeyBuffer(pin);
+    return this.installUnwrappedPinVdk(vdk);
+  }
 
-    const scryptN = Number.isInteger(parsed.N) && parsed.N >= 16384 ? parsed.N : PIN_SCRYPT_N;
-    const scryptR = Number.isInteger(parsed.r) && parsed.r >= 1 ? parsed.r : PIN_SCRYPT_R;
-    const scryptP = Number.isInteger(parsed.p) && parsed.p >= 1 ? parsed.p : PIN_SCRYPT_P;
-
-    const pinKek = crypto.scryptSync(pin.trim(), salt, 32, {
-      N: scryptN,
-      r: scryptR,
-      p: scryptP,
-      maxmem: PIN_SCRYPT_MAXMEM,
-    });
-    try {
-      const decipher = crypto.createDecipheriv('aes-256-gcm', pinKek, iv, { authTagLength: 16 });
-      decipher.setAAD(PIN_VDK_AAD);
-      decipher.setAuthTag(tag);
-      const vdk = Buffer.concat([
-        decipher.update(Buffer.from(parsed.data, 'base64')),
-        decipher.final(),
-      ]);
-      if (vdk.length !== 32) {
-        vdk.fill(0);
-        return false;
-      }
-      if (this.masterKey && this.masterKey !== vdk) {
-        this.masterKey.fill(0);
-      }
-      this.masterKey = vdk;
-      this.pinProtected = true;
-      return true;
-    } catch {
-      return false;
-    } finally {
-      pinKek.fill(0);
+  /**
+   * Async worker-pool variant of unlockWithPin so scrypt does not stall Electron's main event loop.
+   */
+  public async unlockWithPinAsync(pin: string): Promise<boolean> {
+    if (!fs.existsSync(this.pinKeyPath)) {
+      return this.masterKey !== null;
     }
+    const vdk = await this.unwrapPinKeyBufferAsync(pin);
+    return this.installUnwrappedPinVdk(vdk);
+  }
+
+  private installUnwrappedPinVdk(vdk: Buffer | null): boolean {
+    if (!vdk) return false;
+    if (this.masterKey && this.masterKey !== vdk) {
+      this.masterKey.fill(0);
+    }
+    this.masterKey = vdk;
+    this.pinProtected = true;
+    return true;
   }
 
   /**
@@ -547,6 +727,19 @@ export class VaultCrypto {
     return `scrypt2:${salt}:${derived}`;
   }
 
+  public static async hashPinAsync(pin: string): Promise<string> {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const derived = (
+      await VaultCrypto.scryptAsync(pin, salt, 32, {
+        N: PIN_SCRYPT_N,
+        r: PIN_SCRYPT_R,
+        p: PIN_SCRYPT_P,
+        maxmem: PIN_SCRYPT_MAXMEM,
+      })
+    ).toString('hex');
+    return `scrypt2:${salt}:${derived}`;
+  }
+
   public static verifyPin(pin: string, stored: string): boolean {
     const parts = stored.split(':');
     if (parts.length === 3 && parts[0] === 'scrypt2') {
@@ -567,6 +760,30 @@ export class VaultCrypto {
     const [salt, hexHash] = parts;
     if (!salt || !hexHash) return false;
     const derived = crypto.scryptSync(pin, salt, 32);
+    const expected = Buffer.from(hexHash, 'hex');
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  }
+
+  public static async verifyPinAsync(pin: string, stored: string): Promise<boolean> {
+    const parts = stored.split(':');
+    if (parts.length === 3 && parts[0] === 'scrypt2') {
+      const [, salt, hexHash] = parts;
+      if (!salt || !hexHash) return false;
+      const derived = await VaultCrypto.scryptAsync(pin, salt, 32, {
+        N: PIN_SCRYPT_N,
+        r: PIN_SCRYPT_R,
+        p: PIN_SCRYPT_P,
+        maxmem: PIN_SCRYPT_MAXMEM,
+      });
+      const expected = Buffer.from(hexHash, 'hex');
+      if (derived.length !== expected.length) return false;
+      return crypto.timingSafeEqual(derived, expected);
+    }
+    if (parts.length !== 2) return false;
+    const [salt, hexHash] = parts;
+    if (!salt || !hexHash) return false;
+    const derived = await VaultCrypto.scryptAsync(pin, salt, 32);
     const expected = Buffer.from(hexHash, 'hex');
     if (derived.length !== expected.length) return false;
     return crypto.timingSafeEqual(derived, expected);

@@ -163,6 +163,7 @@ export class MobileSyncMediaManager {
           { onConflict: 'user_id,blob_id' }
         );
         if (regErr) {
+          await client.storage.from(SYNC_STORAGE_BUCKET).remove([storagePath]).catch(() => {});
           throw new Error(
             tm('media.registerErr', { name: localName, msg: regErr.message }, this.store.getLocale())
           );
@@ -206,7 +207,12 @@ export class MobileSyncMediaManager {
       const existing = await this.store.loadMediaFile(safeName);
       if (existing && existing.bytes.byteLength > 0) {
         const cached = this.store.getBlobCache(safeName);
-        if (cached && cached.blobId === ref.blobId && cached.byteSize === existing.bytes.byteLength) {
+        if (
+          cached &&
+          cached.blobId === ref.blobId &&
+          cached.byteSize === existing.bytes.byteLength &&
+          cached.uploadedForUser === userId
+        ) {
           continue;
         }
         const sha = await computePlaintextSha256(existing.bytes);
@@ -260,5 +266,35 @@ export class MobileSyncMediaManager {
     }
 
     return downloadedCount;
+  }
+
+  public async deleteBlobs(
+    client: SupabaseClient,
+    userId: string,
+    blobIds: string[]
+  ): Promise<string[]> {
+    const cleanIds = Array.from(
+      new Set(blobIds.filter((id) => typeof id === 'string' && BLOB_ID_RE.test(id)))
+    );
+    if (cleanIds.length === 0) return [];
+
+    const confirmed: string[] = [];
+    for (let i = 0; i < cleanIds.length; i += 50) {
+      const batch = cleanIds.slice(i, i + 50);
+      const { error: dbErr } = await client
+        .from('sync_blobs')
+        .delete()
+        .eq('user_id', userId)
+        .in('blob_id', batch);
+      if (dbErr) {
+        continue;
+      }
+      const paths = batch.map((id) => `${userId}/${id}.enc`);
+      const { error: stErr } = await client.storage.from(SYNC_STORAGE_BUCKET).remove(paths);
+      if (!stErr || /not\s*found|404/i.test(stErr.message || '')) {
+        confirmed.push(...batch);
+      }
+    }
+    return confirmed;
   }
 }

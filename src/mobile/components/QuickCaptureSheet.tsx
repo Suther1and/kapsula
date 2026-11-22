@@ -18,7 +18,6 @@ import { formatDurationMmSs } from '@renderer/lib/format';
 import { extractFirstUrlFromText, makeSafeUploadName } from '../lib/mobile-helpers';
 import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge, type PickedFilePayload } from '../native/bridge';
-import { base64ToBytes } from '../sync/mobile-crypto';
 import { BottomSheet } from './BottomSheet';
 import { MobilePickerSheet, PickerTriggerChip } from './MobilePickerSheet';
 
@@ -191,11 +190,11 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
     setSaving(true);
     try {
       const res = await mobileBridge.stopVoiceRecording();
-      if (!res.ok || !res.base64) {
+      if (!res.ok || (!res.base64 && !res.stagedPath)) {
         toast.error(res.error || t('capture.voiceSaveError'));
         return;
       }
-      const bytes = base64ToBytes(res.base64);
+      const bytes = await mobileBridge.readNativeFileBytes(res);
       const mime = res.mime || 'audio/mp4';
       const fileName = makeSafeUploadName('voice', 'voice', mime);
       await onSaveMedia({
@@ -234,7 +233,7 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
     setSaving(true);
     try {
       for (const file of files) {
-        const bytes = base64ToBytes(file.base64);
+        const bytes = await mobileBridge.readNativeFileBytes(file);
         const isImg = file.mime.startsWith('image/');
         const kind = isImg ? 'shot' : forceKind;
         const safeName = makeSafeUploadName(kind, file.name, file.mime);

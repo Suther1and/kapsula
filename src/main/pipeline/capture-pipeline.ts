@@ -149,6 +149,67 @@ export function resolveSafeMediaFilePath(
   return { ok: true, safeName, filePath: realTarget, stat };
 }
 
+/**
+ * Async non-blocking variant of `resolveSafeMediaFilePath` for `kapsula-media://` requests.
+ * Reuses a pre-resolved `cachedRealMediaDir` so only the target file is resolved/statted via `fs.promises`.
+ */
+export async function resolveSafeMediaFilePathAsync(
+  mediaDir: string,
+  rawPart: string,
+  cachedRealMediaDir?: string
+): Promise<
+  | { ok: true; safeName: string; filePath: string; stat: fs.Stats }
+  | { ok: false; status: 400 | 403 | 404 }
+> {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPart);
+  } catch {
+    return { ok: false, status: 400 };
+  }
+  if (decoded.includes('\0')) {
+    return { ok: false, status: 400 };
+  }
+  const safeName = path.basename(decoded);
+  if (!safeName || safeName === '.' || safeName === '..') {
+    return { ok: false, status: 404 };
+  }
+  if (safeName.includes(':') || safeName.includes('\0')) {
+    return { ok: false, status: 400 };
+  }
+  const candidate = path.join(mediaDir, safeName);
+  let realMediaDir: string;
+  let realTarget: string;
+  try {
+    realMediaDir = cachedRealMediaDir || (await fs.promises.realpath(mediaDir));
+    realTarget = await fs.promises.realpath(candidate);
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  const normRoot = process.platform === 'win32' ? realMediaDir.toLowerCase() : realMediaDir;
+  const normTarget = process.platform === 'win32' ? realTarget.toLowerCase() : realTarget;
+  const rel = path.relative(normRoot, normTarget);
+  if (
+    !rel ||
+    rel === '..' ||
+    rel.startsWith(`..${path.sep}`) ||
+    rel.startsWith('../') ||
+    path.isAbsolute(rel)
+  ) {
+    return { ok: false, status: 403 };
+  }
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(realTarget);
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  if (!stat.isFile()) {
+    return { ok: false, status: 404 };
+  }
+  return { ok: true, safeName, filePath: realTarget, stat };
+}
+
 export function isGenericVoiceTitle(raw?: string | null): boolean {
   const t = (raw ?? '').trim();
   return !t || GENERIC_VOICE_TITLE_RE.test(t);
@@ -197,7 +258,7 @@ export class CapturePipeline {
     }
   ) {
     this.mediaDir = path.join(deps.dataDir, 'media');
-    fs.mkdirSync(this.mediaDir, { recursive: true });
+    fs.mkdirSync(this.mediaDir, { recursive: true, mode: 0o700 });
   }
 
   public getMediaDir(): string {
@@ -214,6 +275,7 @@ export class CapturePipeline {
    */
   public async saveNoteImageAsset(input: {
     base64?: string;
+    bytes?: Uint8Array;
     filePath?: string;
     mimeType?: string;
     fileName?: string;
@@ -227,7 +289,15 @@ export class CapturePipeline {
     else if (hintMime.includes('gif')) ext = '.gif';
     else if (hintMime.includes('bmp')) ext = '.bmp';
 
-    if (input.base64) {
+    const isEn = this.deps.repo.getLocale() === 'en';
+    if (input.bytes && input.bytes.byteLength > 0) {
+      if (input.bytes.byteLength > MAX_NOTE_IMAGE_BYTES) {
+        throw new Error(
+          isEn ? 'Image is too large (max 25 MB)' : 'Изображение слишком большое (максимум 25 МБ)'
+        );
+      }
+      buf = Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength);
+    } else if (input.base64) {
       const dataUrlMatch = /^data:image\/([a-z0-9+.-]+);base64,/i.exec(input.base64);
       if (dataUrlMatch?.[1]) {
         const sub = dataUrlMatch[1].toLowerCase();
@@ -239,7 +309,6 @@ export class CapturePipeline {
       }
       const cleaned = input.base64.replace(/^data:image\/[^;]+;base64,/i, '').trim();
       const approxMaxBase64Chars = Math.ceil((MAX_NOTE_IMAGE_BYTES * 4) / 3) + 64;
-      const isEn = this.deps.repo.getLocale() === 'en';
       if (cleaned.length > approxMaxBase64Chars) {
         throw new Error(
           isEn ? 'Image is too large (max 25 MB)' : 'Изображение слишком большое (максимум 25 МБ)'
@@ -252,7 +321,6 @@ export class CapturePipeline {
         );
       }
     } else if (input.filePath && fs.existsSync(input.filePath)) {
-      const isEn = this.deps.repo.getLocale() === 'en';
       const stat = fs.statSync(input.filePath);
       if (!stat.isFile()) {
         throw new Error(isEn ? 'Image is empty or not found' : 'Изображение пустое или не найдено');
@@ -279,7 +347,6 @@ export class CapturePipeline {
       }
     }
 
-    const isEn = this.deps.repo.getLocale() === 'en';
     if (!buf || buf.length === 0) {
       throw new Error(isEn ? 'Image is empty or not found' : 'Изображение пустое или не найдено');
     }
@@ -292,13 +359,13 @@ export class CapturePipeline {
     }
     ext = magicExt;
 
-    fs.mkdirSync(this.mediaDir, { recursive: true });
+    fs.mkdirSync(this.mediaDir, { recursive: true, mode: 0o700 });
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
     const stem = sha.slice(0, 24);
     const filename = `${stem}${ext}`;
     const absPath = path.join(this.mediaDir, filename);
     if (!fs.existsSync(absPath)) {
-      fs.writeFileSync(absPath, buf);
+      fs.writeFileSync(absPath, buf, { mode: 0o600 });
     }
 
     let thumbFilename: string | undefined;
@@ -383,30 +450,49 @@ export class CapturePipeline {
     buffer: Buffer | null;
   }> {
     let buf: Buffer | null = null;
-    let ext = '.png';
 
-    if (input.imageBase64) {
-      const cleaned = input.imageBase64.replace(/^data:image\/\w+;base64,/, '');
-      buf = Buffer.from(cleaned, 'base64');
-      if (input.imageBase64.startsWith('data:image/jpeg')) ext = '.jpg';
-      else if (input.imageBase64.startsWith('data:image/webp')) ext = '.webp';
+    if (input.imageBytes && input.imageBytes.byteLength > 0) {
+      if (input.imageBytes.byteLength <= MAX_NOTE_IMAGE_BYTES) {
+        buf = Buffer.from(
+          input.imageBytes.buffer,
+          input.imageBytes.byteOffset,
+          input.imageBytes.byteLength
+        );
+      }
+    } else if (input.imageBase64) {
+      const cleaned = input.imageBase64.replace(/^data:image\/[^;]+;base64,/i, '').trim();
+      if (cleaned && cleaned.length <= Math.ceil(MAX_NOTE_IMAGE_BYTES * 1.4)) {
+        const decoded = Buffer.from(cleaned, 'base64');
+        if (decoded.length > 0 && decoded.length <= MAX_NOTE_IMAGE_BYTES) {
+          buf = decoded;
+        }
+      }
     } else if (input.imageFilePath && fs.existsSync(input.imageFilePath)) {
-      buf = fs.readFileSync(input.imageFilePath);
-      const parsedExt = path.extname(input.imageFilePath).toLowerCase();
-      if (['.png', '.jpg', '.jpeg', '.webp', '.bmp'].includes(parsedExt)) {
-        ext = parsedExt;
+      try {
+        const st = fs.statSync(input.imageFilePath);
+        if (st.isFile() && st.size > 0 && st.size <= MAX_NOTE_IMAGE_BYTES) {
+          buf = fs.readFileSync(input.imageFilePath);
+        }
+      } catch {
+        buf = null;
       }
     }
 
-    if (!buf || buf.length === 0) {
+    if (!buf || buf.length === 0 || buf.length > MAX_NOTE_IMAGE_BYTES) {
       return { filename: null, absPath: null, sha: '', buffer: null };
     }
 
+    const magicExt = detectImageExtFromMagic(buf);
+    if (!magicExt) {
+      return { filename: null, absPath: null, sha: '', buffer: null };
+    }
+
+    fs.mkdirSync(this.mediaDir, { recursive: true, mode: 0o700 });
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
-    const filename = `${sha.slice(0, 24)}${ext}`;
+    const filename = `${sha.slice(0, 24)}${magicExt}`;
     const absPath = path.join(this.mediaDir, filename);
     if (!fs.existsSync(absPath)) {
-      fs.writeFileSync(absPath, buf);
+      fs.writeFileSync(absPath, buf, { mode: 0o600 });
     }
     return { filename, absPath, sha, buffer: buf };
   }
@@ -424,7 +510,14 @@ export class CapturePipeline {
     }
 
     let buf: Buffer;
-    if (input.audioBase64) {
+    if (input.audioBytes && input.audioBytes.byteLength > 0) {
+      if (input.audioBytes.byteLength > MAX_NOTE_IMAGE_BYTES) {
+        throw new Error(
+          isEn ? 'Audio file is too large (max 25 MB)' : 'Аудиофайл слишком большой (максимум 25 МБ)'
+        );
+      }
+      buf = Buffer.from(input.audioBytes.buffer, input.audioBytes.byteOffset, input.audioBytes.byteLength);
+    } else if (input.audioBase64) {
       const cleaned = input.audioBase64.replace(/^data:audio\/[^;]+;base64,/, '');
       buf = Buffer.from(cleaned, 'base64');
     } else if (input.filePath && fs.existsSync(input.filePath)) {
@@ -539,8 +632,17 @@ export class CapturePipeline {
           cloudProxy: cfg.cloudProxy,
           budgetReached: budget.limitReached,
           locale: this.deps.repo.getLocale(),
-          onSpendUsd: (usd) => {
-            if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'audio-intelligence', 600, 180, usd);
+          onSpendUsd: (usd, isCloudProxy) => {
+            if (usd > 0) {
+              this.deps.repo.logAiUsage(
+                cfg.aiProvider,
+                'audio-intelligence',
+                600,
+                180,
+                usd,
+                Boolean(isCloudProxy)
+              );
+            }
           },
           fetchFn: this.deps.fetchFn,
         });
@@ -620,7 +722,14 @@ export class CapturePipeline {
       input.fileName ||
       (input.filePath ? path.basename(input.filePath) : 'document.txt');
 
-    if (input.fileBase64) {
+    if (input.fileBytes && input.fileBytes.byteLength > 0) {
+      if (input.fileBytes.byteLength > MAX_NOTE_IMAGE_BYTES) {
+        throw new Error(
+          isEn ? 'Document is too large (max 25 MB)' : 'Документ слишком большой (максимум 25 МБ)'
+        );
+      }
+      buf = Buffer.from(input.fileBytes.buffer, input.fileBytes.byteOffset, input.fileBytes.byteLength);
+    } else if (input.fileBase64) {
       const cleaned = input.fileBase64.replace(/^data:[^;]+;base64,/, '');
       buf = Buffer.from(cleaned, 'base64');
     } else if (input.filePath && fs.existsSync(input.filePath)) {
@@ -706,8 +815,17 @@ export class CapturePipeline {
           cloudProxy: cfg.cloudProxy,
           budgetReached: budget.limitReached,
           locale: this.deps.repo.getLocale(),
-          onSpendUsd: (usd) => {
-            if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'doc-summary', 500, 120, usd);
+          onSpendUsd: (usd, isCloudProxy) => {
+            if (usd > 0) {
+              this.deps.repo.logAiUsage(
+                cfg.aiProvider,
+                'doc-summary',
+                500,
+                120,
+                usd,
+                Boolean(isCloudProxy)
+              );
+            }
           },
         });
 
@@ -774,7 +892,15 @@ export class CapturePipeline {
       ext = parsedExt;
     }
 
-    if (input.videoBase64) {
+    if (input.videoBytes && input.videoBytes.byteLength > 0) {
+      const maxVideoBytes = 48 * 1024 * 1024;
+      if (input.videoBytes.byteLength > maxVideoBytes) {
+        throw new Error(
+          isEn ? 'Video is too large (max 48 MB)' : 'Видео слишком большое (максимум 48 МБ)'
+        );
+      }
+      buf = Buffer.from(input.videoBytes.buffer, input.videoBytes.byteOffset, input.videoBytes.byteLength);
+    } else if (input.videoBase64) {
       const cleaned = input.videoBase64.replace(/^data:video\/[^;]+;base64,/, '');
       buf = Buffer.from(cleaned, 'base64');
     } else if (input.videoPath && fs.existsSync(input.videoPath)) {
@@ -786,9 +912,9 @@ export class CapturePipeline {
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
     const filename = `vid_${sha.slice(0, 24)}${ext}`;
     const absPath = path.join(this.mediaDir, filename);
-    fs.mkdirSync(this.mediaDir, { recursive: true });
+    fs.mkdirSync(this.mediaDir, { recursive: true, mode: 0o700 });
     if (!fs.existsSync(absPath)) {
-      fs.writeFileSync(absPath, buf);
+      fs.writeFileSync(absPath, buf, { mode: 0o600 });
     }
 
     const videoMime =
@@ -856,7 +982,14 @@ export class CapturePipeline {
     const fileName =
       input.fileName || (input.filePath ? path.basename(input.filePath) : 'message.eml');
 
-    if (input.fileBase64) {
+    if (input.fileBytes && input.fileBytes.byteLength > 0) {
+      if (input.fileBytes.byteLength > MAX_NOTE_IMAGE_BYTES) {
+        throw new Error(
+          isEn ? 'Document is too large (max 25 MB)' : 'Документ слишком большой (максимум 25 МБ)'
+        );
+      }
+      buf = Buffer.from(input.fileBytes.buffer, input.fileBytes.byteOffset, input.fileBytes.byteLength);
+    } else if (input.fileBase64) {
       const cleaned = input.fileBase64.replace(/^data:[^;]+;base64,/i, '');
       buf = Buffer.from(cleaned, 'base64');
     } else if (input.filePath && fs.existsSync(input.filePath)) {
@@ -965,22 +1098,23 @@ export class CapturePipeline {
   }
 
   public async capture(input: CaptureInput): Promise<VaultItem> {
-    if (input.audioBase64) {
+    if (input.audioBase64 || input.audioBytes) {
       return this.captureAudioInternal(input);
     }
-    if (input.videoBase64 || input.videoPath) {
+    if (input.videoBase64 || input.videoBytes || input.videoPath) {
       return this.captureVideoInternal(input);
     }
     const candidateFilePath = input.filePath || input.fileName || '';
     const candidateExt = path.extname(candidateFilePath).toLowerCase();
+    const hasDocPayload = Boolean(input.filePath || input.fileBase64 || input.fileBytes);
     if (
-      (input.filePath || input.fileBase64) &&
+      hasDocPayload &&
       (candidateExt === '.eml' || (input.fileMime ?? '').toLowerCase().includes('rfc822'))
     ) {
       return this.captureEmailInternal(input);
     }
     if (
-      (input.filePath || input.fileBase64) &&
+      hasDocPayload &&
       (['.mp4', '.webm', '.mov', '.m4v'].includes(candidateExt) ||
         (input.fileMime ?? '').startsWith('video/'))
     ) {
@@ -988,10 +1122,11 @@ export class CapturePipeline {
         ...input,
         videoPath: input.filePath,
         videoBase64: input.fileBase64,
+        videoBytes: input.fileBytes,
         videoMime: input.fileMime,
       });
     }
-    if (input.fileBase64 || input.filePath) {
+    if (hasDocPayload) {
       return this.captureDocumentInternal(input);
     }
 
@@ -1120,7 +1255,7 @@ export class CapturePipeline {
       Boolean(imgAsset.absPath) &&
       config.enableAutoOcr &&
       !input.isDemo &&
-      !(source === 'browser_ext' && Boolean(input.url));
+      (!(source === 'browser_ext' && Boolean(input.url)) || Boolean(input.imageBase64));
 
     if (isDirectScreenshot && imgAsset.absPath) {
       const preOcr = await Promise.race([
@@ -1398,10 +1533,12 @@ export class CapturePipeline {
 
     const isBlankDraftNote =
       !hasImage && !local.url && (rawText === 'Новая заметка' || rawText === 'New note');
+    const deferSyncDirtyUntilOcr = isDirectScreenshot && !ocrPreScanned && !input.isDemo;
     const needsBackground =
       !isBlankDraftNote &&
       !local.isFleetingScratch &&
-      ((hasImage && config.enableAutoOcr) ||
+      (deferSyncDirtyUntilOcr ||
+        (hasImage && config.enableAutoOcr) ||
         (local.dna === 'link' && Boolean(local.url) && config.enableUrlUnfurl) ||
         mode === 'autopilot' ||
         mode === 'focus');
@@ -1438,6 +1575,7 @@ export class CapturePipeline {
       remindAt: input.remindAt ?? null,
       isDemo: input.isDemo ?? false,
       createdAt: input.createdAt,
+      skipSyncDirty: deferSyncDirtyUntilOcr,
     });
 
     if (created.remindAt) this.deps.onReminderChanged?.();
@@ -1478,7 +1616,8 @@ export class CapturePipeline {
           false,
           hasExplicitOrbit,
           skipAutoCalendar,
-          ocrPreScanned
+          ocrPreScanned,
+          deferSyncDirtyUntilOcr
         )
       )
         .catch(() => {})
@@ -1498,7 +1637,8 @@ export class CapturePipeline {
     bypassCache = false,
     hasExplicitOrbit = false,
     skipAutoCalendar = false,
-    ocrAlreadyScanned = false
+    ocrAlreadyScanned = false,
+    deferSyncDirtyUntilOcr = false
   ): Promise<void> {
     const current = this.deps.repo.getItemById(itemId);
     if (
@@ -1548,13 +1688,32 @@ export class CapturePipeline {
       }
     };
 
-    // A. Offline OCR via platform adapter for screenshots (kept silent for search — never dumped as card text)
-    if (imgAbsPath && current.dna !== 'link' && config.enableAutoOcr && !ocrAlreadyScanned) {
-      const ocr = await defaultLocalOcrAdapter.extractText(imgAbsPath, this.deps.dataDir);
-      if (ocr.text) {
-        ocrText = ocr.text;
+    // A. Offline OCR Secret Shield check + OCR extraction (always screen local screenshots
+    // before Vision upload or deferred Sync enqueue, even when enableAutoOcr is disabled).
+    let ocrScreenedClean = ocrAlreadyScanned;
+    const mayAttemptCloudVision =
+      Boolean(this.deps.prepareVisionImage) &&
+      config.aiProvider !== 'local' &&
+      Boolean(config.apiKey || config.googleAiKey || config.openRouterKey || config.cloudProxy);
+    if (
+      imgAbsPath &&
+      current.dna !== 'link' &&
+      !ocrAlreadyScanned &&
+      (config.enableAutoOcr || mayAttemptCloudVision || deferSyncDirtyUntilOcr)
+    ) {
+      let ocr: Awaited<ReturnType<typeof defaultLocalOcrAdapter.extractText>> | null = null;
+      try {
+        ocr = await defaultLocalOcrAdapter.extractText(imgAbsPath, this.deps.dataDir);
+        ocrScreenedClean = true;
+      } catch {
+        ocrScreenedClean = false;
+      }
+      if (ocr?.text) {
+        if (config.enableAutoOcr) {
+          ocrText = ocr.text;
+        }
 
-        const ocrSecret = analyzeForSecret(ocrText, { locale });
+        const ocrSecret = analyzeForSecret(ocr.text, { locale });
         if (ocrSecret.isSecret && ocrSecret.payload && ocrSecret.meta) {
           const latestBeforeSecret = this.deps.repo.getItemById(itemId);
           if (!latestBeforeSecret || latestBeforeSecret.dna === 'secret') return;
@@ -1617,6 +1776,9 @@ export class CapturePipeline {
         for (const act of extractActionsFromText(ocr.text, locale)) {
           pushUniqueAction(act);
         }
+      }
+      if (deferSyncDirtyUntilOcr && ocrScreenedClean) {
+        this.deps.repo.markItemDirty(itemId);
       }
     }
 
@@ -1766,6 +1928,7 @@ export class CapturePipeline {
       (!preserveExtractedLinkCopy && (isSocialPostWithMedia || linkNeedsVisualBody));
     if (
       shouldRunVision &&
+      (current.dna === 'link' || ocrScreenedClean) &&
       effectiveImgAbs &&
       fs.existsSync(effectiveImgAbs) &&
       this.deps.prepareVisionImage &&
@@ -2121,8 +2284,17 @@ export class CapturePipeline {
       cloudProxy: cfg.cloudProxy,
       budgetReached: budget.limitReached,
       locale,
-      onSpendUsd: (usd) => {
-        if (usd > 0) this.deps.repo.logAiUsage(cfg.aiProvider, 'audio-transcribe', 600, 220, usd);
+      onSpendUsd: (usd, isCloudProxy) => {
+        if (usd > 0) {
+          this.deps.repo.logAiUsage(
+            cfg.aiProvider,
+            'audio-transcribe',
+            600,
+            220,
+            usd,
+            Boolean(isCloudProxy)
+          );
+        }
       },
       fetchFn: this.deps.fetchFn,
     });

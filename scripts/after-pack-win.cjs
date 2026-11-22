@@ -3,37 +3,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const afterPackMac = require('./after-pack-mac.cjs');
 
-/**
- * Unified electron-builder afterPack hook:
- * - On macOS (`darwin`), delegates cleanly to `scripts/after-pack-mac.cjs` (ad-hoc codesign + Apple Vision OCR +x).
- * - On Windows (`win32`), embeds `build/icon.ico` and Russian product metadata into `Kapsula.exe`
- *   BEFORE NSIS wraps `win-unpacked`, so both portable `win-unpacked/Kapsula.exe` and
- *   `Kapsula-<version>-windows.exe` carry the crisp Kapsula icon even with `signAndEditExecutable=false`.
- */
-module.exports = async function afterPackUnified(context) {
-  if (context.electronPlatformName === 'darwin') {
-    return afterPackMac(context);
-  }
+function normalizePeVersion(rawVersion) {
+  const nums = String(rawVersion || '1.0.0')
+    .split(/[^\d]+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((n) => Number.parseInt(n, 10) || 0);
+  while (nums.length < 3) nums.push(0);
+  return `${nums[0]}.${nums[1]}.${nums[2]}.0`;
+}
 
-  if (context.electronPlatformName !== 'win32') {
-    return;
-  }
-
+function embedWindowsMetadata(exePath) {
   const rootDir = path.resolve(__dirname, '..');
-  const productFilename =
-    (context.packager &&
-      context.packager.appInfo &&
-      context.packager.appInfo.productFilename) ||
-    'Kapsula';
-  const exePath = path.join(context.appOutDir, `${productFilename}.exe`);
   const iconPath = path.join(rootDir, 'build', 'icon.ico');
+  const pkgPath = path.join(rootDir, 'package.json');
 
-  if (!fs.existsSync(context.appOutDir)) {
-    return;
-  }
   if (!fs.existsSync(exePath)) {
-    console.warn(`[afterPack:win] Executable not found at ${exePath}, skipping icon embed.`);
-    return;
+    return { applied: false, reason: 'missing_exe' };
   }
   if (!fs.existsSync(iconPath)) {
     throw new Error(`[afterPack:win] Missing Windows icon at ${iconPath}`);
@@ -46,9 +32,17 @@ module.exports = async function afterPackUnified(context) {
   ];
   const rcedit = rceditCandidates.find((p) => fs.existsSync(p));
   if (!rcedit) {
-    console.warn('[afterPack:win] rcedit.exe not found in node_modules; skipping icon embed.');
-    return;
+    return { applied: false, reason: 'missing_rcedit' };
   }
+
+  let pkgVersion = '1.0.4';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (pkg && pkg.version) pkgVersion = String(pkg.version).trim();
+  } catch {
+    // fallback to default
+  }
+  const peVersion = normalizePeVersion(pkgVersion);
 
   execFileSync(
     rcedit,
@@ -56,18 +50,70 @@ module.exports = async function afterPackUnified(context) {
       exePath,
       '--set-icon',
       iconPath,
+      '--set-file-version',
+      peVersion,
+      '--set-product-version',
+      peVersion,
       '--set-version-string',
       'ProductName',
       'Kapsula',
       '--set-version-string',
       'FileDescription',
-      'Kapsula — Умное хранилище заметок и знаний',
+      'Kapsula — Encrypted Notes, Tasks & Vault',
       '--set-version-string',
       'CompanyName',
+      'Kapsula',
+      '--set-version-string',
+      'LegalCopyright',
+      'Copyright (c) 2026 Suther1and',
+      '--set-version-string',
+      'OriginalFilename',
+      'Kapsula.exe',
+      '--set-version-string',
+      'InternalName',
       'Kapsula',
     ],
     { stdio: 'inherit' }
   );
 
-  console.log(`[afterPack:win] Embedded ${iconPath} into ${exePath}`);
+  return { applied: true, iconPath, peVersion };
+}
+
+/**
+ * Unified electron-builder afterPack hook:
+ * - On macOS (`darwin`), delegates cleanly to `scripts/after-pack-mac.cjs` (ad-hoc codesign + Apple Vision OCR +x).
+ * - On Windows (`win32`), embeds `build/icon.ico` and complete PE metadata into `Kapsula.exe`
+ *   BEFORE NSIS wraps `win-unpacked`, so both portable `win-unpacked/Kapsula.exe` and
+ *   `Kapsula-<version>-windows.exe` carry clean metadata even with `signAndEditExecutable=false`.
+ */
+module.exports = async function afterPackUnified(context) {
+  if (context.electronPlatformName === 'darwin') {
+    return afterPackMac(context);
+  }
+
+  if (context.electronPlatformName !== 'win32') {
+    return;
+  }
+
+  const productFilename =
+    (context.packager &&
+      context.packager.appInfo &&
+      context.packager.appInfo.productFilename) ||
+    'Kapsula';
+  const exePath = path.join(context.appOutDir, `${productFilename}.exe`);
+
+  if (!fs.existsSync(context.appOutDir)) {
+    return;
+  }
+
+  const res = embedWindowsMetadata(exePath);
+  if (!res.applied) {
+    console.warn(`[afterPack:win] Skipped icon/PE embed (${res.reason}) for ${exePath}.`);
+    return;
+  }
+
+  console.log(`[afterPack:win] Embedded ${res.iconPath} + PE v${res.peVersion} into ${exePath}`);
 };
+
+module.exports.embedWindowsMetadata = embedWindowsMetadata;
+module.exports.normalizePeVersion = normalizePeVersion;

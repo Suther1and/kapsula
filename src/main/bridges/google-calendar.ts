@@ -8,6 +8,7 @@ import {
 } from '@shared/sync-contract';
 import type { AppLocale, CalendarEventInput, CalendarSyncStatus } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
+import { readUpToBytes, safeFetchWithRedirects } from '../pipeline/unfurler';
 import type { VaultCrypto } from '../security/vault-crypto';
 
 interface GoogleTokenBundle {
@@ -20,6 +21,7 @@ interface GoogleTokenBundle {
 
 export interface GoogleCalendarBridgeOptions {
   getSupabaseConfig?: () => { url: string; key: string };
+  getAccessToken?: () => Promise<string | null>;
   fetchFn?: (input: string | URL, init?: RequestInit) => Promise<Response>;
   openExternal?: (url: string) => Promise<void> | void;
   oauthTimeoutMs?: number;
@@ -210,6 +212,24 @@ export class GoogleCalendarBridge {
     };
   }
 
+  private async buildProxyHeaders(supaKey: string, requireToken = false): Promise<Record<string, string>> {
+    const headers: Record<string, string> = { apikey: supaKey };
+    if (this.opts.getAccessToken) {
+      const token = await this.opts.getAccessToken().catch(() => null);
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      } else if (requireToken) {
+        const isEn = this.repo.getLocale() === 'en';
+        throw new Error(
+          isEn
+            ? 'Sign in to Kapsula Sync first or enter your own Google Client ID.'
+            : 'Для быстрого входа в Google Календарь сначала войди в аккаунт синхронизации или укажи свой идентификатор клиента.'
+        );
+      }
+    }
+    return headers;
+  }
+
   public async fetchBuiltInOAuthConfig(
     forceRefresh = false
   ): Promise<{ enabled: boolean; clientId: string | null }> {
@@ -226,11 +246,15 @@ export class GoogleCalendarBridge {
 
     try {
       const { url, key } = this.getSupabaseConfig();
+      const proxyHeaders = await this.buildProxyHeaders(key, false);
+      if (this.opts.getAccessToken && !proxyHeaders.Authorization) {
+        const fallback = { enabled: false, clientId: null };
+        this.builtInOAuthCache = { ...fallback, fetchedAt: Date.now() };
+        return fallback;
+      }
       const resp = await this.getFetch()(`${url}/functions/v1/gcal-oauth`, {
         method: 'GET',
-        headers: {
-          apikey: key,
-        },
+        headers: proxyHeaders,
         signal: AbortSignal.timeout(6_000),
       });
       if (!resp.ok) {
@@ -347,6 +371,10 @@ export class GoogleCalendarBridge {
       this.repo.setSetting('gcal_client_id', customClientId);
       authMode = 'custom';
     } else {
+      if (this.opts.getAccessToken) {
+        const { key } = this.getSupabaseConfig();
+        await this.buildProxyHeaders(key, true);
+      }
       const builtIn = await this.fetchBuiltInOAuthConfig(true);
       if (!builtIn.enabled || !builtIn.clientId) {
         throw new Error(
@@ -492,11 +520,12 @@ export class GoogleCalendarBridge {
       let tokenResp: Response;
       if (authMode === 'proxy') {
         const { url: supaUrl, key: supaKey } = this.getSupabaseConfig();
+        const proxyHeaders = await this.buildProxyHeaders(supaKey, true);
         tokenResp = await fetchImpl(`${supaUrl}/functions/v1/gcal-oauth`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            apikey: supaKey,
+            ...proxyHeaders,
           },
           body: JSON.stringify({
             action: 'exchange',
@@ -600,11 +629,15 @@ export class GoogleCalendarBridge {
 
     if (useProxy) {
       const { url: supaUrl, key: supaKey } = this.getSupabaseConfig();
+      const proxyHeaders = await this.buildProxyHeaders(supaKey, false);
+      if (this.opts.getAccessToken && !proxyHeaders.Authorization) {
+        return null;
+      }
       resp = await fetchImpl(`${supaUrl}/functions/v1/gcal-oauth`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          apikey: supaKey,
+          ...proxyHeaders,
         },
         body: JSON.stringify({
           action: 'refresh',
@@ -647,13 +680,31 @@ export class GoogleCalendarBridge {
     this.lastError = null;
     const fetchImpl = this.getFetch();
 
-    // 1. Optional iCal Feed URL pull (zero OAuth setup!)
+    // 1. Optional iCal Feed URL pull (zero OAuth setup!) with SSRF protection + 5 MB cap
     const icalUrl = (this.repo.getSetting('gcal_ical_url') || '').trim();
     if (icalUrl && /^https?:\/\//i.test(icalUrl)) {
       try {
-        const resp = await fetchImpl(icalUrl, { signal: AbortSignal.timeout(12_000) });
+        const fetched = await safeFetchWithRedirects(icalUrl, {
+          accept: 'text/calendar, text/plain;q=0.9, */*;q=0.5',
+          timeoutMs: 12_000,
+          maxHops: 4,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        });
+        if (!fetched) {
+          throw new Error('blocked_or_invalid_ical_url');
+        }
+        const { resp } = fetched;
+        const maxIcalBytes = 5 * 1024 * 1024;
+        const contentLen = Number(resp.headers?.get('content-length') || '0');
+        if (Number.isFinite(contentLen) && contentLen > maxIcalBytes) {
+          await resp.body?.cancel().catch(() => {});
+          throw new Error('ical_too_large');
+        }
         if (resp.ok) {
-          const text = await resp.text();
+          const text = await readUpToBytes(resp, maxIcalBytes + 1);
+          if (Buffer.byteLength(text, 'utf8') > maxIcalBytes) {
+            throw new Error('ical_too_large');
+          }
           const parsed = parseIcalFeed(text, this.repo.getLocale());
           for (const ev of parsed) {
             this.repo.upsertCalendarEvent({

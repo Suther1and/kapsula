@@ -323,21 +323,23 @@ export async function resolveMobileAiTarget(
   syncEngine?: MobileAiCloudAuth | null
 ): Promise<ResolvedMobileAiTarget | null> {
   const cfg = store.getMobileAiConfig();
-  const googleKey = (await store.getMobileAiApiKey('google_ai_studio')).apiKey?.trim() || null;
-  const openrouterKey = (await store.getMobileAiApiKey('openrouter')).apiKey?.trim() || null;
 
-  // Priority 1: Personal API key (unlimited, direct provider call)
-  if (cfg.provider === 'google_ai_studio' && googleKey) {
-    return { mode: 'personal', provider: 'google_ai_studio', apiKey: googleKey };
-  }
-  if (cfg.provider === 'openrouter' && openrouterKey) {
-    return { mode: 'personal', provider: 'openrouter', apiKey: openrouterKey };
-  }
-  if (googleKey) {
-    return { mode: 'personal', provider: 'google_ai_studio', apiKey: googleKey };
-  }
-  if (openrouterKey) {
-    return { mode: 'personal', provider: 'openrouter', apiKey: openrouterKey };
+  // Priority 1: Personal API key when user selected personal/auto cloud provider (strictly skipped on 'local' Built-in Cloud Proxy mode)
+  if (cfg.provider !== 'local') {
+    const googleKey = (await store.getMobileAiApiKey('google_ai_studio')).apiKey?.trim() || null;
+    const openrouterKey = (await store.getMobileAiApiKey('openrouter')).apiKey?.trim() || null;
+    if (cfg.provider === 'google_ai_studio' && googleKey) {
+      return { mode: 'personal', provider: 'google_ai_studio', apiKey: googleKey };
+    }
+    if (cfg.provider === 'openrouter' && openrouterKey) {
+      return { mode: 'personal', provider: 'openrouter', apiKey: openrouterKey };
+    }
+    if (googleKey) {
+      return { mode: 'personal', provider: 'google_ai_studio', apiKey: googleKey };
+    }
+    if (openrouterKey) {
+      return { mode: 'personal', provider: 'openrouter', apiKey: openrouterKey };
+    }
   }
 
   // Priority 2: Built-in shared Cloud AI proxy for signed-in Cloud Sync accounts
@@ -791,14 +793,15 @@ export async function extractTasksFromMobileItem(
         error: tm('ai.notConfigured', undefined, locale),
       };
     }
-    const sanitizedText = redactSecrets(sourceText).slice(0, 8000);
-    if (analyzeForSecret(sanitizedText).isSecret) {
+    const { masked, secrets, safeForCloud } = maskMobileSecretsForCloud(sourceText);
+    if (!safeForCloud) {
       return {
         ok: false,
         tasks: [],
         error: tm('ai.secretDetected', undefined, locale),
       };
     }
+    const sanitizedText = masked.slice(0, 8000);
     const prompt = [
       tm('ai.promptTasks1', undefined, locale),
       tm('ai.promptTasks2', undefined, locale),
@@ -814,7 +817,7 @@ export async function extractTasksFromMobileItem(
       if (Array.isArray(parsed.tasks)) {
         extracted = parsed.tasks
           .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))
-          .map((x) => x.trim());
+          .map((x) => restoreMobileSecrets(x.trim(), secrets));
       }
     } catch {
       extracted = [];

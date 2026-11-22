@@ -14,7 +14,7 @@ interface SmartLinkCardProps {
 
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 
-export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
+export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
   item,
   compactList = false,
 }) => {
@@ -184,4 +184,4 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = ({
       ) : null}
     </div>
   );
-};
+});

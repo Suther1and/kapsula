@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
@@ -31,6 +31,7 @@ import type {
 } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import { buildDstSafeAllDayEnd } from '@shared/calendar-recurrence';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { getDnaHumanLabel } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
@@ -130,7 +131,7 @@ function computeEndFromTime(dateStr: string, startMs: number, endTimeStr: string
   if (!Number.isFinite(base.getTime())) return startMs + 3_600_000;
   base.setHours(Number.isFinite(eh) ? eh : 12, Number.isFinite(em) ? em : 0, 0, 0);
   if (base.getTime() <= startMs) {
-    return startMs + 1_800_000;
+    base.setDate(base.getDate() + 1);
   }
   return base.getTime();
 }
@@ -195,8 +196,21 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
   const [attachQuery, setAttachQuery] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const prevOpenRef = useRef(false);
+  const prevEventIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      prevOpenRef.current = false;
+      return;
+    }
+    const nextEventId = event?.id ?? null;
+    const justOpened = !prevOpenRef.current;
+    const switchedEvent = prevEventIdRef.current !== nextEventId;
+    prevOpenRef.current = true;
+    prevEventIdRef.current = nextEventId;
+    if (!justOpened && !switchedEvent) return;
+
     setSmartText('');
     setNewChecklistText('');
     setAttachQuery('');
@@ -379,7 +393,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
     validBase.setHours(0, 0, 0, 0);
 
     let startAt = validBase.getTime();
-    let endAt = startAt + 86_400_000 - 1000;
+    let endAt = buildDstSafeAllDayEnd(validBase);
     let hasEndTime = false;
 
     if (!allDay) {

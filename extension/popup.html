@@ -117,8 +117,41 @@
       border: 1px solid rgba(46, 160, 107, 0.3);
     }
     .vault-btn:hover:not(:disabled) { background: rgba(46, 160, 107, 0.2); }
+    .ig-toggle-row {
+      margin-top: 10px;
+      padding: 8px 9px;
+      border-radius: 9px;
+      background: #191920;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .ig-toggle-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .ig-toggle-title {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: #ececf0;
+    }
+    .ig-toggle-sub {
+      font-size: 10.5px;
+      color: #8b8b96;
+    }
+    .ig-toggle-row input {
+      accent-color: #e86a33;
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      cursor: pointer;
+    }
     #status {
-      margin-top: 9px;
+      margin-top: 8px;
       font-size: 11px;
       color: #a1a1aa;
       min-height: 15px;
@@ -126,6 +159,38 @@
     }
     #status.ok { color: #4ade80; }
     #status.err { color: #fb7185; }
+    .pair-box {
+      display: none;
+      margin-bottom: 10px;
+      padding: 9px;
+      border-radius: 9px;
+      background: #191920;
+      border: 1px solid rgba(232, 106, 51, 0.35);
+    }
+    .pair-box.visible { display: block; }
+    .pair-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 5px;
+    }
+    .pair-row input {
+      flex: 1;
+      background: #121216;
+      color: #f4f4f6;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 7px;
+      padding: 6px 8px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      outline: none;
+    }
+    .pair-row input:focus { border-color: rgba(232, 106, 51, 0.75); }
+    .pair-row button {
+      background: #e86a33;
+      color: #fff;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -137,6 +202,14 @@
     <div class="conn" id="connBadge">
       <span class="conn-dot" id="connDot"></span>
       <span id="connText">Проверка…</span>
+    </div>
+  </div>
+
+  <div class="pair-box" id="pairBox">
+    <label for="pairCodeInput">Код из Kapsula (Настройки → Интеграции)</label>
+    <div class="pair-row">
+      <input id="pairCodeInput" type="text" placeholder="Код подключения" autocomplete="off" />
+      <button id="pairBtn" type="button">Подключить</button>
     </div>
   </div>
 
@@ -154,6 +227,14 @@
     <button class="secondary" id="saveShotBtn" type="button">Скриншот</button>
     <button class="vault-btn" id="saveSecretBtn" type="button">Сохранить в Сейф</button>
   </div>
+
+  <label class="ig-toggle-row" for="igOverlayToggle">
+    <span class="ig-toggle-text">
+      <span class="ig-toggle-title">Кнопка в Instagram</span>
+      <span class="ig-toggle-sub">Быстрое сохранение постов и «Сохранённого»</span>
+    </span>
+    <input type="checkbox" id="igOverlayToggle" />
+  </label>
 
   <div id="status"></div>
   <script src="popup.js"></script>

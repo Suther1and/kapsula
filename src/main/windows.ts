@@ -6,7 +6,7 @@ import { defaultPlatformPasteAdapter } from './platform/platform-adapters';
 
 export interface SurfaceWindows {
   vault: BrowserWindow;
-  hud: BrowserWindow;
+  hud: BrowserWindow | null;
 }
 
 export const HUD_WINDOW_SIZE = { width: 860, height: 580 };
@@ -22,6 +22,11 @@ export class WindowManager {
   private hudPreventBlurClose = false;
   private isQuitting = false;
   private hudMoveSaveTimer: NodeJS.Timeout | null = null;
+  private hudWarmupTimer: NodeJS.Timeout | null = null;
+  private hudLoaded = false;
+  private hudShowPending = false;
+  private hudContentProtection = false;
+  private onHudHide?: () => void;
 
   constructor(
     private readonly preloadPath: string,
@@ -32,6 +37,28 @@ export class WindowManager {
 
   public setQuitting(quitting: boolean): void {
     this.isQuitting = quitting;
+    if (quitting && this.hudWarmupTimer) {
+      clearTimeout(this.hudWarmupTimer);
+      this.hudWarmupTimer = null;
+    }
+  }
+
+  public setOnHudHide(cb?: () => void): void {
+    this.onHudHide = cb;
+  }
+
+  public setHudContentProtection(enabled: boolean): void {
+    const envDisabled =
+      !app.isPackaged && process.env.KAPSULA_DISABLE_CONTENT_PROTECTION === '1';
+    const effective = envDisabled ? false : Boolean(enabled);
+    this.hudContentProtection = effective;
+    if (this.hud && !this.hud.isDestroyed()) {
+      try {
+        this.hud.setContentProtection(effective);
+      } catch {
+        // Optional depending on OS compositor / headless environment
+      }
+    }
   }
 
   private hardenWindow(win: BrowserWindow): void {
@@ -84,6 +111,19 @@ export class WindowManager {
     this.loadSurface(this.vault, 'vault');
     this.vault.once('ready-to-show', () => {
       this.vault?.show();
+      if (!this.isQuitting && !this.hud && !this.hudWarmupTimer) {
+        this.hudWarmupTimer = setTimeout(() => {
+          this.hudWarmupTimer = null;
+          if (!this.isQuitting && !this.hud) {
+            try {
+              this.ensureHudWindow();
+            } catch {
+              // On-demand fallback in showHud() will still create HUD if warm-up hits shutdown
+            }
+          }
+        }, 1200);
+        this.hudWarmupTimer.unref?.();
+      }
     });
     this.vault.on('enter-full-screen', () => {
       this.vault?.webContents.send('window:fullscreen-changed', true);
@@ -98,11 +138,28 @@ export class WindowManager {
       }
     });
 
-    // 2. Global Alt+Space Command HUD Launcher (opaque high-utility command center)
+    return {
+      vault: this.vault,
+      hud: this.hud,
+    };
+  }
+
+  public ensureHudWindow(): BrowserWindow {
+    if (this.hud && !this.hud.isDestroyed()) {
+      return this.hud;
+    }
+    if (this.hudWarmupTimer) {
+      clearTimeout(this.hudWarmupTimer);
+      this.hudWarmupTimer = null;
+    }
+    this.hudLoaded = false;
+
+    const workArea = screen.getPrimaryDisplay().workArea;
+    const isMac = process.platform === 'darwin';
     const hudW = Math.min(HUD_WINDOW_SIZE.width, workArea.width - 32);
     const hudH = Math.min(HUD_WINDOW_SIZE.height, workArea.height - 48);
     const initialBounds = this.computeHudBounds(screen.getPrimaryDisplay(), hudW, hudH);
-    this.hud = new BrowserWindow({
+    const hud = new BrowserWindow({
       width: hudW,
       height: hudH,
       x: initialBounds.x,
@@ -132,9 +189,10 @@ export class WindowManager {
         spellcheck: false,
       },
     });
-    this.hud.setAlwaysOnTop(true, 'screen-saver');
+    this.hud = hud;
+    hud.setAlwaysOnTop(true, 'screen-saver');
     try {
-      this.hud.setVisibleOnAllWorkspaces(
+      hud.setVisibleOnAllWorkspaces(
         true,
         isMac
           ? { visibleOnFullScreen: true, skipTransformProcessType: true }
@@ -143,14 +201,24 @@ export class WindowManager {
     } catch {
       // Optional depending on OS compositor
     }
-    this.hud.on('close', (e) => {
+    if (this.hudContentProtection) {
+      try {
+        hud.setContentProtection(true);
+      } catch {
+        // Optional depending on OS compositor / headless environment
+      }
+    }
+    hud.on('close', (e) => {
       if (!this.isQuitting && process.env.KAPSULA_E2E_QUIT_ON_CLOSE !== '1') {
         e.preventDefault();
         this.hud?.hide();
       }
     });
-    this.loadSurface(this.hud, 'hud');
-    this.hud.on('moved', () => {
+    hud.webContents.once('did-finish-load', () => {
+      this.hudLoaded = true;
+    });
+    this.loadSurface(hud, 'hud');
+    hud.on('moved', () => {
       if (!this.hud || this.hud.isDestroyed() || !this.hud.isVisible()) return;
       if (this.hudMoveSaveTimer) clearTimeout(this.hudMoveSaveTimer);
       this.hudMoveSaveTimer = setTimeout(() => {
@@ -160,16 +228,21 @@ export class WindowManager {
         this.hudBoundsStore?.savePosition(String(disp.id), b.x, b.y);
       }, 150);
     });
-    this.hud.on('blur', () => {
+    hud.on('blur', () => {
       if (process.env.KAPSULA_E2E_KEEP_HUD !== '1' && !this.hudPreventBlurClose) {
         this.hud?.hide();
       }
     });
-
-    return {
-      vault: this.vault,
-      hud: this.hud,
-    };
+    hud.on('hide', () => {
+      this.onHudHide?.();
+    });
+    hud.once('closed', () => {
+      if (this.hud === hud) {
+        this.hud = null;
+        this.hudLoaded = false;
+      }
+    });
+    return hud;
   }
 
   private computeHudBounds(
@@ -229,15 +302,43 @@ export class WindowManager {
   }
 
   public showHud(): void {
-    if (!this.hud || this.hud.isDestroyed()) return;
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    const workArea = display.workArea;
-    const hudW = Math.min(HUD_WINDOW_SIZE.width, workArea.width - 32);
-    const hudH = Math.min(HUD_WINDOW_SIZE.height, workArea.height - 48);
-    this.hud.setBounds(this.computeHudBounds(display, hudW, hudH));
-    this.hud.show();
-    this.hud.focus();
-    this.hud.webContents.send('hud:opened');
+    if (this.isQuitting) return;
+    const hud = this.ensureHudWindow();
+    const present = () => {
+      if (this.isQuitting || hud.isDestroyed()) return;
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const workArea = display.workArea;
+      const hudW = Math.min(HUD_WINDOW_SIZE.width, workArea.width - 32);
+      const hudH = Math.min(HUD_WINDOW_SIZE.height, workArea.height - 48);
+      hud.setBounds(this.computeHudBounds(display, hudW, hudH));
+      hud.show();
+      hud.focus();
+      hud.webContents.send('hud:opened');
+    };
+    if (this.hudLoaded || !hud.webContents.isLoadingMainFrame()) {
+      present();
+      return;
+    }
+    if (this.hudShowPending) return;
+    this.hudShowPending = true;
+    let settled = false;
+    let fallbackTimer: NodeJS.Timeout | null = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      this.hudShowPending = false;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (!hud.isDestroyed()) {
+        hud.webContents.removeListener('did-finish-load', finish);
+      }
+      present();
+    };
+    hud.webContents.once('did-finish-load', finish);
+    fallbackTimer = setTimeout(finish, 1500);
+    fallbackTimer.unref?.();
   }
 
   public hideHud(): void {
@@ -253,8 +354,7 @@ export class WindowManager {
   }
 
   public toggleHud(): void {
-    if (!this.hud) return;
-    if (this.hud.isVisible()) {
+    if (this.hud && !this.hud.isDestroyed() && this.hud.isVisible()) {
       this.hideHud();
       return;
     }
@@ -326,8 +426,10 @@ export class WindowManager {
   }
 
   public setContentProtection(enabled: boolean): void {
-    const effective =
-      process.env.KAPSULA_DISABLE_CONTENT_PROTECTION === '1' ? false : Boolean(enabled);
+    const envDisabled =
+      !app.isPackaged && process.env.KAPSULA_DISABLE_CONTENT_PROTECTION === '1';
+    const effective = envDisabled ? false : Boolean(enabled);
+    this.hudContentProtection = effective;
     for (const win of [this.vault, this.hud]) {
       if (win && !win.isDestroyed()) {
         try {

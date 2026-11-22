@@ -69,6 +69,8 @@ interface NotesViewProps {
   onDeleteNote: (itemId: string) => Promise<void>;
 }
 
+const MOBILE_PAGE_SIZE = 60;
+
 function makeVirtualDraftItem(orbitId: string): VaultItem {
   const now = Date.now();
   return {
@@ -174,6 +176,34 @@ export const NotesView: React.FC<NotesViewProps> = ({
     }
     return filterItemsByQuery(list, searchQuery);
   }, [items, scope, selectedOrbitId, searchQuery, activeNoteId]);
+
+  const [visibleCount, setVisibleCount] = useState(MOBILE_PAGE_SIZE);
+  const notesSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setVisibleCount(MOBILE_PAGE_SIZE);
+  }, [scope, selectedOrbitId, searchQuery]);
+
+  const renderedNotes = useMemo(
+    () => notes.slice(0, visibleCount),
+    [notes, visibleCount]
+  );
+
+  useEffect(() => {
+    if (visibleCount >= notes.length) return;
+    const el = notesSentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((prev) => Math.min(notes.length, prev + MOBILE_PAGE_SIZE));
+        }
+      },
+      { rootMargin: '300px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visibleCount, notes.length]);
 
   const virtualDraft = useMemo(
     () => makeVirtualDraftItem(selectedOrbitId || ''),
@@ -363,7 +393,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
               </button>
             </div>
           ) : (
-            notes.map((note) => {
+            renderedNotes.map((note) => {
               const draft = noteDrafts[note.id];
               const displayBody = draft?.body ?? note.body ?? '';
               const explicitTitle = (draft?.title ?? note.title ?? '').trim();
@@ -497,6 +527,9 @@ export const NotesView: React.FC<NotesViewProps> = ({
               );
             })
           )}
+          {visibleCount < notes.length ? (
+            <div ref={notesSentinelRef} aria-hidden="true" className="h-4 w-full" />
+          ) : null}
         </div>
       </div>
 

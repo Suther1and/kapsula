@@ -244,7 +244,9 @@ export function initSchema(db: DatabaseSync): void {
   const ftsCountRow = db.prepare('SELECT COUNT(*) AS cnt FROM items_fts').get() as { cnt: number };
   if (itemCountRow.cnt > 0 && ftsCountRow.cnt === 0) {
     const existingRows = db
-      .prepare('SELECT id, title, summary, body, ocr_text, url, domain, tags_json, media_meta_json FROM items')
+      .prepare(
+        "SELECT id, title, summary, body, ocr_text, url, domain, tags_json, media_meta_json FROM items WHERE dna != 'secret'"
+      )
       .all() as Array<{
       id: string;
       title: string;
@@ -811,4 +813,33 @@ export function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'sync_dirty', 'fail_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'sync_dirty', 'last_error', 'TEXT');
   ensureColumn(db, 'sync_dirty', 'next_retry_at', 'INTEGER NOT NULL DEFAULT 0');
+
+  // Wave 3 (PERF-02 / PERF-03): additive composite, partial & normalized title indexes for 10k+ vaults
+  ensureColumn(db, 'items', 'title_norm', 'TEXT');
+  try {
+    db.exec(`UPDATE items SET title_norm = lower_utf(trim(title)) WHERE title_norm IS NULL;`);
+  } catch {
+    db.exec(`UPDATE items SET title_norm = lower(trim(title)) WHERE title_norm IS NULL;`);
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_items_active_feed
+      ON items(is_archived, is_pinned DESC, created_at DESC)
+      WHERE deleted_at IS NULL AND purged_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_items_visibility_feed
+      ON items(deleted_at, purged_at, is_archived, is_pinned DESC, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_items_focus_board_active
+      ON items(focus_board_id, is_archived, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_linked_item
+      ON calendar_events(linked_item_id)
+      WHERE linked_item_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_items_is_demo
+      ON items(is_demo)
+      WHERE is_demo = 1;
+    CREATE INDEX IF NOT EXISTS idx_items_title_norm
+      ON items(title_norm, created_at DESC)
+      WHERE deleted_at IS NULL AND purged_at IS NULL AND dna != 'secret';
+    CREATE INDEX IF NOT EXISTS idx_items_dna_active
+      ON items(dna, is_archived, is_pinned DESC, created_at DESC)
+      WHERE deleted_at IS NULL AND purged_at IS NULL;
+  `);
 }

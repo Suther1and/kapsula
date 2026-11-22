@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   SignOut,
   SlidersHorizontal,
+  Trash,
   WarningCircle,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
@@ -182,7 +183,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   freshRecoveryKey,
   onFreshRecoveryKeyChange,
 }) => {
-  const { t, locale, dateLocale } = useI18n();
+  const { t, locale, dateLocale, pluralNoun } = useI18n();
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
   const [email, setEmail] = useState('');
@@ -213,6 +214,9 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
   const [syncBusy, setSyncBusy] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [exportBackupBusy, setExportBackupBusy] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<null | 'signout' | 'delete'>(null);
   const [showCustomServer, setShowCustomServer] = useState(false);
   const [customUrl, setCustomUrl] = useState('');
   const [customKey, setCustomKey] = useState('');
@@ -483,6 +487,7 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
     try {
       const next = await window.kapsula.syncSignOut();
       setStatus(next);
+      setConfirmAction(null);
       onFreshRecoveryKeyChange(null);
       onAuthChanged?.();
       toast(t('sync.signedOutToast'));
@@ -490,6 +495,49 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
       toast.error(friendlyErrorMessage(err, t('sync.signOutErr'), locale));
     } finally {
       setSignOutBusy(false);
+    }
+  };
+
+  const handleExportBackupBeforeSignOut = async () => {
+    setExportBackupBusy(true);
+    try {
+      const res = await window.kapsula.exportBackup();
+      if (!res.canceled) {
+        toast.success(
+          t('settings.data.backupSaved', {
+            count: res.itemCount,
+            word: pluralNoun(res.itemCount, 'item').replace(/^\d+\s+/, ''),
+          })
+        );
+      }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('sync.signOutErr'), locale));
+    } finally {
+      setExportBackupBusy(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteBusy(true);
+    try {
+      const res = await window.kapsula.syncDeleteAccount();
+      if (res.status) {
+        setStatus(res.status);
+      } else if (res.ok) {
+        setStatus(await window.kapsula.getSyncStatus());
+      }
+      if (res.ok) {
+        setConfirmAction(null);
+        onFreshRecoveryKeyChange(null);
+        onAuthChanged?.();
+        toast.success(t('sync.deleteAccountDone'));
+      } else {
+        toast.error(friendlyErrorMessage(res.error, t('sync.deleteAccountErr'), locale));
+      }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('sync.deleteAccountErr'), locale));
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -709,8 +757,9 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             </div>
             <button
               type="button"
-              disabled={signOutBusy}
-              onClick={() => void handleSignOut()}
+              disabled={signOutBusy || deleteBusy}
+              onClick={() => setConfirmAction((prev) => (prev === 'signout' ? null : 'signout'))}
+              data-testid="sync-signout-trigger"
               className="text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0 disabled:opacity-50"
             >
               {t('sync.signOutBtn')}
@@ -766,8 +815,9 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             </div>
             <button
               type="button"
-              disabled={signOutBusy}
-              onClick={() => void handleSignOut()}
+              disabled={signOutBusy || deleteBusy}
+              onClick={() => setConfirmAction((prev) => (prev === 'signout' ? null : 'signout'))}
+              data-testid="sync-signout-trigger"
               className="text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0 disabled:opacity-50"
             >
               {t('sync.signOutBtn')}
@@ -963,12 +1013,23 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
                 </button>
                 <button
                   type="button"
-                  disabled={signOutBusy}
-                  onClick={() => void handleSignOut()}
+                  disabled={signOutBusy || deleteBusy}
+                  onClick={() => setConfirmAction((prev) => (prev === 'signout' ? null : 'signout'))}
+                  data-testid="sync-signout-trigger"
                   className="inline-flex items-center gap-1 text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] cursor-pointer disabled:opacity-50"
                 >
                   <SignOut className="w-3.5 h-3.5" />
                   <span>{t('sync.signOutBtn')}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={signOutBusy || deleteBusy}
+                  onClick={() => setConfirmAction((prev) => (prev === 'delete' ? null : 'delete'))}
+                  data-testid="sync-delete-account-trigger"
+                  className="inline-flex items-center gap-1 text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] cursor-pointer disabled:opacity-50"
+                >
+                  <Trash className="w-3.5 h-3.5" />
+                  <span>{t('sync.deleteAccountBtn')}</span>
                 </button>
               </div>
             </div>
@@ -1060,6 +1121,90 @@ export const SyncSettingsPanel: React.FC<SyncSettingsPanelProps> = ({
             </div>
           ) : null}
         </>
+      ) : null}
+
+      {status.userId && confirmAction === 'signout' ? (
+        <div
+          data-testid="sync-signout-confirm-card"
+          className="rounded-xl border border-[var(--k-warning)]/40 bg-[var(--k-warning)]/10 p-3.5 flex flex-col gap-2.5"
+        >
+          <div className="flex items-start gap-2 text-[12.5px]">
+            <WarningCircle className="w-4 h-4 text-[var(--k-warning)] shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium text-[var(--k-ink-primary)]">
+                {t('sync.signOutConfirmTitle')}
+              </div>
+              <div className="text-[11.5px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
+                {t('sync.signOutConfirmDesc')}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={exportBackupBusy || signOutBusy}
+              onClick={() => void handleExportBackupBeforeSignOut()}
+              className="h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer disabled:opacity-50"
+            >
+              {t('sync.signOutExportFirstBtn')}
+            </button>
+            <button
+              type="button"
+              disabled={signOutBusy}
+              onClick={() => setConfirmAction(null)}
+              className="h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-50"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={signOutBusy}
+              onClick={() => void handleSignOut()}
+              data-testid="sync-signout-confirm-btn"
+              className="h-8 px-3 rounded-lg bg-[var(--k-danger)] text-white text-[12px] font-medium cursor-pointer hover:opacity-90 disabled:opacity-50"
+            >
+              {t('sync.signOutConfirmBtn')}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {status.userId && confirmAction === 'delete' ? (
+        <div
+          data-testid="sync-delete-account-confirm-card"
+          className="rounded-xl border border-[var(--k-danger)]/45 bg-[var(--k-danger)]/10 p-3.5 flex flex-col gap-2.5"
+        >
+          <div className="flex items-start gap-2 text-[12.5px]">
+            <WarningCircle className="w-4 h-4 text-[var(--k-danger)] shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium text-[var(--k-ink-primary)]">
+                {t('sync.deleteAccountConfirmTitle')}
+              </div>
+              <div className="text-[11.5px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
+                {t('sync.deleteAccountConfirmDesc')}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={deleteBusy}
+              onClick={() => setConfirmAction(null)}
+              className="h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-50"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={deleteBusy}
+              onClick={() => void handleDeleteAccount()}
+              data-testid="sync-delete-account-confirm-btn"
+              className="h-8 px-3 rounded-lg bg-[var(--k-danger)] text-white text-[12px] font-medium cursor-pointer hover:opacity-90 disabled:opacity-50"
+            >
+              {t('sync.deleteAccountConfirmBtn')}
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {/* Progressive disclosure: Optional custom sync server (zero technical brand jargon) */}

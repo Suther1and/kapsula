@@ -8,11 +8,13 @@ const pkgJson = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')
 ) as { version?: string };
 const APP_VERSION = String(pkgJson.version || '1.0.2').trim();
+const MOBILE_DIST_CHANNEL = process.env.VITE_DIST_CHANNEL === 'play' ? 'play' : 'direct';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
+    __MOBILE_DIST_CHANNEL__: JSON.stringify(MOBILE_DIST_CHANNEL),
   },
   base: './',
   root: path.resolve(__dirname, 'src/mobile'),
@@ -56,6 +58,11 @@ export default defineConfig({
               name: 'icons',
               test: /[\\/]node_modules[\\/]@phosphor-icons[\\/]/,
               priority: 25,
+            },
+            {
+              name: 'vault-ui',
+              test: /[\\/]node_modules[\\/](@base-ui|@floating-ui|sonner|@number-flow)[\\/]/,
+              priority: 28,
             },
             {
               name: 'editor-tiptap',

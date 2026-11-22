@@ -32,6 +32,7 @@ import {
 } from '@shared/sync-contract';
 import type { SecretPayload } from '@shared/types';
 import type { AppLocale } from '@shared/i18n/core';
+import { isPrivateOrLocalHostname } from '@shared/url-safety';
 import { hasCyrillicChars, isKnownLocalizedMobileMessage } from '@shared/i18n/mobile-dict';
 import { getRuntimeMobileLocale, tm } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
@@ -221,6 +222,8 @@ export class MobileSyncEngine {
   private hasCustomServerConfigured = false;
   private inFlightSync: Promise<SyncActionResult> | null = null;
   private pendingResync = false;
+  private pendingFullReconcile = false;
+  private completedFullReconcileSeq = 0;
 
   private dirtyTimer: ReturnType<typeof setTimeout> | null = null;
   private realtimeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -229,6 +232,7 @@ export class MobileSyncEngine {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private removeOnlineListener: (() => void) | null = null;
   private isVaultLocked?: () => boolean;
+  private readonly ephemeralAuthCache = new Map<string, string>();
 
   constructor(options: MobileSyncEngineOptions) {
     this.store = options.store;
@@ -396,9 +400,38 @@ export class MobileSyncEngine {
 
   private createAuthStorage(): SupportedStorage {
     return {
-      getItem: (key: string) => this.store.getSecureValue(`sb:${key}`),
-      setItem: (key: string, value: string) => this.store.setSecureValue(`sb:${key}`, value),
-      removeItem: (key: string) => this.store.removeSecureValue(`sb:${key}`),
+      getItem: async (key: string) => {
+        const storageKey = `sb:${key}`;
+        if (this.ephemeralAuthCache.has(storageKey)) {
+          return this.ephemeralAuthCache.get(storageKey) ?? null;
+        }
+        if (mobileBridge.isNativeAndroid()) {
+          if (!this.store.hasOsProtectedSecureKey(storageKey)) {
+            return null;
+          }
+          return this.store.getSecureValue(storageKey);
+        }
+        return this.store.getSecureValue(storageKey);
+      },
+      setItem: async (key: string, value: string) => {
+        const storageKey = `sb:${key}`;
+        if (mobileBridge.isNativeAndroid()) {
+          try {
+            await this.store.setSecureValue(storageKey, value, { requireOsProtection: true });
+            this.ephemeralAuthCache.delete(storageKey);
+          } catch {
+            this.ephemeralAuthCache.set(storageKey, value);
+            await this.store.removeSecureValue(storageKey);
+          }
+          return;
+        }
+        await this.store.setSecureValue(storageKey, value);
+      },
+      removeItem: async (key: string) => {
+        const storageKey = `sb:${key}`;
+        this.ephemeralAuthCache.delete(storageKey);
+        await this.store.removeSecureValue(storageKey);
+      },
     };
   }
 
@@ -540,6 +573,7 @@ export class MobileSyncEngine {
         return;
       }
 
+      await this.resetCursorOnAccountSwitch(data.session.user.id);
       this.userId = data.session.user.id;
       this.email = data.session.user.email ?? this.store.getSyncState('last_user_email');
       await this.store.setSyncState('last_user_id', this.userId);
@@ -571,8 +605,10 @@ export class MobileSyncEngine {
   }
 
   private async resetCursorOnAccountSwitch(nextUserId: string): Promise<void> {
-    const prevUserId = this.store.getSyncState('last_user_id');
-    if (prevUserId && prevUserId !== nextUserId) {
+    const prevOwnerId =
+      this.store.getSyncState('last_data_owner_id') || this.store.getSyncState('last_user_id');
+    if (prevOwnerId && prevOwnerId !== nextUserId) {
+      await this.store.wipeAllUserData();
       await this.store.deleteSyncState('last_cursor');
       await this.store.deleteSyncState('initial_enqueued_user');
       await this.store.clearSyncBlobCache();
@@ -588,6 +624,8 @@ export class MobileSyncEngine {
 
   private async resolveKeyStateAfterAuth(): Promise<void> {
     if (!this.userId) return;
+    await this.store.setSyncState('last_user_id', this.userId);
+    await this.store.setSyncState('last_data_owner_id', this.userId);
     const cachedDek = await this.loadCachedDek(this.userId);
     try {
       const envelope = await this.fetchRemoteEnvelope(this.userId);
@@ -637,6 +675,7 @@ export class MobileSyncEngine {
       if (
         parsed.protocol !== 'https:' ||
         !parsed.hostname ||
+        isPrivateOrLocalHostname(parsed.hostname) ||
         parsed.username ||
         parsed.password ||
         /\s/.test(normalizedUrl)
@@ -648,14 +687,16 @@ export class MobileSyncEngine {
       }
     }
 
-    await this.signOut();
+    await this.signOut({ preserveUnownedOfflineData: true });
     if (!normalizedUrl || !cleanKey) {
       await this.store.deleteSyncState('custom_supabase_url');
       await this.store.removeSecureValue('custom_supabase_key');
       this.hasCustomServerConfigured = false;
     } else {
       await this.store.setSyncState('custom_supabase_url', normalizedUrl);
-      await this.store.setSecureValue('custom_supabase_key', cleanKey);
+      await this.store.setSecureValue('custom_supabase_key', cleanKey, {
+        requireOsProtection: mobileBridge.isNativeAndroid(),
+      });
       this.hasCustomServerConfigured = true;
     }
     this.resetClient();
@@ -1149,11 +1190,13 @@ export class MobileSyncEngine {
     }
   }
 
-  public async signOut(): Promise<SyncStatus> {
+  public async signOut(opts?: { preserveUnownedOfflineData?: boolean }): Promise<SyncStatus> {
     this.authGeneration += 1;
     this.pendingResync = false;
     this.stopBackgroundLoops();
     const prevUserId = this.userId;
+    const prevOwnerId =
+      this.store.getSyncState('last_data_owner_id') || this.store.getSyncState('last_user_id');
     try {
       if (this.client) {
         await this.client.auth.signOut();
@@ -1163,17 +1206,22 @@ export class MobileSyncEngine {
     }
     this.resetClient();
     await this.clearCachedDek(prevUserId);
+    this.ephemeralAuthCache.clear();
     await this.store.removeSecureByPrefix('sb:');
-    await this.store.deleteSyncState('pending_confirm_email');
-    await this.store.deleteSyncState('last_cursor');
-    await this.store.deleteSyncState('last_sync_at');
-    await this.store.deleteSyncState('last_reconcile_at');
-    await this.store.deleteSyncState('last_user_id');
-    await this.store.deleteSyncState('last_user_email');
-    await this.store.deleteSyncState('initial_enqueued_user');
-    await this.store.deleteSyncState('recovery_key_saved');
-    await this.store.clearSyncBlobCache();
-    await this.store.clearAllDirtyEntities();
+    if (opts?.preserveUnownedOfflineData && !prevUserId && !prevOwnerId) {
+      await this.store.deleteSyncState('pending_confirm_email');
+      await this.store.deleteSyncState('last_cursor');
+      await this.store.deleteSyncState('last_sync_at');
+      await this.store.deleteSyncState('last_reconcile_at');
+      await this.store.deleteSyncState('last_user_id');
+      await this.store.deleteSyncState('last_user_email');
+      await this.store.deleteSyncState('initial_enqueued_user');
+      await this.store.deleteSyncState('recovery_key_saved');
+      await this.store.clearSyncBlobCache();
+      await this.store.clearAllDirtyEntities();
+    } else {
+      await this.store.wipeAllUserData();
+    }
     this.disabledOptionalTypes.clear();
     this.setDek(null);
     this.needsEnvelopeVerification = false;
@@ -1186,6 +1234,40 @@ export class MobileSyncEngine {
     this.state = 'signed_out';
     this.emitStatus();
     return this.getStatus();
+  }
+
+  public async deleteAccount(): Promise<{ ok: boolean; error?: string; status: SyncStatus }> {
+    const locale = this.store.getLocale();
+    const token = await this.getActiveAccessToken();
+    if (!token || !this.userId) {
+      return {
+        ok: false,
+        error: tm('sync.signInFirst', undefined, locale),
+        status: this.getStatus(),
+      };
+    }
+
+    try {
+      const apiKey = await this.getSupabasePublishableKey();
+      const resp = await fetch(`${this.getSupabaseBaseUrl()}/functions/v1/delete-account`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: apiKey,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const json = (await resp.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!resp.ok || !json?.ok) {
+        const msg = json?.error || tm('settings.deleteAccountErr', undefined, locale);
+        return { ok: false, error: msg, status: this.getStatus() };
+      }
+      await this.signOut();
+      return { ok: true, status: this.getStatus() };
+    } catch (err) {
+      return { ok: false, error: translateMobileSyncError(err, locale), status: this.getStatus() };
+    }
   }
 
   public handleAppResume(): void {
@@ -1312,29 +1394,35 @@ export class MobileSyncEngine {
     this.realtimeConnected = false;
   }
 
-  public async syncNow(): Promise<SyncActionResult> {
+  public async syncNow(forceFullReconcile = false): Promise<SyncActionResult> {
     const locale = this.store.getLocale();
     if (this.disposed) {
       return { ok: false, error: tm('sync.stopped', undefined, locale), status: this.getStatus() };
     }
     if (this.inFlightSync) {
       this.pendingResync = true;
+      if (forceFullReconcile) {
+        this.pendingFullReconcile = true;
+      }
       return this.inFlightSync;
     }
 
     const gen = this.authGeneration;
     const savedCursor = Number(this.store.getSyncState('last_cursor') || '0') || 0;
     const dueAutoReconcile =
-      savedCursor > 0 &&
-      (!this.lastReconcileAt || Date.now() - this.lastReconcileAt >= AUTO_RECONCILE_INTERVAL_MS);
+      forceFullReconcile ||
+      (savedCursor > 0 &&
+        (!this.lastReconcileAt || Date.now() - this.lastReconcileAt >= AUTO_RECONCILE_INTERVAL_MS));
 
     const run = this.executeSyncCycle(gen, dueAutoReconcile).finally(() => {
       if (this.inFlightSync === run) {
         this.inFlightSync = null;
       }
       if (this.pendingResync && !this.disposed && gen === this.authGeneration) {
+        const nextFull = this.pendingFullReconcile;
         this.pendingResync = false;
-        void this.syncNow().catch(() => {});
+        this.pendingFullReconcile = false;
+        void this.syncNow(nextFull).catch(() => {});
       }
     });
     this.inFlightSync = run;
@@ -1346,25 +1434,20 @@ export class MobileSyncEngine {
     if (this.disposed) {
       return { ok: false, error: tm('sync.stopped', undefined, locale), status: this.getStatus() };
     }
-    if (this.inFlightSync) {
-      try {
-        await this.inFlightSync;
-      } catch {
-        // proceed to reconcile
+    const startSeq = this.completedFullReconcileSeq;
+    let queuedFull = false;
+    while (this.inFlightSync) {
+      if (!queuedFull && this.completedFullReconcileSeq === startSeq) {
+        this.pendingResync = true;
+        this.pendingFullReconcile = true;
+        queuedFull = true;
       }
+      await this.inFlightSync.catch(() => {});
     }
-    const gen = this.authGeneration;
-    const run = this.executeSyncCycle(gen, true).finally(() => {
-      if (this.inFlightSync === run) {
-        this.inFlightSync = null;
-      }
-      if (this.pendingResync && !this.disposed && gen === this.authGeneration) {
-        this.pendingResync = false;
-        void this.syncNow().catch(() => {});
-      }
-    });
-    this.inFlightSync = run;
-    return run;
+    if (this.completedFullReconcileSeq === startSeq && !this.disposed && this.userId && this.dek) {
+      return this.syncNow(true);
+    }
+    return { ok: !this.lastError, error: this.lastError ?? undefined, status: this.getStatus() };
   }
 
   private async upsertSyncRecordWithSelect(
@@ -1378,14 +1461,16 @@ export class MobileSyncEngine {
       deleted_at?: number | null;
       device_id?: string;
     } | null;
+    selectSupported: boolean;
     error: { message: string; code?: string } | null;
   }> {
     const query = client
       .from('sync_records')
       .upsert(rowPayload, { onConflict: 'user_id,entity_type,entity_id' });
 
-    const hasSelect =
-      query && typeof (query as unknown as { select?: unknown }).select === 'function';
+    const hasSelect = Boolean(
+      query && typeof (query as unknown as { select?: unknown }).select === 'function'
+    );
     const res = hasSelect
       ? await (
           query as unknown as {
@@ -1400,7 +1485,7 @@ export class MobileSyncEngine {
         }>);
 
     if (res?.error) {
-      return { serverRow: null, error: res.error };
+      return { serverRow: null, selectSupported: hasSelect, error: res.error };
     }
     const data = res?.data;
     const serverRow = Array.isArray(data)
@@ -1416,6 +1501,7 @@ export class MobileSyncEngine {
         deleted_at?: number | null;
         device_id?: string;
       } | null,
+      selectSupported: hasSelect,
       error: null,
     };
   }
@@ -1491,6 +1577,7 @@ export class MobileSyncEngine {
           >()
         : null;
       const failedPullKeys = fullReconcile ? new Set<string>() : null;
+      let cursorBlockedByRowError = false;
 
       try {
         while (true) {
@@ -1523,9 +1610,28 @@ export class MobileSyncEngine {
               device_id: row.device_id,
             });
 
-            if (row.device_id === this.deviceId || row.schema_version > SYNC_SCHEMA_VERSION) {
+            if (row.device_id === this.deviceId) {
+              const localStamp = this.store.getEntitySyncStamp(row.entity_type, row.entity_id);
+              const remoteUpdated = Number(row.updated_at ?? 0);
+              const remoteVersion = Number(row.sync_version ?? 1);
+              const remoteDeleted = row.deleted_at != null;
+              const localHasSameOrNewer =
+                localStamp !== null &&
+                localStamp.updatedAt >= remoteUpdated &&
+                localStamp.syncVersion >= remoteVersion &&
+                (localStamp.deletedAt != null) === remoteDeleted;
+              if (localHasSameOrNewer) {
+                queryCursor = Math.max(queryCursor, nextSeq);
+                if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
+                  highWaterCursor = nextSeq;
+                  await this.store.setSyncState('last_cursor', String(highWaterCursor));
+                }
+                continue;
+              }
+            }
+            if (row.schema_version > SYNC_SCHEMA_VERSION) {
               queryCursor = Math.max(queryCursor, nextSeq);
-              if (nextSeq > highWaterCursor) {
+              if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
                 highWaterCursor = nextSeq;
                 await this.store.setSyncState('last_cursor', String(highWaterCursor));
               }
@@ -1533,7 +1639,7 @@ export class MobileSyncEngine {
             }
 
             try {
-              const dl = await this.applyIncomingRecord(client, userId, dek, row);
+              const dl = await this.applyIncomingRecord(client, userId, dek, row, gen);
               if (fullReconcile && dl.wasPurged) {
                 const seen = remoteSeenDuringFull?.get(recordKey);
                 if (seen) seen.purged = true;
@@ -1549,12 +1655,14 @@ export class MobileSyncEngine {
               if (isNetworkLikeError(rowErr) || isAuthFatalError(rowErr)) {
                 throw rowErr;
               }
+              cursorBlockedByRowError = true;
               failedPullKeys?.add(recordKey);
-              // Isolate corrupt/unknown incoming record so subsequent deletes & notes still pull!
+              // Isolate corrupt/unknown incoming record so subsequent deletes & notes still pull
+              // without advancing persisted last_cursor past the failed sequence.
             }
 
             queryCursor = Math.max(queryCursor, nextSeq);
-            if (nextSeq > highWaterCursor) {
+            if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
               highWaterCursor = nextSeq;
               await this.store.setSyncState('last_cursor', String(highWaterCursor));
             }
@@ -1563,7 +1671,7 @@ export class MobileSyncEngine {
           if (batch.length < PULL_PAGE_SIZE) break;
         }
       } finally {
-        if (anyPulledChanges) {
+        if (anyPulledChanges && gen === this.authGeneration && !this.disposed) {
           this.store.notifySyncedBatch();
         }
       }
@@ -1671,8 +1779,12 @@ export class MobileSyncEngine {
               throw new Error(upsertRes.error.message);
             }
 
-            // Detect clock-skew silent server drop on user-initiated delete/purge and retry once (delete-wins!)
-            const srv = upsertRes.serverRow;
+            // Detect missing server confirmation row or clock-skew silent server drop (delete-wins)
+            let srv = upsertRes.serverRow;
+            if (upsertRes.selectSupported && !srv) {
+              this.emitStatus();
+              continue;
+            }
             const localIsDelete = built.deletedAt != null;
             const serverDroppedDelete =
               localIsDelete &&
@@ -1724,6 +1836,11 @@ export class MobileSyncEngine {
                 if (upsertRes.error) {
                   throw new Error(upsertRes.error.message);
                 }
+                srv = upsertRes.serverRow;
+                if (upsertRes.selectSupported && !srv) {
+                  this.emitStatus();
+                  continue;
+                }
               }
             } else if (srv && srv.device_id && srv.device_id !== this.deviceId) {
               // Server kept a newer record from another device — pull it and preserve losing note text in sync_conflict!
@@ -1739,7 +1856,8 @@ export class MobileSyncEngine {
                   client,
                   userId,
                   dek,
-                  remoteLatest as SyncRecordRow
+                  remoteLatest as SyncRecordRow,
+                  gen
                 );
                 blobsDownloaded += dl.blobsDownloaded;
                 if (dl.applied) {
@@ -1755,6 +1873,9 @@ export class MobileSyncEngine {
               this.emitStatus();
             }
           } catch (recErr) {
+            if (recErr instanceof Error && recErr.message === '__VAULT_LOCKED_DEFER__') {
+              continue;
+            }
             if (isNetworkLikeError(recErr) || isAuthFatalError(recErr)) {
               throw recErr;
             }
@@ -1773,6 +1894,19 @@ export class MobileSyncEngine {
         }
       }
 
+      // 2b. DRAIN DEFERRED CLOUD MEDIA BLOB DELETIONS (SYNC-02)
+      const pendingDeletes = this.store.getPendingBlobDeletes();
+      if (pendingDeletes.length > 0 && gen === this.authGeneration && !this.disposed) {
+        try {
+          const deleted = await this.mediaManager.deleteBlobs(client, userId, pendingDeletes);
+          if (deleted.length > 0) {
+            await this.store.removePendingBlobDeletes(deleted);
+          }
+        } catch {
+          // non-fatal: keep remaining IDs in queue for next sync
+        }
+      }
+
       // 3. HEARTBEAT & DEVICE ROSTER (platform: 'android')
       await this.syncDeviceRoster(client, userId);
 
@@ -1785,6 +1919,9 @@ export class MobileSyncEngine {
       if (fullReconcile || persistedCursor === 0) {
         this.lastReconcileAt = this.lastSyncAt;
         await this.store.setSyncState('last_reconcile_at', String(this.lastReconcileAt));
+      }
+      if (fullReconcile) {
+        this.completedFullReconcileSeq += 1;
       }
       this.state = 'synced';
       this.lastError = null;
@@ -1971,6 +2108,13 @@ export class MobileSyncEngine {
     if (!item || item.isDemo) return null;
 
     const isPurged = item.purgedAt != null;
+    if (
+      item.dna === 'secret' &&
+      !isPurged &&
+      (this.store.isVaultLocked() || this.isVaultLocked?.())
+    ) {
+      throw new Error('__VAULT_LOCKED_DEFER__');
+    }
     let secretPayload: SecretPayload | null = null;
     if (item.encryptedSecretPayload && !isPurged) {
       try {
@@ -2060,7 +2204,8 @@ export class MobileSyncEngine {
     client: SupabaseClient,
     userId: string,
     dek: Uint8Array,
-    row: SyncRecordRow
+    row: SyncRecordRow,
+    gen: number
   ): Promise<{
     applied: boolean;
     localStrictlyNewer: boolean;
@@ -2123,6 +2268,9 @@ export class MobileSyncEngine {
           payload.mediaRefs
         );
       }
+      if (gen !== this.authGeneration || this.disposed) {
+        return { applied: false, localStrictlyNewer: false, blobsDownloaded: 0 };
+      }
       const res = await this.store.applySyncedCalendarEvent(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded };
     }
@@ -2180,6 +2328,9 @@ export class MobileSyncEngine {
         dek,
         payload.mediaRefs
       );
+    }
+    if (gen !== this.authGeneration || this.disposed) {
+      return { applied: false, localStrictlyNewer: false, blobsDownloaded: 0 };
     }
 
     let localEncryptedSecret: string | null = null;

@@ -62,7 +62,7 @@ interface MemoryCardRouterProps {
   onToggleVoiceAction?: (itemId: string, actionIdx: number, done: boolean) => void;
 }
 
-export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
+export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
   item,
   orbit,
   orbits = [],
@@ -263,7 +263,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
   // Single uniform ~52px List row for ALL DNA types
   if (compactList) {
     return (
-      <ContextMenuSurface entries={buildContextMenuEntries()}>
+      <ContextMenuSurface entries={buildContextMenuEntries}>
         <div>
           <CompactMemoryRow
             item={item}
@@ -284,7 +284,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
 
   if (item.dna === 'secret') {
     return (
-      <ContextMenuSurface entries={buildContextMenuEntries()}>
+      <ContextMenuSurface entries={buildContextMenuEntries}>
         <div
           draggable
           onDragStart={(e) => {
@@ -358,7 +358,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
     .slice(0, 2);
 
   return (
-    <ContextMenuSurface entries={buildContextMenuEntries()}>
+    <ContextMenuSurface entries={buildContextMenuEntries}>
       <article
         data-testid={`memory-card-${item.id}`}
         data-selection-active={selectionMode || selected ? 'true' : undefined}
@@ -618,4 +618,4 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = ({
       </article>
     </ContextMenuSurface>
   );
-};
+});

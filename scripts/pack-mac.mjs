@@ -44,7 +44,7 @@ if (hasRealCert) {
   builderArgs.push(
     '-c.mac.hardenedRuntime=true',
     '-c.mac.entitlements=build/entitlements.mac.plist',
-    '-c.mac.entitlementsInherit=build/entitlements.mac.plist'
+    '-c.mac.entitlementsInherit=build/entitlements.mac.inherit.plist'
   );
 } else {
   builderArgs.push('-c.mac.identity=null');

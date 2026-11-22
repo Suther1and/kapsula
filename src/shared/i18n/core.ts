@@ -64,6 +64,20 @@ export function formatRelativeTime(
 ): string {
   if (!timestamp || !Number.isFinite(timestamp)) return '';
   const diffMs = now - timestamp;
+  if (diffMs < -45_000) {
+    const aheadMin = Math.round(-diffMs / 60_000);
+    if (aheadMin < 60) {
+      return locale === 'en' ? `in ${Math.max(1, aheadMin)}m` : `через ${Math.max(1, aheadMin)} мин`;
+    }
+    const aheadHours = Math.floor(aheadMin / 60);
+    if (aheadHours < 24) {
+      return locale === 'en' ? `in ${aheadHours}h` : `через ${aheadHours} ч`;
+    }
+    return new Date(timestamp).toLocaleDateString(locale === 'en' ? 'en-US' : 'ru-RU', {
+      day: 'numeric',
+      month: 'short',
+    });
+  }
   const diffSec = Math.round(diffMs / 1000);
   if (diffSec < 45) {
     return locale === 'en' ? 'just now' : 'только что';

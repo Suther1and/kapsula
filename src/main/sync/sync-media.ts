@@ -162,6 +162,8 @@ export class SyncMediaManager {
           { onConflict: 'user_id,blob_id' }
         );
         if (regErr) {
+          // Roll back orphaned Storage object so retries stay clean and leak-free
+          await client.storage.from(SYNC_STORAGE_BUCKET).remove([storagePath]).catch(() => {});
           const isEn = this.repo.getLocale() === 'en';
           throw new Error(
             isEn
@@ -298,5 +300,35 @@ export class SyncMediaManager {
     }
 
     return downloadedCount;
+  }
+
+  public async deleteBlobs(
+    client: SupabaseClient,
+    userId: string,
+    blobIds: string[]
+  ): Promise<string[]> {
+    const cleanIds = Array.from(
+      new Set(blobIds.filter((id) => typeof id === 'string' && BLOB_ID_RE.test(id)))
+    );
+    if (cleanIds.length === 0) return [];
+
+    const confirmed: string[] = [];
+    for (let i = 0; i < cleanIds.length; i += 50) {
+      const batch = cleanIds.slice(i, i + 50);
+      const { error: dbErr } = await client
+        .from('sync_blobs')
+        .delete()
+        .eq('user_id', userId)
+        .in('blob_id', batch);
+      if (dbErr) {
+        continue;
+      }
+      const paths = batch.map((id) => `${userId}/${id}.enc`);
+      const { error: stErr } = await client.storage.from(SYNC_STORAGE_BUCKET).remove(paths);
+      if (!stErr || /not\s*found|404/i.test(stErr.message || '')) {
+        confirmed.push(...batch);
+      }
+    }
+    return confirmed;
   }
 }

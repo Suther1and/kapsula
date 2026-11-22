@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckSquare, Pause, Play, Sparkle, SpinnerGap, Waveform } from '@phosphor-icons/react';
 import { formatDurationMmSs } from '@renderer/lib/format';
+import { useMobileMediaCache } from '../lib/media-cache-context';
 import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge } from '../native/bridge';
 
@@ -37,6 +38,7 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
   onExtractTasks,
 }) => {
   const { t } = useMobileI18n();
+  const { retainMediaUrl, releaseMediaUrl } = useMobileMediaCache();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(externalSrc ?? null);
   const [loading, setLoading] = useState(false);
@@ -51,24 +53,23 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
     setDuration(durationSec ?? 0);
     if (externalSrc !== undefined) {
       setResolvedSrc(externalSrc ?? null);
+    } else {
+      setResolvedSrc(null);
     }
-  }, [externalSrc, durationSec]);
+  }, [externalSrc, mediaPath, durationSec]);
 
   useEffect(() => {
-    if (externalSrc !== undefined || !mediaPath || !ensureMediaUrl) return;
-    let cancelled = false;
-    void ensureMediaUrl(mediaPath).then((url) => {
-      if (!cancelled) setResolvedSrc(url);
-    });
+    if (externalSrc !== undefined || !resolvedSrc || !mediaPath) return;
+    retainMediaUrl(mediaPath);
     return () => {
-      cancelled = true;
+      releaseMediaUrl(mediaPath);
     };
-  }, [externalSrc, mediaPath, ensureMediaUrl]);
+  }, [externalSrc, resolvedSrc, mediaPath, retainMediaUrl, releaseMediaUrl]);
 
   useEffect(() => {
     if (pendingPlayRef.current && resolvedSrc && audioRef.current) {
       pendingPlayRef.current = false;
-      void audioRef.current.play().catch(() => setPlaying(false));
+      void Promise.resolve(audioRef.current.play()).catch(() => setPlaying(false));
     }
   }, [resolvedSrc]);
 

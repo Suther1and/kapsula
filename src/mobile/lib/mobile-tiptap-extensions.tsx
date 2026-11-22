@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { mergeAttributes, Node } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import { Image as ImageIcon, LinkSimple, Trash } from '@phosphor-icons/react';
+import { useMobileMediaCache } from './media-cache-context';
 import { tm } from './mobile-i18n';
 
 const KAPSULA_LOCAL_MEDIA_PREFIX = 'kapsula-media://local/';
@@ -29,6 +30,7 @@ interface KapsulaImageOptions {
 }
 
 const MobileInlineImageView: React.FC<NodeViewProps> = ({ node, deleteNode, extension }) => {
+  const { retainMediaUrl, releaseMediaUrl } = useMobileMediaCache();
   const rawSrc = String(node.attrs.src || '');
   const alt = String(node.attrs.alt || tm('common.photo'));
   const opts = extension.options as KapsulaImageOptions;
@@ -53,13 +55,15 @@ const MobileInlineImageView: React.FC<NodeViewProps> = ({ node, deleteNode, exte
       return;
     }
     let cancelled = false;
+    retainMediaUrl(localFilename);
     void opts.ensureMediaUrl(localFilename).then((url) => {
       if (!cancelled) setResolvedSrc(url);
     });
     return () => {
       cancelled = true;
+      releaseMediaUrl(localFilename);
     };
-  }, [rawSrc, localFilename, opts]);
+  }, [rawSrc, localFilename, opts, retainMediaUrl, releaseMediaUrl]);
 
   return (
     <NodeViewWrapper

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { cleanInstagramText, decodeHtmlEntities, truncateAtWordBoundary } from '@shared/html-entities';
+import { isPrivateOrLocalHostname } from '@shared/url-safety';
 import type { AppLocale, ExtractedAction } from '@shared/types';
 import {
   domNodeToMarkdown,
@@ -13,6 +14,8 @@ import {
   parseHtmlDocument,
   type DomNodeLike,
 } from './html-cleaner';
+
+export { isPrivateOrLocalHostname };
 
 export interface UnfurlResult {
   url: string;
@@ -57,136 +60,7 @@ function emptyUnfurl(rawUrl: string): UnfurlResult {
   };
 }
 
-function isPrivateIpv4Tuple(a: number, b: number, c: number, d: number): boolean {
-  if (
-    !Number.isInteger(a) ||
-    !Number.isInteger(b) ||
-    !Number.isInteger(c) ||
-    !Number.isInteger(d) ||
-    a < 0 ||
-    a > 255 ||
-    b < 0 ||
-    b > 255 ||
-    c < 0 ||
-    c > 255 ||
-    d < 0 ||
-    d > 255
-  ) {
-    return true;
-  }
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
-  return false;
-}
-
-function parseIpv4Octets(ip: string): [number, number, number, number] | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return null;
-  const nums = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : NaN));
-  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
-  return [nums[0]!, nums[1]!, nums[2]!, nums[3]!];
-}
-
-function expandIpv6Hextets(rawIpv6: string): number[] | null {
-  const clean = rawIpv6.split('%')[0] ?? rawIpv6;
-  const dblIdx = clean.indexOf('::');
-  if (dblIdx !== -1 && clean.indexOf('::', dblIdx + 2) !== -1) return null;
-
-  const expandSide = (side: string): number[] | null => {
-    if (!side) return [];
-    const tokens = side.split(':');
-    const out: number[] = [];
-    for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i]!;
-      if (tok.includes('.')) {
-        if (i !== tokens.length - 1) return null;
-        const oct = parseIpv4Octets(tok);
-        if (!oct) return null;
-        out.push((oct[0] << 8) | oct[1], (oct[2] << 8) | oct[3]);
-      } else {
-        if (!/^[0-9a-f]{1,4}$/i.test(tok)) return null;
-        out.push(Number.parseInt(tok, 16));
-      }
-    }
-    return out;
-  };
-
-  if (dblIdx === -1) {
-    const groups = expandSide(clean);
-    return groups && groups.length === 8 ? groups : null;
-  }
-
-  const left = expandSide(clean.slice(0, dblIdx));
-  const right = expandSide(clean.slice(dblIdx + 2));
-  if (!left || !right) return null;
-  const missing = 8 - left.length - right.length;
-  if (missing < 1) return null;
-  return [...left, ...Array<number>(missing).fill(0), ...right];
-}
-
-function isPrivateIpLiteral(clean: string): boolean {
-  const v4 = parseIpv4Octets(clean);
-  if (v4) {
-    return isPrivateIpv4Tuple(v4[0], v4[1], v4[2], v4[3]);
-  }
-  if (clean.includes(':')) {
-    const h = expandIpv6Hextets(clean);
-    if (!h) return true;
-    const allZeroPrefix = h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0;
-    if (allZeroPrefix && h[5] === 0 && h[6] === 0 && (h[7] === 0 || h[7] === 1)) {
-      return true;
-    }
-    if (allZeroPrefix && (h[5] === 0xffff || h[5] === 0)) {
-      const a = (h[6]! >> 8) & 0xff;
-      const b = h[6]! & 0xff;
-      const c = (h[7]! >> 8) & 0xff;
-      const d = h[7]! & 0xff;
-      return isPrivateIpv4Tuple(a, b, c, d);
-    }
-    if ((h[0]! & 0xffc0) === 0xfe80) return true;
-    if ((h[0]! & 0xfe00) === 0xfc00) return true;
-    if ((h[0]! & 0xff00) === 0xff00) return true;
-  }
-  return false;
-}
-
-export function isPrivateOrLocalHostname(hostname: string): boolean {
-  const h = (hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().split('%')[0] ?? '').trim();
-  if (
-    !h ||
-    h === 'localhost' ||
-    h.endsWith('.localhost') ||
-    h.endsWith('.local') ||
-    h.endsWith('.internal')
-  ) {
-    return true;
-  }
-  if (!h.includes('.') && !h.includes(':') && (/^\d+$/.test(h) || /^0x[0-9a-f]+$/i.test(h))) {
-    return true;
-  }
-  if (isPrivateIpLiteral(h)) return true;
-
-  try {
-    const parsedHost = new URL(h.includes(':') ? `http://[${h}]` : `http://${h}`).hostname
-      .replace(/^\[|\]$/g, '')
-      .toLowerCase();
-    if (!parsedHost || parsedHost === 'localhost' || parsedHost.endsWith('.localhost')) {
-      return true;
-    }
-    if (parsedHost !== h && isPrivateIpLiteral(parsedHost)) {
-      return true;
-    }
-  } catch {
-    return true;
-  }
-  return false;
-}
-
-async function isSafeResolvedHost(hostname: string): Promise<boolean> {
+export async function isSafeResolvedHost(hostname: string): Promise<boolean> {
   const cleanHost = (hostname.trim().replace(/^\[|\]$/g, '').split('%')[0] ?? '').trim();
   if (!cleanHost) return false;
   if (net.isIP(cleanHost) !== 0) {
@@ -202,18 +76,24 @@ async function isSafeResolvedHost(hostname: string): Promise<boolean> {
       timer.unref?.();
     });
     const records = await Promise.race([lookupPromise, timeoutPromise]);
-    if (!records || records.length === 0) return true;
+    if (!records || records.length === 0) return false;
     return records.every((rec) => !isPrivateOrLocalHostname(rec.address));
   } catch {
-    return true;
+    return false;
   } finally {
     if (timer) clearTimeout(timer);
   }
 }
 
-async function safeFetchWithRedirects(
+export async function safeFetchWithRedirects(
   rawUrl: string,
-  options: { accept?: string; headers?: Record<string, string>; timeoutMs?: number; maxHops?: number } = {}
+  options: {
+    accept?: string;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    maxHops?: number;
+    fetchImpl?: typeof fetch;
+  } = {}
 ): Promise<{ resp: Response; finalUrl: URL } | null> {
   let currentUrl: URL;
   try {
@@ -225,9 +105,10 @@ async function safeFetchWithRedirects(
   if (isPrivateOrLocalHostname(currentUrl.hostname)) return null;
   if (!(await isSafeResolvedHost(currentUrl.hostname))) return null;
 
+  const fetchFn = options.fetchImpl ?? fetch;
   const maxHops = options.maxHops ?? 4;
   for (let hop = 0; hop < maxHops; hop++) {
-    const resp = await fetch(currentUrl.toString(), {
+    const resp = await fetchFn(currentUrl.toString(), {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Kapsula/6.0',
@@ -254,7 +135,7 @@ async function safeFetchWithRedirects(
   return null;
 }
 
-async function readUpToBytes(resp: Response, maxBytes: number): Promise<string> {
+export async function readUpToBytes(resp: Response, maxBytes: number): Promise<string> {
   if (!resp.body) {
     return (await resp.text()).slice(0, maxBytes);
   }
@@ -995,8 +876,8 @@ export async function downloadOgImage(
     else if (ct.includes('gif')) ext = '.gif';
 
     const filename = `og_${fileStem}${ext}`;
-    fs.mkdirSync(mediaDir, { recursive: true });
-    fs.writeFileSync(path.join(mediaDir, filename), buf);
+    fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(mediaDir, filename), buf, { mode: 0o600 });
     return { filename, buffer: buf };
   } catch {
     return null;
@@ -1031,8 +912,8 @@ export async function downloadVideoAsset(
     const mime = ct.includes('webm') ? 'video/webm' : 'video/mp4';
     const hashShort = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 12);
     const filename = `vid_${fileStem.slice(0, 12)}_${hashShort}${ext}`;
-    fs.mkdirSync(mediaDir, { recursive: true });
-    fs.writeFileSync(path.join(mediaDir, filename), buf);
+    fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(mediaDir, filename), buf, { mode: 0o600 });
     return { filename, mime, byteLength: buf.length };
   } catch {
     return null;

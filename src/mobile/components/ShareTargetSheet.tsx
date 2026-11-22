@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { FolderSimple, Globe, Paperclip, ShareNetwork, Swatches } from '@phosphor-icons/react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { FolderSimple, Globe, Paperclip, ShareNetwork, Swatches, WarningCircle } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef } from '@shared/types';
 import { extractFirstUrlFromText } from '../lib/mobile-helpers';
@@ -49,9 +50,14 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
   const [saving, setSaving] = useState(false);
   const [orbitPickerOpen, setOrbitPickerOpen] = useState(false);
   const [boardPickerOpen, setBoardPickerOpen] = useState(false);
+  const warnedShareIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!share) return;
+    if ((share.truncatedCount ?? 0) > 0 && warnedShareIdRef.current !== share.id) {
+      warnedShareIdRef.current = share.id;
+      toast.warning(t('share.truncatedFiles', { count: share.truncatedCount ?? 0 }));
+    }
     const rawText = (share.text || '').trim();
     const detectedUrl = share.url || extractFirstUrlFromText(rawText);
     const cleanedBody = rawText;
@@ -119,6 +125,13 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
           onSubmit={(e) => void handleSave(e)}
           className="p-4 space-y-3.5"
         >
+          {(share?.truncatedCount ?? 0) > 0 ? (
+            <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-[var(--k-danger-soft)] border border-[var(--k-danger)]/30 text-[12px] text-[var(--k-danger)]">
+              <WarningCircle className="w-4 h-4 shrink-0" />
+              <span>{t('share.truncatedFiles', { count: share?.truncatedCount ?? 0 })}</span>
+            </div>
+          ) : null}
+
           {url ? (
             <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-[var(--k-accent-soft)] border border-[var(--k-border-focus)]">
               <Globe className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
@@ -133,9 +146,13 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
                   key={`${f.name}-${idx}`}
                   className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]"
                 >
-                  {f.mime.startsWith('image/') ? (
+                  {f.mime.startsWith('image/') && (f.stagedPath || f.base64) ? (
                     <img
-                      src={`data:${f.mime};base64,${f.base64}`}
+                      src={
+                        f.stagedPath
+                          ? Capacitor.convertFileSrc(f.stagedPath)
+                          : `data:${f.mime};base64,${f.base64 ?? ''}`
+                      }
                       alt={f.name}
                       className="w-11 h-11 rounded-xl object-cover shrink-0"
                     />

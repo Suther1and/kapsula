@@ -14,7 +14,7 @@ import type { SecretKind, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { formatCardExpiryDraft } from '@shared/russian-event-parser';
 import { generateTotp, isValidTotpInput, parseOtpAuthUri } from '@shared/totp';
-import { formatCardPanGroups } from '../../lib/format';
+import { formatCardPanGroups, friendlyErrorMessage } from '../../lib/format';
 import { ModalDialog } from '../ui/ModalDialog';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
@@ -37,7 +37,7 @@ export const NewSecretModal: React.FC<NewSecretModalProps> = ({
   onOpenChange,
   onCreated,
 }) => {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [kind, setKind] = useState<'bank_card' | 'password' | 'api_key' | 'note'>(initialKind);
   useEffect(() => {
     if (open) setKind(initialKind);
@@ -109,6 +109,12 @@ export const NewSecretModal: React.FC<NewSecretModalProps> = ({
     setShowValue(false);
   };
 
+  useEffect(() => {
+    if (!open) {
+      reset();
+    }
+  }, [open]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (kind === 'bank_card' && digits.length < 12) {
@@ -142,7 +148,7 @@ export const NewSecretModal: React.FC<NewSecretModalProps> = ({
         title:
           title.trim() ||
           (kind === 'bank_card'
-            ? t('vault.type.bank_card')
+            ? ''
             : kind === 'password'
               ? website.trim() || t('vault.account')
               : kind === 'note'
@@ -169,6 +175,8 @@ export const NewSecretModal: React.FC<NewSecretModalProps> = ({
         onOpenChange(false);
         toast.success(t('secret.modal.saved'));
       }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('secret.sheet.saveFailed'), locale));
     } finally {
       setSaving(false);
     }

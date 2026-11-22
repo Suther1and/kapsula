@@ -1,16 +1,32 @@
-name: Build Kapsula Android (.apk)
+name: Build Kapsula Android (.apk / .aab)
 
 on:
   workflow_dispatch:
     inputs:
+      flavor:
+        description: 'Канал дистрибуции Android'
+        required: true
+        default: 'direct'
+        type: choice
+        options:
+          - direct
+          - play
       variant:
-        description: 'Тип сборки Android APK'
+        description: 'Тип сборки Android'
         required: true
         default: 'release'
         type: choice
         options:
           - release
           - debug
+      format:
+        description: 'Формат пакета'
+        required: true
+        default: 'apk'
+        type: choice
+        options:
+          - apk
+          - aab
   push:
     tags:
       - 'v*'
@@ -20,7 +36,7 @@ permissions:
 
 jobs:
   build-android:
-    name: Build Android APK (${{ github.event.inputs.variant || 'release' }})
+    name: Build Android (${{ github.event.inputs.flavor || 'direct' }} / ${{ github.event.inputs.variant || 'release' }} / ${{ github.event.inputs.format || 'apk' }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -72,95 +88,102 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          IS_TAG_BUILD: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+          TARGET_VARIANT: ${{ github.event.inputs.variant || 'release' }}
         run: |
-          if [ "$IS_TAG_BUILD" = "true" ]; then
+          if [ "$TARGET_VARIANT" = "release" ]; then
             if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
-              echo "::error::Для публикации релиза по тегу v* требуется постоянный Android keystore (секреты ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD), чтобы APK можно было обновлять поверх установленного."
+              echo "::error::Релизная сборка Android требует постоянный keystore (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD)."
               exit 1
             fi
           fi
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/kapsula-release.jks"
             echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/kapsula-release.jks" >> "$GITHUB_ENV"
-          else
-            echo "::warning::ANDROID_KEYSTORE_BASE64 не задан — тестовый APK будет подписан временным debug-ключом раннера. Для релизных сборок с обновлением поверх добавь ANDROID_KEYSTORE_* в секреты репозитория."
           fi
 
-      - name: Build Android .apk
+      - name: Build Android artifact
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_BUILD_NUMBER: ${{ github.run_number }}
-          REQUIRE_RELEASE_SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+          REQUIRE_RELEASE_SIGNING: ${{ (github.event.inputs.variant || 'release') == 'release' && 'true' || 'false' }}
+          TARGET_FLAVOR: ${{ github.event.inputs.flavor || 'direct' }}
           TARGET_VARIANT: ${{ github.event.inputs.variant || 'release' }}
+          TARGET_FORMAT: ${{ github.event.inputs.format || 'apk' }}
         run: |
-          node scripts/pack-android.mjs --variant="$TARGET_VARIANT"
+          node scripts/pack-android.mjs --flavor="$TARGET_FLAVOR" --variant="$TARGET_VARIANT" --format="$TARGET_FORMAT"
 
-      - name: Verify generated .apk signature, SHA-256 & android-latest.json
+      - name: Verify generated Android signature & android-latest.json
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           IS_TAG_BUILD: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+          TARGET_FORMAT: ${{ github.event.inputs.format || 'apk' }}
         run: |
-          ls -lh release/*.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk
-          node --input-type=module << 'EOF'
-          import { execFileSync } from 'node:child_process';
-          import crypto from 'node:crypto';
-          import fs from 'node:fs';
-          import path from 'node:path';
+          if [ "$TARGET_FORMAT" = "aab" ]; then
+            ls -lh release/*.aab
+            jarsigner -verify -verbose -certs release/*.aab
+          else
+            ls -lh release/*.apk
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk
+            node --input-type=module << 'EOF'
+            import { execFileSync } from 'node:child_process';
+            import crypto from 'node:crypto';
+            import fs from 'node:fs';
+            import path from 'node:path';
 
-          const releaseDir = path.resolve('release');
-          const apks = fs.readdirSync(releaseDir).filter((f) => f.endsWith('.apk')).sort();
-          const fileName =
-            apks.find((f) => /-android\.apk$/i.test(f)) ||
-            apks.find((f) => f.includes('-release.apk')) ||
-            apks[0];
-          if (!fileName) {
-            throw new Error('No .apk found in release/');
-          }
-          const apkPath = path.join(releaseDir, fileName);
-          const aapt2 = path.join(process.env.ANDROID_HOME, 'build-tools', '36.0.0', 'aapt2');
-          const badging = execFileSync(aapt2, ['dump', 'badging', apkPath], { encoding: 'utf8' });
-          const nameMatch = badging.match(/versionName='([^']+)'/);
-          const codeMatch = badging.match(/versionCode='(\d+)'/);
-          if (!nameMatch || !codeMatch) {
-            throw new Error(`Failed to parse versionName/versionCode from aapt2 output:\n${badging.slice(0, 400)}`);
-          }
+            const releaseDir = path.resolve('release');
+            const apks = fs.readdirSync(releaseDir).filter((f) => f.endsWith('.apk')).sort();
+            const fileName =
+              apks.find((f) => /-android\.apk$/i.test(f)) ||
+              apks.find((f) => f.includes('-release.apk')) ||
+              apks[0];
+            if (!fileName) {
+              throw new Error('No .apk found in release/');
+            }
+            const apkPath = path.join(releaseDir, fileName);
+            const aapt2 = path.join(process.env.ANDROID_HOME, 'build-tools', '36.0.0', 'aapt2');
+            const badging = execFileSync(aapt2, ['dump', 'badging', apkPath], { encoding: 'utf8' });
+            const nameMatch = badging.match(/versionName='([^']+)'/);
+            const codeMatch = badging.match(/versionCode='(\d+)'/);
+            if (!nameMatch || !codeMatch) {
+              throw new Error(`Failed to parse versionName/versionCode from aapt2 output:\n${badging.slice(0, 400)}`);
+            }
 
-          const versionName = nameMatch[1];
-          const versionCode = Number.parseInt(codeMatch[1], 10);
-          if (!Number.isInteger(versionCode) || versionCode <= 0) {
-            throw new Error(`Invalid versionCode parsed from APK: ${codeMatch[1]}`);
-          }
+            const versionName = nameMatch[1];
+            const versionCode = Number.parseInt(codeMatch[1], 10);
+            if (!Number.isInteger(versionCode) || versionCode <= 0) {
+              throw new Error(`Invalid versionCode parsed from APK: ${codeMatch[1]}`);
+            }
 
-          const sha256 = crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex');
-          const releaseTag =
-            process.env.IS_TAG_BUILD === 'true' && process.env.GITHUB_REF_NAME
-              ? process.env.GITHUB_REF_NAME
-              : `v${versionName}`;
+            const sha256 = crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex');
+            const releaseTag =
+              process.env.IS_TAG_BUILD === 'true' && process.env.GITHUB_REF_NAME
+                ? process.env.GITHUB_REF_NAME
+                : `v${versionName}`;
 
-          const metadata = {
-            versionName,
-            versionCode,
-            fileName,
-            sha256,
-            releaseTag,
-            builtAt: new Date().toISOString(),
-          };
-          const outPath = path.join(releaseDir, 'android-latest.json');
-          fs.writeFileSync(outPath, JSON.stringify(metadata, null, 2) + '\n', 'utf8');
-          console.log('--- release/android-latest.json ---');
-          console.log(fs.readFileSync(outPath, 'utf8').trim());
-          EOF
+            const metadata = {
+              versionName,
+              versionCode,
+              fileName,
+              sha256,
+              releaseTag,
+              builtAt: new Date().toISOString(),
+            };
+            const outPath = path.join(releaseDir, 'android-latest.json');
+            fs.writeFileSync(outPath, JSON.stringify(metadata, null, 2) + '\n', 'utf8');
+            console.log('--- release/android-latest.json ---');
+            console.log(fs.readFileSync(outPath, 'utf8').trim());
+            EOF
+          fi
 
-      - name: Upload .apk artifact
+      - name: Upload Android build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kapsula-Android-apk
+          name: Kapsula-Android-${{ github.event.inputs.flavor || 'direct' }}-${{ github.event.inputs.format || 'apk' }}
           path: |
             release/*.apk
+            release/*.aab
             release/android-latest.json
           retention-days: 30
           if-no-files-found: error
@@ -180,7 +203,7 @@ jobs:
           fi
 
       - name: Attach .apk & android-latest.json to GitHub Release (on v* tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && (github.event.inputs.format || 'apk') == 'apk'
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true

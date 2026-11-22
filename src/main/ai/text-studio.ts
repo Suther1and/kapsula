@@ -787,7 +787,8 @@ export async function transformNoteText(params: {
         res.model,
         res.inputTokens,
         res.outputTokens,
-        res.costUsd
+        res.costUsd,
+        route.mode === 'cloud_proxy'
       );
     }
 

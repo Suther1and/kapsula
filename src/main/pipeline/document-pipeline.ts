@@ -54,9 +54,27 @@ const MIME_BY_EXT: Record<string, string> = {
   json: 'application/json',
 };
 
+const SAFE_PARSED_DOCUMENT_EXTS = new Set([
+  'pdf',
+  'docx',
+  'xlsx',
+  'pptx',
+  'eml',
+  'html',
+  'htm',
+  'txt',
+  'md',
+  'csv',
+  'json',
+  'rtf',
+  'odt',
+  'ods',
+  'odp',
+]);
+
 export function inferDocumentExt(fileName: string, mime?: string): string {
   const fromName = path.extname(fileName || '').toLowerCase().replace(/^\./, '');
-  if (fromName && MIME_BY_EXT[fromName]) return fromName;
+  if (fromName && SAFE_PARSED_DOCUMENT_EXTS.has(fromName)) return fromName;
   const m = (mime || '').toLowerCase();
   if (m.includes('pdf')) return 'pdf';
   if (m.includes('wordprocessingml') || m.includes('docx')) return 'docx';
@@ -67,7 +85,7 @@ export function inferDocumentExt(fileName: string, mime?: string): string {
   if (m.includes('markdown')) return 'md';
   if (m.includes('csv')) return 'csv';
   if (m.includes('json')) return 'json';
-  return fromName || 'txt';
+  return 'txt';
 }
 
 export function saveDocumentAsset(
@@ -77,14 +95,16 @@ export function saveDocumentAsset(
   fileName: string,
   mime?: string
 ): { storedFileName: string; safeOriginalName: string; mime: string; ext: string; byteLength: number } {
-  fs.mkdirSync(mediaDir, { recursive: true });
+  fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
   const ext = inferDocumentExt(fileName, mime);
+  // Neutralize active web files (.html/.htm) on disk while keeping parsed ext for document intelligence
+  const diskExt = ext === 'html' || ext === 'htm' ? 'txt' : ext;
   const safeBase = path
     .basename(fileName || `document.${ext}`)
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
     .slice(0, 100);
-  const storedFileName = `doc_${fileStem}.${ext}`;
-  fs.writeFileSync(path.join(mediaDir, storedFileName), buffer);
+  const storedFileName = `doc_${fileStem}.${diskExt}`;
+  fs.writeFileSync(path.join(mediaDir, storedFileName), buffer, { mode: 0o600 });
   return {
     storedFileName,
     safeOriginalName: safeBase || `document.${ext}`,
@@ -385,7 +405,7 @@ async function summarizeDocumentWithCloud(params: {
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
   locale?: AppLocale;
-  onSpendUsd?: (usd: number) => void;
+  onSpendUsd?: (usd: number, isCloudProxy?: boolean) => void;
   fetchFn?: FetchLike;
 }): Promise<{
   title?: string;
@@ -464,7 +484,7 @@ async function summarizeDocumentWithCloud(params: {
         ((json.usageMetadata?.promptTokenCount ?? 700) * 0.0001 +
           (json.usageMetadata?.candidatesTokenCount ?? 150) * 0.0004) /
         1000;
-      params.onSpendUsd?.(cost);
+      params.onSpendUsd?.(cost, route.mode === 'cloud_proxy');
       const start = raw.indexOf('{');
       const end = raw.lastIndexOf('}');
       if (start !== -1 && end > start) {
@@ -510,7 +530,7 @@ async function summarizeDocumentWithCloud(params: {
       };
       const raw = json.choices?.[0]?.message?.content ?? '';
       const cost = ((json.usage?.total_tokens ?? 900) * 0.00015) / 1000;
-      params.onSpendUsd?.(cost);
+      params.onSpendUsd?.(cost, route.mode === 'cloud_proxy');
       const start = raw.indexOf('{');
       const end = raw.lastIndexOf('}');
       if (start !== -1 && end > start) {
@@ -554,7 +574,7 @@ export async function processDocumentIntelligence(params: {
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
   locale?: AppLocale;
-  onSpendUsd?: (usd: number) => void;
+  onSpendUsd?: (usd: number, isCloudProxy?: boolean) => void;
   fetchFn?: FetchLike;
 }): Promise<DocumentExtractionResult> {
   const locale: AppLocale = params.locale ?? 'ru';

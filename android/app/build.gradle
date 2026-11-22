@@ -8,10 +8,11 @@ def releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
 def releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
 def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword && file(releaseStoreFile).exists()
 def requireReleaseSigning = "true".equalsIgnoreCase(System.getenv("REQUIRE_RELEASE_SIGNING") ?: "")
+def requestedReleaseTask = gradle.startParameter.taskNames.any { it.toLowerCase(Locale.US).contains("release") }
 
-if (requireReleaseSigning && !hasReleaseSigning) {
+if ((requireReleaseSigning || requestedReleaseTask) && !hasReleaseSigning) {
     throw new GradleException(
-        "REQUIRE_RELEASE_SIGNING=true, но релизный keystore (ANDROID_KEYSTORE_PATH/PASSWORD/ALIAS) не настроен."
+        "Релизная сборка Android требует постоянный keystore (ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD). Для локальной отладки используй pack:android:debug."
     )
 }
 
@@ -43,6 +44,11 @@ def appVersionCode = project.hasProperty("kapsulaVersionCode") ? Integer.parseIn
 android {
     namespace = "com.notesplus.kapsula"
     compileSdk = rootProject.ext.compileSdkVersion
+
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId "com.notesplus.kapsula"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -52,6 +58,20 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        play {
+            dimension "distribution"
+            buildConfigField "String", "DIST_CHANNEL", "\"play\""
+            buildConfigField "boolean", "ALLOW_SELF_UPDATE", "false"
+        }
+        direct {
+            dimension "distribution"
+            buildConfigField "String", "DIST_CHANNEL", "\"direct\""
+            buildConfigField "boolean", "ALLOW_SELF_UPDATE", "true"
         }
     }
 
@@ -73,13 +93,11 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
-            } else {
-                // Local sideload convenience when no custom keystore is configured
-                signingConfig signingConfigs.debug
             }
         }
     }

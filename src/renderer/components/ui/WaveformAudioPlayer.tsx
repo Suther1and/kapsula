@@ -22,6 +22,9 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
 }) => {
   const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioActivated, setAudioActivated] = useState(false);
+  const pendingAutoPlayRef = useRef(false);
+  const pendingSeekRatioRef = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState<number>(
@@ -57,6 +60,9 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
   }, [peaks, seedKey, compact]);
 
   useEffect(() => {
+    setAudioActivated(false);
+    pendingAutoPlayRef.current = false;
+    pendingSeekRatioRef.current = null;
     setPlaying(false);
     setCurrentTime(0);
     setDuration(fallbackDurationSec && Number.isFinite(fallbackDurationSec) ? fallbackDurationSec : 0);
@@ -66,12 +72,32 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
     const el = audioRef.current;
     if (!el) return;
     el.playbackRate = SPEEDS[speedIdx] ?? 1;
-  }, [speedIdx]);
+  }, [speedIdx, audioActivated]);
+
+  useEffect(() => {
+    if (!audioActivated || !src || !pendingAutoPlayRef.current) return;
+    const el = audioRef.current;
+    if (!el) return;
+    pendingAutoPlayRef.current = false;
+    el.playbackRate = SPEEDS[speedIdx] ?? 1;
+    void Promise.resolve(el.play())
+      .then(() => setPlaying(true))
+      .catch(() => setPlaying(false));
+  }, [audioActivated, src, speedIdx]);
 
   const togglePlay = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!src) return;
+    if (!audioActivated) {
+      pendingAutoPlayRef.current = true;
+      setAudioActivated(true);
+      return;
+    }
     const el = audioRef.current;
-    if (!el || !src) return;
+    if (!el) {
+      pendingAutoPlayRef.current = true;
+      return;
+    }
     if (playing) {
       el.pause();
       setPlaying(false);
@@ -87,10 +113,19 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
 
   const handleSeekBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    const el = audioRef.current;
-    if (!el || !src || duration <= 0) return;
+    if (!src) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    if (!audioActivated) {
+      pendingSeekRatioRef.current = ratio;
+      if (duration > 0) {
+        setCurrentTime(ratio * duration);
+      }
+      setAudioActivated(true);
+      return;
+    }
+    const el = audioRef.current;
+    if (!el || duration <= 0) return;
     el.currentTime = ratio * duration;
     setCurrentTime(el.currentTime);
   };
@@ -106,16 +141,27 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
     <div
       data-testid="waveform-audio-player"
       onClick={(e) => e.stopPropagation()}
+      onMouseEnter={() => {
+        if (src && !audioActivated) setAudioActivated(true);
+      }}
       className="min-w-0 w-full overflow-hidden flex items-center gap-2 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-2.5 py-2"
     >
-      {src ? (
+      {src && audioActivated ? (
         <audio
           ref={audioRef}
           src={src}
           preload="metadata"
           onLoadedMetadata={(e) => {
             const d = e.currentTarget.duration;
-            if (Number.isFinite(d) && d > 0) setDuration(d);
+            if (Number.isFinite(d) && d > 0) {
+              setDuration(d);
+              if (pendingSeekRatioRef.current !== null) {
+                const targetTime = pendingSeekRatioRef.current * d;
+                pendingSeekRatioRef.current = null;
+                e.currentTarget.currentTime = targetTime;
+                setCurrentTime(targetTime);
+              }
+            }
           }}
           onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           onEnded={() => {
@@ -128,6 +174,9 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
       <button
         type="button"
         disabled={!src}
+        onFocus={() => {
+          if (src && !audioActivated) setAudioActivated(true);
+        }}
         onClick={(e) => void togglePlay(e)}
         aria-label={playing ? t('ui.videoPause') : t('ui.audioPlay')}
         className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] shrink-0 cursor-pointer disabled:opacity-45"

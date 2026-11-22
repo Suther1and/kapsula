@@ -9,7 +9,7 @@ interface DocumentCardProps {
   compactList?: boolean;
 }
 
-export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = false }) => {
+export const DocumentCard: React.FC<DocumentCardProps> = React.memo(({ item, compactList = false }) => {
   const { t, locale } = useI18n();
   const fileName = item.mediaMeta?.fileName || item.title || t('dna.document');
   const extMatch = /\.([a-z0-9]+)$/i.exec(fileName);
@@ -101,4 +101,4 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({ item, compactList = 
       ) : null}
     </div>
   );
-};
+});

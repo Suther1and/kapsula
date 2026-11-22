@@ -15,7 +15,7 @@ import {
 import { transformNoteText } from '../ai/text-studio';
 import type { VaultRepository } from '../db/repository';
 import { extractActionsFromText } from '../ocr/ocr-service';
-import { redactSecrets } from '../security/secret-shield';
+import { sanitizeForCloudAi } from '../security/secret-shield';
 
 const execFileAsync = promisify(execFile);
 
@@ -119,7 +119,7 @@ export function saveAudioAsset(
   buffer: Buffer,
   mimeOrExt?: string
 ): { filename: string; mime: string; byteLength: number } {
-  fs.mkdirSync(mediaDir, { recursive: true });
+  fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
   const hint = (mimeOrExt || '').toLowerCase();
   let ext = 'webm';
   let mime = 'audio/webm';
@@ -137,7 +137,7 @@ export function saveAudioAsset(
     mime = 'audio/wav';
   }
   const filename = `voice_${fileStem}.${ext}`;
-  fs.writeFileSync(path.join(mediaDir, filename), buffer);
+  fs.writeFileSync(path.join(mediaDir, filename), buffer, { mode: 0o600 });
   return { filename, mime, byteLength: buffer.length };
 }
 
@@ -303,7 +303,7 @@ export interface TranscribeAudioFileParams {
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
   locale?: AppLocale;
-  onSpendUsd?: (usd: number) => void;
+  onSpendUsd?: (usd: number, isCloudProxy?: boolean) => void;
   fetchFn?: FetchLike;
 }
 
@@ -404,7 +404,8 @@ export async function transcribeAudioFile(
   }
 
   const contextText = (params.contextHint || '').trim();
-  const safeContextText = contextText ? redactSecrets(contextText) : '';
+  const contextShield = contextText ? sanitizeForCloudAi(contextText, locale) : null;
+  const safeContextText = contextShield?.safe ? contextShield.text : '';
   const fallbackTitle = buildFallbackTitle(params.fileName, params.durationSec, locale);
   const fetchImpl: FetchLike = params.fetchFn ?? fetch;
 
@@ -542,7 +543,7 @@ export async function transcribeAudioFile(
       const tokensIn = json.usageMetadata?.promptTokenCount ?? 800;
       const tokensOut = json.usageMetadata?.candidatesTokenCount ?? 220;
       const costUsd = (tokensIn * 0.0001 + tokensOut * 0.0004) / 1000;
-      params.onSpendUsd?.(costUsd);
+      params.onSpendUsd?.(costUsd, useProxy);
 
       if (parsed && (parsed.transcript?.trim() || parsed.summary?.trim())) {
         return {
@@ -629,7 +630,7 @@ export async function transcribeAudioFile(
         const rawText = json.choices?.[0]?.message?.content ?? '';
         const parsed = parseAiAudioJson(rawText);
         const costUsd = ((json.usage?.total_tokens ?? 1000) * 0.0002) / 1000;
-        params.onSpendUsd?.(costUsd);
+        params.onSpendUsd?.(costUsd, useProxy);
 
         if (parsed && (parsed.transcript?.trim() || parsed.summary?.trim())) {
           return {
@@ -686,7 +687,7 @@ export async function processAudioIntelligence(params: {
   cloudProxy?: CloudAiProxyConfig | null;
   budgetReached?: boolean;
   locale?: AppLocale;
-  onSpendUsd?: (usd: number) => void;
+  onSpendUsd?: (usd: number, isCloudProxy?: boolean) => void;
   fetchFn?: FetchLike;
 }): Promise<AudioIntelligenceResult> {
   const locale: AppLocale = params.locale ?? 'ru';
@@ -768,7 +769,7 @@ export async function dictateToNote(params: {
   capUsd?: number;
   repo?: VaultRepository;
   locale?: AppLocale;
-  onSpendUsd?: (usd: number) => void;
+  onSpendUsd?: (usd: number, isCloudProxy?: boolean) => void;
   fetchFn?: FetchLike;
 }): Promise<VoiceDictationResult> {
   const locale: AppLocale = params.locale ?? params.repo?.getLocale() ?? 'ru';

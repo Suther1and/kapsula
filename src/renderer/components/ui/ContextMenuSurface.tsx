@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ContextMenu } from '@base-ui/react/context-menu';
 import { CaretRight, Check } from '@phosphor-icons/react';
 
@@ -33,7 +33,7 @@ export type ContextMenuEntry =
     };
 
 interface ContextMenuSurfaceProps {
-  entries: ContextMenuEntry[];
+  entries: ContextMenuEntry[] | (() => ContextMenuEntry[]);
   children: React.ReactNode;
   disabled?: boolean;
   className?: string;
@@ -120,12 +120,22 @@ export const ContextMenuSurface: React.FC<ContextMenuSurfaceProps> = ({
   className = '',
   onOpenChange,
 }) => {
-  if (disabled || entries.length === 0) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  if (disabled || (Array.isArray(entries) && entries.length === 0)) {
     return <>{children}</>;
   }
 
+  const resolvedEntries =
+    menuOpen ? (typeof entries === 'function' ? entries() : entries) : [];
+
   return (
-    <ContextMenu.Root onOpenChange={onOpenChange}>
+    <ContextMenu.Root
+      onOpenChange={(nextOpen) => {
+        setMenuOpen(nextOpen);
+        onOpenChange?.(nextOpen);
+      }}
+    >
       <ContextMenu.Trigger className={className || 'contents'}>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner collisionPadding={10} className="z-[130]">
@@ -133,7 +143,7 @@ export const ContextMenuSurface: React.FC<ContextMenuSurfaceProps> = ({
             data-testid="context-menu-popup"
             className="k-popup-motion min-w-[205px] max-w-[280px] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
           >
-            {renderEntries(entries)}
+            {menuOpen ? renderEntries(resolvedEntries) : null}
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>

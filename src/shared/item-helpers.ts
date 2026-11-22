@@ -1,3 +1,4 @@
+import { parseMarkdownTasks } from './task-helpers';
 import type { VaultItem } from './types';
 
 export interface ContactActionsInfo {
@@ -136,13 +137,13 @@ export function countChecklistStats(body: string | null | undefined): {
   done: number;
 } {
   if (!body) return { total: 0, done: 0 };
-  const matches = body.match(/^[-*]\s+\[([ xX])\]/gm);
-  if (!matches || matches.length === 0) return { total: 0, done: 0 };
+  const tasks = parseMarkdownTasks(body);
+  if (tasks.length === 0) return { total: 0, done: 0 };
   let done = 0;
-  for (const m of matches) {
-    if (/\[[xX]\]/.test(m)) done += 1;
+  for (const t of tasks) {
+    if (t.done) done += 1;
   }
-  return { total: matches.length, done };
+  return { total: tasks.length, done };
 }
 
 export function isUntitledPlaceholderTitle(title: string | null | undefined): boolean {

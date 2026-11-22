@@ -343,17 +343,21 @@ export interface CaptureInput {
   url?: string;
   title?: string;
   imageBase64?: string;
+  imageBytes?: Uint8Array;
   imageFilePath?: string;
   audioBase64?: string;
+  audioBytes?: Uint8Array;
   audioMime?: string;
   audioDurationSec?: number;
   skipAudioAi?: boolean;
   videoPath?: string;
   videoBase64?: string;
+  videoBytes?: Uint8Array;
   videoMime?: string;
   videoDurationSec?: number;
   filePath?: string;
   fileBase64?: string;
+  fileBytes?: Uint8Array;
   fileName?: string;
   fileMime?: string;
   subKind?: ItemSubKind;
@@ -673,6 +677,7 @@ export interface CalendarEventInput {
   attachments?: string[];
   externalSource?: string | null;
   externalId?: string | null;
+  etag?: string | null;
 }
 
 export interface CalendarSyncStatus {

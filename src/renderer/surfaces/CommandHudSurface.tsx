@@ -45,7 +45,6 @@ import type {
   CalendarEvent,
   OrbitDef,
   SettingsState,
-  TotpCodeSnapshot,
   VaultItem,
   VaultTaskEntry,
 } from '@shared/types';
@@ -57,6 +56,7 @@ import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import { isStandaloneTaskSource } from '@shared/task-helpers';
 import '../styles/editor.css';
 import { hydrateAppearanceFromSettings } from '../lib/appearance';
+import { useTotpSnapshot } from '../lib/totp-ticker';
 import {
   formatDateCompact,
   formatRelativeDate,
@@ -254,40 +254,8 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
   onLocked,
 }) => {
   const { t } = useI18n();
-  const [snapshot, setSnapshot] = useState<TotpCodeSnapshot | null>(null);
   const [copiedJustNow, setCopiedJustNow] = useState(false);
-
-  const fetchCode = useCallback(async () => {
-    if (!unlocked) {
-      setSnapshot(null);
-      return;
-    }
-    try {
-      const next = await window.kapsula.getTotpCode(itemId);
-      setSnapshot(next);
-    } catch {
-      setSnapshot(null);
-    }
-  }, [itemId, unlocked]);
-
-  useEffect(() => {
-    if (!unlocked) {
-      setSnapshot(null);
-      return;
-    }
-    void fetchCode();
-    const timer = window.setInterval(() => {
-      setSnapshot((prev) => {
-        if (!prev) return null;
-        if (prev.remainingSec <= 1) {
-          void fetchCode();
-          return { ...prev, remainingSec: prev.period };
-        }
-        return { ...prev, remainingSec: prev.remainingSec - 1 };
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [unlocked, fetchCode]);
+  const snapshot = useTotpSnapshot(itemId, unlocked);
 
   const handleCopyTotp = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -398,7 +366,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   // Right-pane live editor state
   const [editorTitle, setEditorTitle] = useState('');
   const [editorLiveBody, setEditorLiveBody] = useState('');
-  const [editorSaveState, setEditorSaveState] = useState<'saved' | 'saving'>('saved');
+  const [editorSaveState, setEditorSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [hudTranscribingId, setHudTranscribingId] = useState<string | null>(null);
   const [hudInsertingImage, setHudInsertingImage] = useState(false);
   const [hudPickingImage, setHudPickingImage] = useState(false);
@@ -441,8 +409,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   const editorTitleRef = useRef('');
   const editorBodyRef = useRef('');
   const dirtyItemIdRef = useRef<string | null>(null);
+  const editorEditSeqRef = useRef(0);
   const savingItemIdRef = useRef<string | null>(null);
   const loadingEditorRef = useRef(false);
+  const loadingEditorTimerRef = useRef<number | null>(null);
+  const loadSeqRef = useRef(0);
+  const savingTaskRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
 
   const activeItem = useMemo(() => {
@@ -473,12 +445,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     }
     const targetId = dirtyItemIdRef.current;
     if (!targetId) {
-      if (!savingItemIdRef.current) setEditorSaveState('saved');
+      if (!savingItemIdRef.current) {
+        setEditorSaveState((prev) => (prev === 'error' ? 'error' : 'saved'));
+      }
       return;
     }
 
-    // Snapshot & clear dirty synchronously so fast switching never double-saves or contaminates
-    dirtyItemIdRef.current = null;
+    const seq = editorEditSeqRef.current;
     savingItemIdRef.current = targetId;
     const nextTitle = editorTitleRef.current.trim();
     const nextBody = editorBodyRef.current;
@@ -487,20 +460,28 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       allItemsRef.current.find((i) => i.id === targetId)?.title ||
       fallbackNoteTitleRef.current;
 
+    let saveFailed = false;
     try {
       const updated = await window.kapsula.updateItem(targetId, {
         title: nextTitle || fallbackTitle,
         body: nextBody,
       });
-      const stillSameAndTyped =
-        editorItemIdRef.current === targetId &&
-        (editorTitleRef.current.trim() !== nextTitle || editorBodyRef.current !== nextBody);
+      const stillSameItem = editorItemIdRef.current === targetId;
+      const userTypedMeanwhile =
+        stillSameItem &&
+        (editorEditSeqRef.current !== seq ||
+          editorTitleRef.current.trim() !== nextTitle ||
+          editorBodyRef.current !== nextBody);
+
+      if (dirtyItemIdRef.current === targetId && !userTypedMeanwhile) {
+        dirtyItemIdRef.current = null;
+      }
 
       if (updated) {
         patchLocalItem(updated);
       }
 
-      if (stillSameAndTyped) {
+      if (userTypedMeanwhile) {
         dirtyItemIdRef.current = targetId;
         setEditorSaveState('saving');
         if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -509,12 +490,16 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         }, 300);
       }
     } catch {
-      // ignore transient save errors
+      saveFailed = true;
+      if (!dirtyItemIdRef.current) {
+        dirtyItemIdRef.current = targetId;
+      }
+      setEditorSaveState('error');
     } finally {
       if (savingItemIdRef.current === targetId) {
         savingItemIdRef.current = null;
       }
-      if (!dirtyItemIdRef.current) {
+      if (!saveFailed && !dirtyItemIdRef.current) {
         setEditorSaveState('saved');
       }
     }
@@ -647,6 +632,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       editorBodyRef.current = md;
       setEditorLiveBody(md);
       dirtyItemIdRef.current = curId;
+      editorEditSeqRef.current += 1;
       setEditorSaveState('saving');
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = window.setTimeout(() => {
@@ -716,9 +702,14 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       if (hudEditor && extBody !== editorBodyRef.current) {
         editorBodyRef.current = extBody;
         setEditorLiveBody(extBody);
+        if (loadingEditorTimerRef.current) {
+          window.clearTimeout(loadingEditorTimerRef.current);
+          loadingEditorTimerRef.current = null;
+        }
         loadingEditorRef.current = true;
         hudEditor.commands.setContent(extBody, { contentType: 'markdown', emitUpdate: false });
-        window.setTimeout(() => {
+        loadingEditorTimerRef.current = window.setTimeout(() => {
+          loadingEditorTimerRef.current = null;
           loadingEditorRef.current = false;
         }, 12);
       }
@@ -735,12 +726,24 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     setEditorSaveState('saved');
 
     if (hudEditor) {
+      if (loadingEditorTimerRef.current) {
+        window.clearTimeout(loadingEditorTimerRef.current);
+        loadingEditorTimerRef.current = null;
+      }
       loadingEditorRef.current = true;
       hudEditor.commands.setContent(initBody, { contentType: 'markdown', emitUpdate: false });
-      window.setTimeout(() => {
+      loadingEditorTimerRef.current = window.setTimeout(() => {
+        loadingEditorTimerRef.current = null;
         loadingEditorRef.current = false;
       }, 12);
     }
+    return () => {
+      if (loadingEditorTimerRef.current) {
+        window.clearTimeout(loadingEditorTimerRef.current);
+        loadingEditorTimerRef.current = null;
+        loadingEditorRef.current = false;
+      }
+    };
   }, [activeItem, hudEditor, flushHudEditorSave]);
 
   useLayoutEffect(() => {
@@ -760,10 +763,19 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   }, []);
 
   const loadHudData = useCallback(async (searchQuery = '') => {
+    const reqSeq = ++loadSeqRef.current;
     try {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = startOfDay.getTime() + 86_400_000;
+      const endOfDay = new Date(
+        startOfDay.getFullYear(),
+        startOfDay.getMonth(),
+        startOfDay.getDate(),
+        24,
+        0,
+        0,
+        0
+      ).getTime();
       const trimmedSearch = searchQuery.trim();
 
       const [fetchedSearch, fetchedAll, fetchedOrbits, fetchedTasks, fetchedEvents, clip] =
@@ -772,13 +784,13 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
             includeArchived: false,
             includeSecrets: true,
             search: trimmedSearch || undefined,
-            limit: 120,
+            limit: 1000,
           }),
           trimmedSearch
             ? window.kapsula.queryVault({
                 includeArchived: false,
                 includeSecrets: true,
-                limit: 120,
+                limit: 1000,
               })
             : Promise.resolve(null),
           window.kapsula.listOrbits(),
@@ -786,6 +798,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
           window.kapsula.listCalendarEvents({ startAt: startOfDay.getTime(), endAt: endOfDay }),
           window.kapsula.getHudClipboardPreview().catch(() => ({ hasImage: false, text: '' })),
         ]);
+      if (reqSeq !== loadSeqRef.current) return;
       setItems(fetchedSearch);
       setAllItems(fetchedAll ?? fetchedSearch);
       setOrbits(fetchedOrbits);
@@ -797,8 +810,30 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     }
   }, []);
 
+  const dirtyWhileHiddenRef = useRef(false);
+
   useEffect(() => {
-    void loadHudData('');
+    const isHidden = () => typeof document !== 'undefined' && document.hidden;
+    if (isHidden()) {
+      dirtyWhileHiddenRef.current = true;
+    } else {
+      void loadHudData('');
+    }
+    const refreshIfVisible = () => {
+      if (isHidden()) {
+        dirtyWhileHiddenRef.current = true;
+        return;
+      }
+      dirtyWhileHiddenRef.current = false;
+      void loadHudData(searchRef.current);
+    };
+    const onVisibilityChange = () => {
+      if (!isHidden() && dirtyWhileHiddenRef.current) {
+        dirtyWhileHiddenRef.current = false;
+        void loadHudData(searchRef.current);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
     const unsubs = [
       window.kapsula.onHudOpened(() => {
         void flushHudEditorSaveRef.current();
@@ -806,6 +841,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         setVaultSearch('');
         setSelectedValue('');
         searchRef.current = '';
+        dirtyWhileHiddenRef.current = false;
         setRecordingVoice(false);
         setCaptureOrbitMenuOpen(false);
         captureOrbitMenuOpenRef.current = false;
@@ -819,20 +855,29 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
           else if (tabRef.current === 'capture') captureInputRef.current?.focus();
         }, 20);
       }),
-      window.kapsula.onVaultItemUpserted(() => void loadHudData(searchRef.current)),
-      window.kapsula.onVaultItemDeleted(() => void loadHudData(searchRef.current)),
-      window.kapsula.onVaultBatchSynced(() => void loadHudData(searchRef.current)),
-      window.kapsula.onOrbitsChanged(() => void loadHudData(searchRef.current)),
-      window.kapsula.onCalendarChanged(() => void loadHudData(searchRef.current)),
+      window.kapsula.onVaultItemUpserted(refreshIfVisible),
+      window.kapsula.onVaultItemDeleted(refreshIfVisible),
+      window.kapsula.onVaultBatchSynced(refreshIfVisible),
+      window.kapsula.onOrbitsChanged(refreshIfVisible),
+      window.kapsula.onCalendarChanged(refreshIfVisible),
     ];
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       for (const u of unsubs) u();
     };
   }, [loadHudData]);
 
   // Bilingual RU↔EN backend query on typing
   useEffect(() => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      dirtyWhileHiddenRef.current = true;
+      return;
+    }
     const t = window.setTimeout(() => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        dirtyWhileHiddenRef.current = true;
+        return;
+      }
       void loadHudData(search);
     }, 80);
     return () => window.clearTimeout(t);
@@ -840,6 +885,10 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
 
   // Refresh HUD vault items whenever PIN state or lock status changes so secret subtitles never show stale lock messages
   useEffect(() => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      dirtyWhileHiddenRef.current = true;
+      return;
+    }
     void loadHudData(searchRef.current);
   }, [settings.hasMasterPin, settings.vaultUnlocked, loadHudData]);
 
@@ -1031,6 +1080,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     const curId = editorItemIdRef.current;
     if (!curId) return;
     dirtyItemIdRef.current = curId;
+    editorEditSeqRef.current += 1;
     setEditorSaveState('saving');
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -1801,10 +1851,16 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               className={`px-2 py-0.5 rounded-full font-medium k-tabular ${
                                 editorSaveState === 'saving'
                                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
-                                  : 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)]'
+                                  : editorSaveState === 'error'
+                                    ? 'bg-[var(--k-danger-soft)] text-[var(--k-danger)]'
+                                    : 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)]'
                               }`}
                             >
-                              {editorSaveState === 'saving' ? t('common.saving') : t('common.saved')}
+                              {editorSaveState === 'saving'
+                                ? t('common.saving')
+                                : editorSaveState === 'error'
+                                  ? t('common.saveError')
+                                  : t('common.saved')}
                             </span>
                             <span className="hidden sm:inline">
                               {formatRelativeDate(
@@ -2297,15 +2353,22 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                   onSubmit={async (e) => {
                     e.preventDefault();
                     const clean = todayQuickTask.trim();
-                    if (!clean) return;
-                    await window.kapsula.capture({
-                      text: `- [ ] ${clean}`,
-                      remindAt: Date.now() + 3_600_000,
-                      source: 'hud',
-                    });
-                    setTodayQuickTask('');
-                    toast.success(t('hud.taskAdded'));
-                    await loadHudData(search);
+                    if (!clean || savingTaskRef.current) return;
+                    savingTaskRef.current = true;
+                    try {
+                      await window.kapsula.capture({
+                        text: `- [ ] ${clean}`,
+                        remindAt: Date.now() + 3_600_000,
+                        source: 'hud',
+                      });
+                      setTodayQuickTask('');
+                      toast.success(t('hud.taskAdded'));
+                      await loadHudData(search);
+                    } catch (err) {
+                      toast.error(friendlyErrorMessage(err, t('common.saveError'), locale));
+                    } finally {
+                      savingTaskRef.current = false;
+                    }
                   }}
                   className="flex items-center gap-2 shrink-0"
                 >

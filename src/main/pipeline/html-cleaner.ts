@@ -1,7 +1,38 @@
-import { Readability } from '@mozilla/readability';
-import { parseHTML } from 'linkedom/worker';
+import { createRequire } from 'node:module';
+import type { Readability as ReadabilityClass } from '@mozilla/readability';
 import { decodeHtmlEntities, truncateAtWordBoundary } from '@shared/html-entities';
 import type { ExtractedAction } from '@shared/types';
+
+type ParseHtmlFn = (html: string) => { document: Document };
+type ReadabilityCtor = typeof ReadabilityClass;
+
+let cachedParseHtml: ParseHtmlFn | null = null;
+let cachedReadabilityCtor: ReadabilityCtor | null = null;
+
+function getNodeRequire(): NodeRequire {
+  if (typeof require === 'function') {
+    return require;
+  }
+  return createRequire(import.meta.url);
+}
+
+function getParseHtml(): ParseHtmlFn {
+  if (!cachedParseHtml) {
+    const req = getNodeRequire();
+    const mod = req('linkedom') as { parseHTML: ParseHtmlFn };
+    cachedParseHtml = mod.parseHTML;
+  }
+  return cachedParseHtml;
+}
+
+function getReadabilityCtor(): ReadabilityCtor {
+  if (!cachedReadabilityCtor) {
+    const req = getNodeRequire();
+    const mod = req('@mozilla/readability') as { Readability: ReadabilityCtor };
+    cachedReadabilityCtor = mod.Readability;
+  }
+  return cachedReadabilityCtor;
+}
 
 export type UrlSanitizer = (raw: string | null | undefined, base?: URL) => string | null;
 
@@ -88,6 +119,7 @@ export function normalizeMetaText(input: string | null | undefined): string {
  * guaranteeing `document.documentElement`, `document.head`, and `document.body` never throw.
  */
 export function parseHtmlDocument(rawHtml: string): Document {
+  const parseHTML = getParseHtml();
   const input = (rawHtml || '').trim();
   if (!input) {
     return parseHTML('<!doctype html><html><head></head><body></body></html>').document as unknown as Document;
@@ -105,6 +137,7 @@ export function parseHtmlDocument(rawHtml: string): Document {
 }
 
 export function parseHtmlFragment(fragmentHtml: string): { document: Document; body: DomNodeLike } {
+  const parseHTML = getParseHtml();
   const wrapped = `<!doctype html><html><head></head><body>${fragmentHtml || ''}</body></html>`;
   const { document } = parseHTML(wrapped);
   const body = (document.body ?? document.documentElement) as unknown as DomNodeLike;
@@ -1267,8 +1300,9 @@ export function extractReadablePage(
   const workDoc = parseHtmlDocument(html);
   stripBoilerplateFromDom(workDoc as unknown as DomNodeLike);
 
-  let readableArticle: ReturnType<Readability<string>['parse']> = null;
+  let readableArticle: ReturnType<ReadabilityClass<string>['parse']> = null;
   try {
+    const Readability = getReadabilityCtor();
     const reader = new Readability(workDoc, { charThreshold: 180, keepClasses: true });
     readableArticle = reader.parse();
   } catch {

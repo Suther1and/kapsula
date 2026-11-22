@@ -13,6 +13,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -31,6 +33,7 @@ import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.security.keystore.UserNotAuthenticatedException;
 import android.util.Base64;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
@@ -78,8 +81,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -97,18 +103,20 @@ import javax.crypto.spec.GCMParameterSpec;
 @CapacitorPlugin(
     name = "KapsulaNative",
     permissions = {
-        @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO }),
-        @Permission(alias = "camera", strings = { Manifest.permission.CAMERA })
+        @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
     }
 )
 public class KapsulaNativePlugin extends Plugin {
     private static final String KEYSTORE_PROVIDER = "AndroidKeyStore";
     private static final String KEYSTORE_ALIAS = "kapsula_master_v1";
+    private static final String KEYSTORE_AUTH_ALIAS = "kapsula_vault_auth_v1";
     private static final String PREFS_NAME = "kapsula_native_prefs";
     private static final String PREF_PENDING_CAMERA_PATH = "pending_camera_path";
     private static final String PREF_UI_THEME = "ui_theme";
     private static final String PREF_UI_BG_HEX = "ui_bg_hex";
     private static final int MAX_SHARED_FILE_BYTES = 12 * 1024 * 1024;
+    private static final int STAGED_FILE_THRESHOLD_BYTES = 2 * 1024 * 1024;
+    private static final String STAGED_DIR_NAME = "kapsula-staged";
     private static final int IMAGE_OPTIMIZE_THRESHOLD_BYTES = 3 * 1024 * 1024;
     private static final int IMAGE_MAX_DIMENSION_PX = 2400;
     private static final int IMAGE_JPEG_QUALITY = 84;
@@ -162,6 +170,8 @@ public class KapsulaNativePlugin extends Plugin {
         super.load();
         activeInstance = this;
         startFoldPostureTracking();
+        final Context appCtx = getContext().getApplicationContext();
+        IO_EXECUTOR.execute(() -> cleanStagedDir(appCtx));
     }
 
     @Override
@@ -358,17 +368,30 @@ public class KapsulaNativePlugin extends Plugin {
             }
         }
 
+        final int maxTotalBytes = MAX_SHARED_FILE_BYTES * 2;
         int totalBytesRead = 0;
-        for (Uri uri : uris) {
-            if (totalBytesRead >= MAX_SHARED_FILE_BYTES * 2) break;
-            JSObject fileObj = readUriToJsObject(context, uri, intent.getType());
-            if (fileObj != null) {
-                totalBytesRead += fileObj.optInt("size", 0);
-                filesArr.put(fileObj);
+        int truncatedCount = 0;
+        for (int i = 0; i < uris.size(); i++) {
+            Uri uri = uris.get(i);
+            if (totalBytesRead >= maxTotalBytes) {
+                truncatedCount++;
+                continue;
             }
+            JSObject fileObj = readUriToJsObject(context, uri, intent.getType());
+            if (fileObj == null) {
+                truncatedCount++;
+                continue;
+            }
+            int size = fileObj.optInt("size", 0);
+            if (size <= 0 || totalBytesRead + size > maxTotalBytes) {
+                truncatedCount++;
+                continue;
+            }
+            totalBytesRead += size;
+            filesArr.put(fileObj);
         }
 
-        if ((text == null || text.trim().isEmpty()) && filesArr.length() == 0) {
+        if ((text == null || text.trim().isEmpty()) && filesArr.length() == 0 && truncatedCount == 0) {
             return null;
         }
 
@@ -379,8 +402,41 @@ public class KapsulaNativePlugin extends Plugin {
         if (subject != null) payload.put("subject", subject);
         if (extractedUrl != null) payload.put("url", extractedUrl);
         if (filesArr.length() > 0) payload.put("files", filesArr);
+        if (truncatedCount > 0) payload.put("truncatedCount", truncatedCount);
         payload.put("receivedAt", System.currentTimeMillis());
         return payload;
+    }
+
+    private static boolean isPrivateAppFileUri(Context context, Uri uri) {
+        if (uri == null || !"file".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
+        String rawPath = uri.getPath();
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            return true;
+        }
+        try {
+            String canonicalTarget = new File(rawPath).getCanonicalPath();
+            List<File> protectedDirs = new ArrayList<>();
+            if (context.getApplicationInfo() != null && context.getApplicationInfo().dataDir != null) {
+                protectedDirs.add(new File(context.getApplicationInfo().dataDir));
+            }
+            if (context.getFilesDir() != null) protectedDirs.add(context.getFilesDir());
+            if (context.getCacheDir() != null) protectedDirs.add(context.getCacheDir());
+            if (context.getNoBackupFilesDir() != null) protectedDirs.add(context.getNoBackupFilesDir());
+            if (context.getCodeCacheDir() != null) protectedDirs.add(context.getCodeCacheDir());
+
+            for (File dir : protectedDirs) {
+                if (dir == null) continue;
+                String canonicalDir = dir.getCanonicalPath();
+                if (canonicalTarget.equals(canonicalDir) || canonicalTarget.startsWith(canonicalDir + File.separator)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            return true;
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -400,7 +456,62 @@ public class KapsulaNativePlugin extends Plugin {
         return intent.getParcelableArrayListExtra(key);
     }
 
+    private static File getStagedDir(Context context) {
+        File dir = new File(context.getCacheDir(), STAGED_DIR_NAME);
+        if (!dir.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    private static void cleanStagedDir(Context context) {
+        try {
+            File dir = new File(context.getCacheDir(), STAGED_DIR_NAME);
+            if (!dir.exists() || !dir.isDirectory()) return;
+            File[] files = dir.listFiles();
+            if (files == null) return;
+            for (File f : files) {
+                if (f != null && f.isFile()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+            }
+        } catch (Exception ignored) {
+            // Ignore cleanup errors on boot
+        }
+    }
+
+    private static long queryFileSize(ContentResolver resolver, Uri uri) {
+        try (Cursor cursor = resolver.query(uri, new String[] { OpenableColumns.SIZE }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (idx >= 0 && !cursor.isNull(idx)) {
+                    return cursor.getLong(idx);
+                }
+            }
+        } catch (Exception ignored) {
+            // Ignore provider query error; stream limit still enforces MAX_SHARED_FILE_BYTES
+        }
+        return -1L;
+    }
+
+    private static String writeStagedBytes(Context context, byte[] bytes) throws Exception {
+        File staged = new File(getStagedDir(context), UUID.randomUUID().toString());
+        try (FileOutputStream fos = new FileOutputStream(staged)) {
+            fos.write(bytes);
+        } catch (Exception err) {
+            //noinspection ResultOfMethodCallIgnored
+            staged.delete();
+            throw err;
+        }
+        return staged.getAbsolutePath();
+    }
+
     private static JSObject readUriToJsObject(Context context, Uri uri, String fallbackMime) {
+        if (isPrivateAppFileUri(context, uri)) {
+            return null;
+        }
         ContentResolver resolver = context.getContentResolver();
         String mime = resolver.getType(uri);
         if (mime == null || mime.isEmpty() || "*/*".equals(mime)) {
@@ -417,35 +528,129 @@ public class KapsulaNativePlugin extends Plugin {
             && !"image/gif".equalsIgnoreCase(mime)
             && !"image/svg+xml".equalsIgnoreCase(mime);
 
+        long knownSize = queryFileSize(resolver, uri);
+        if (!isRasterImage && knownSize > MAX_SHARED_FILE_BYTES) {
+            return null;
+        }
+
         try {
-            byte[] bytes = null;
-            try (InputStream in = resolver.openInputStream(uri)) {
-                if (in == null) return null;
-                bytes = readLimitedBytes(in, isRasterImage ? IMAGE_OPTIMIZE_THRESHOLD_BYTES : MAX_SHARED_FILE_BYTES);
+            if (isRasterImage) {
+                byte[] bytes = null;
+                if (knownSize <= 0 || knownSize <= IMAGE_OPTIMIZE_THRESHOLD_BYTES) {
+                    try (InputStream in = resolver.openInputStream(uri)) {
+                        if (in == null) return null;
+                        bytes = readLimitedBytes(in, IMAGE_OPTIMIZE_THRESHOLD_BYTES);
+                    }
+                }
+                // If a high-res photo (e.g. Samsung 50MP/200MP) exceeds threshold, downscale natively instead of dropping
+                if (bytes == null) {
+                    bytes = encodeOptimizedImageFromUri(resolver, uri);
+                    if (bytes != null && bytes.length > 0) {
+                        mime = "image/jpeg";
+                        if (!displayName.toLowerCase().endsWith(".jpg") && !displayName.toLowerCase().endsWith(".jpeg")) {
+                            int dot = displayName.lastIndexOf('.');
+                            String stem = dot > 0 ? displayName.substring(0, dot) : displayName;
+                            displayName = stem + ".jpg";
+                        }
+                    }
+                }
+                if (bytes == null || bytes.length == 0 || bytes.length > MAX_SHARED_FILE_BYTES) return null;
+                JSObject obj = new JSObject();
+                obj.put("name", displayName);
+                obj.put("mime", mime);
+                if (bytes.length > STAGED_FILE_THRESHOLD_BYTES) {
+                    obj.put("stagedPath", writeStagedBytes(context, bytes));
+                } else {
+                    obj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                }
+                obj.put("size", bytes.length);
+                return obj;
             }
 
-            // If a high-res photo (e.g. Samsung 50MP/200MP) exceeds threshold, downscale natively instead of dropping
-            if (bytes == null && isRasterImage) {
-                bytes = encodeOptimizedImageFromUri(resolver, uri);
-                if (bytes != null && bytes.length > 0) {
-                    mime = "image/jpeg";
-                    if (!displayName.toLowerCase().endsWith(".jpg") && !displayName.toLowerCase().endsWith(".jpeg")) {
-                        int dot = displayName.lastIndexOf('.');
-                        String stem = dot > 0 ? displayName.substring(0, dot) : displayName;
-                        displayName = stem + ".jpg";
+            // Non-raster files: stream small payloads in RAM and spill > 2 MiB directly to disk
+            try (InputStream in = resolver.openInputStream(uri)) {
+                if (in == null) return null;
+                ByteArrayOutputStream memBuf = new ByteArrayOutputStream();
+                File stagedFile = null;
+                FileOutputStream stagedOut = null;
+                byte[] chunk = new byte[16384];
+                long total = 0;
+                try {
+                    int n;
+                    while ((n = in.read(chunk)) != -1) {
+                        total += n;
+                        if (total > MAX_SHARED_FILE_BYTES) {
+                            return null;
+                        }
+                        if (stagedOut == null && total > STAGED_FILE_THRESHOLD_BYTES) {
+                            stagedFile = new File(getStagedDir(context), UUID.randomUUID().toString());
+                            stagedOut = new FileOutputStream(stagedFile);
+                            stagedOut.write(memBuf.toByteArray());
+                            memBuf = null;
+                        }
+                        if (stagedOut != null) {
+                            stagedOut.write(chunk, 0, n);
+                        } else {
+                            memBuf.write(chunk, 0, n);
+                        }
+                    }
+                    if (total <= 0) {
+                        return null;
+                    }
+                    JSObject obj = new JSObject();
+                    obj.put("name", displayName);
+                    obj.put("mime", mime);
+                    obj.put("size", total);
+                    if (stagedFile != null) {
+                        stagedOut.close();
+                        stagedOut = null;
+                        obj.put("stagedPath", stagedFile.getAbsolutePath());
+                        stagedFile = null;
+                    } else if (memBuf != null) {
+                        byte[] bytes = memBuf.toByteArray();
+                        obj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                    }
+                    return obj;
+                } finally {
+                    if (stagedOut != null) {
+                        try {
+                            stagedOut.close();
+                        } catch (Exception ignored) {}
+                    }
+                    if (stagedFile != null && stagedFile.exists()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        stagedFile.delete();
                     }
                 }
             }
-
-            if (bytes == null || bytes.length == 0 || bytes.length > MAX_SHARED_FILE_BYTES) return null;
-            JSObject obj = new JSObject();
-            obj.put("name", displayName);
-            obj.put("mime", mime);
-            obj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
-            obj.put("size", bytes.length);
-            return obj;
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    @PluginMethod
+    public void deleteStagedFile(PluginCall call) {
+        String rawPath = call.getString("stagedPath", "");
+        JSObject ret = new JSObject();
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            ret.put("ok", false);
+            call.resolve(ret);
+            return;
+        }
+        try {
+            File stagedDir = getStagedDir(getContext().getApplicationContext()).getCanonicalFile();
+            File target = new File(rawPath).getCanonicalFile();
+            String prefix = stagedDir.getPath() + File.separator;
+            if (!target.getPath().startsWith(prefix)) {
+                ret.put("ok", false);
+                call.resolve(ret);
+                return;
+            }
+            ret.put("ok", !target.exists() || target.delete());
+            call.resolve(ret);
+        } catch (Exception e) {
+            ret.put("ok", false);
+            call.resolve(ret);
         }
     }
 
@@ -665,11 +870,88 @@ public class KapsulaNativePlugin extends Plugin {
         return generator.generateKey();
     }
 
+    private SecretKey getOrCreateAuthKeystoreKey() throws Exception {
+        KeyguardManager km = (KeyguardManager) getContext().getSystemService(Context.KEYGUARD_SERVICE);
+        if (km == null || !km.isDeviceSecure()) {
+            throw new IllegalStateException("Device lock screen is not configured");
+        }
+        KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER);
+        ks.load(null);
+        if (ks.containsAlias(KEYSTORE_AUTH_ALIAS)) {
+            KeyStore.Entry entry = ks.getEntry(KEYSTORE_AUTH_ALIAS, null);
+            if (entry instanceof KeyStore.SecretKeyEntry) {
+                return ((KeyStore.SecretKeyEntry) entry).getSecretKey();
+            }
+        }
+
+        KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER);
+        KeyGenParameterSpec.Builder specBuilder = new KeyGenParameterSpec.Builder(
+            KEYSTORE_AUTH_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setRandomizedEncryptionRequired(true)
+            .setUserAuthenticationRequired(true);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            specBuilder.setUserAuthenticationParameters(
+                30,
+                KeyProperties.AUTH_BIOMETRIC_STRONG | KeyProperties.AUTH_DEVICE_CREDENTIAL
+            );
+        } else {
+            //noinspection deprecation
+            specBuilder.setUserAuthenticationValidityDurationSeconds(30);
+        }
+        generator.init(specBuilder.build());
+        return generator.generateKey();
+    }
+
+    private String encryptWithKeystoreKey(SecretKey key, String plain) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key);
+        byte[] iv = cipher.getIV();
+        byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+        byte[] combined = new byte[iv.length + encrypted.length];
+        System.arraycopy(iv, 0, combined, 0, iv.length);
+        System.arraycopy(encrypted, 0, combined, iv.length, encrypted.length);
+        return Base64.encodeToString(combined, Base64.NO_WRAP);
+    }
+
+    private String decryptWithKeystoreKey(SecretKey key, String cipherText) throws Exception {
+        byte[] combined = Base64.decode(cipherText, Base64.NO_WRAP);
+        if (combined.length < 28) {
+            throw new IllegalArgumentException("Corrupt ciphertext");
+        }
+        byte[] iv = new byte[12];
+        byte[] data = new byte[combined.length - 12];
+        System.arraycopy(combined, 0, iv, 0, 12);
+        System.arraycopy(combined, 12, data, 0, data.length);
+
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
+        byte[] plainBytes = cipher.doFinal(data);
+        return new String(plainBytes, StandardCharsets.UTF_8);
+    }
+
     @PluginMethod
     public void isKeystoreAvailable(PluginCall call) {
         JSObject ret = new JSObject();
         try {
             getOrCreateKeystoreKey();
+            ret.put("available", true);
+        } catch (Exception e) {
+            ret.put("available", false);
+        }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void isAuthKeystoreAvailable(PluginCall call) {
+        JSObject ret = new JSObject();
+        try {
+            getOrCreateAuthKeystoreKey();
             ret.put("available", true);
         } catch (Exception e) {
             ret.put("available", false);
@@ -685,17 +967,8 @@ public class KapsulaNativePlugin extends Plugin {
             return;
         }
         try {
-            SecretKey key = getOrCreateKeystoreKey();
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, key);
-            byte[] iv = cipher.getIV();
-            byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-            byte[] combined = new byte[iv.length + encrypted.length];
-            System.arraycopy(iv, 0, combined, 0, iv.length);
-            System.arraycopy(encrypted, 0, combined, iv.length, encrypted.length);
-
             JSObject ret = new JSObject();
-            ret.put("cipherText", Base64.encodeToString(combined, Base64.NO_WRAP));
+            ret.put("cipherText", encryptWithKeystoreKey(getOrCreateKeystoreKey(), plain));
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Не удалось защитить данные системным хранилищем ключей");
@@ -710,27 +983,47 @@ public class KapsulaNativePlugin extends Plugin {
             return;
         }
         try {
-            byte[] combined = Base64.decode(cipherText, Base64.NO_WRAP);
-            // 12B IV + 16B GCM auth tag minimum (28 bytes)
-            if (combined.length < 28) {
-                call.reject("Повреждённые данные хранилища ключей");
-                return;
-            }
-            byte[] iv = new byte[12];
-            byte[] data = new byte[combined.length - 12];
-            System.arraycopy(combined, 0, iv, 0, 12);
-            System.arraycopy(combined, 12, data, 0, data.length);
-
-            SecretKey key = getOrCreateKeystoreKey();
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
-            byte[] plainBytes = cipher.doFinal(data);
-
             JSObject ret = new JSObject();
-            ret.put("plainText", new String(plainBytes, StandardCharsets.UTF_8));
+            ret.put("plainText", decryptWithKeystoreKey(getOrCreateKeystoreKey(), cipherText));
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Не удалось расшифровать данные системным хранилищем ключей");
+        }
+    }
+
+    @PluginMethod
+    public void keystoreAuthEncrypt(PluginCall call) {
+        String plain = call.getString("plainText");
+        if (plain == null) {
+            call.reject("Пустые данные для шифрования");
+            return;
+        }
+        try {
+            JSObject ret = new JSObject();
+            ret.put("cipherText", encryptWithKeystoreKey(getOrCreateAuthKeystoreKey(), plain));
+            call.resolve(ret);
+        } catch (UserNotAuthenticatedException e) {
+            call.reject("Требуется подтверждение биометрии или блокировки экрана", "AUTH_REQUIRED");
+        } catch (Exception e) {
+            call.reject("Не удалось защитить ключ биометрическим хранилищем");
+        }
+    }
+
+    @PluginMethod
+    public void keystoreAuthDecrypt(PluginCall call) {
+        String cipherText = call.getString("cipherText");
+        if (cipherText == null || cipherText.isEmpty()) {
+            call.reject("Отсутствуют зашифрованные данные");
+            return;
+        }
+        try {
+            JSObject ret = new JSObject();
+            ret.put("plainText", decryptWithKeystoreKey(getOrCreateAuthKeystoreKey(), cipherText));
+            call.resolve(ret);
+        } catch (UserNotAuthenticatedException e) {
+            call.reject("Требуется подтверждение биометрии или блокировки экрана", "AUTH_REQUIRED");
+        } catch (Exception e) {
+            call.reject("Не удалось расшифровать ключ после проверки биометрии");
         }
     }
 
@@ -1107,6 +1400,48 @@ public class KapsulaNativePlugin extends Plugin {
                 rec.release();
             } catch (Exception ignored) {}
 
+            long fileLen = file.length();
+            if (fileLen <= 0 || fileLen > MAX_SHARED_FILE_BYTES) {
+                JSObject ret = new JSObject();
+                ret.put("ok", false);
+                ret.put("error", fileLen > MAX_SHARED_FILE_BYTES ? "Запись слишком большая для сохранения" : "Запись получилась пустой");
+                call.resolve(ret);
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+                return;
+            }
+            if (fileLen > STAGED_FILE_THRESHOLD_BYTES) {
+                File staged = new File(getStagedDir(getContext().getApplicationContext()), UUID.randomUUID().toString() + ".m4a");
+                try (FileInputStream fis = new FileInputStream(file); FileOutputStream fos = new FileOutputStream(staged)) {
+                    byte[] chunk = new byte[16384];
+                    int n;
+                    while ((n = fis.read(chunk)) != -1) {
+                        fos.write(chunk, 0, n);
+                    }
+                    JSArray peaksArr = new JSArray();
+                    for (Double p : peaksCopy) peaksArr.put(p);
+                    JSObject ret = new JSObject();
+                    ret.put("ok", true);
+                    ret.put("stagedPath", staged.getAbsolutePath());
+                    ret.put("mime", "audio/mp4");
+                    ret.put("durationSec", durationSec);
+                    ret.put("peaks", peaksArr);
+                    call.resolve(ret);
+                    return;
+                } catch (Exception e) {
+                    //noinspection ResultOfMethodCallIgnored
+                    staged.delete();
+                    JSObject ret = new JSObject();
+                    ret.put("ok", false);
+                    ret.put("error", "Не удалось прочитать сохранённую запись");
+                    call.resolve(ret);
+                    return;
+                } finally {
+                    //noinspection ResultOfMethodCallIgnored
+                    file.delete();
+                }
+            }
+
             try (FileInputStream fis = new FileInputStream(file)) {
                 byte[] bytes = readLimitedBytes(fis, MAX_SHARED_FILE_BYTES);
                 if (bytes == null || bytes.length == 0) {
@@ -1178,28 +1513,16 @@ public class KapsulaNativePlugin extends Plugin {
 
     @PluginMethod
     public void capturePhoto(PluginCall call) {
-        if (getPermissionState("camera") != PermissionState.GRANTED) {
-            requestPermissionForAlias("camera", call, "cameraPermsCallback");
-            return;
-        }
         launchCameraInternal(call);
-    }
-
-    @PermissionCallback
-    private void cameraPermsCallback(PluginCall call) {
-        if (getPermissionState("camera") == PermissionState.GRANTED) {
-            launchCameraInternal(call);
-        } else {
-            JSObject ret = new JSObject();
-            ret.put("ok", false);
-            ret.put("error", "Разреши доступ к камере для съёмки фото");
-            call.resolve(ret);
-        }
     }
 
     private void launchCameraInternal(PluginCall call) {
         try {
-            File photoFile = File.createTempFile("kapsula-cam-", ".jpg", getContext().getCacheDir());
+            File cameraDir = new File(getContext().getCacheDir(), "camera");
+            if (!cameraDir.exists() && !cameraDir.mkdirs()) {
+                throw new Exception("Не удалось подготовить папку камеры");
+            }
+            File photoFile = File.createTempFile("kapsula-cam-", ".jpg", cameraDir);
             getNativePrefs().edit().putString(PREF_PENDING_CAMERA_PATH, photoFile.getAbsolutePath()).apply();
             Uri photoUri = FileProvider.getUriForFile(
                 getContext(),
@@ -1255,7 +1578,11 @@ public class KapsulaNativePlugin extends Plugin {
                 JSObject fileObj = new JSObject();
                 fileObj.put("name", "photo-" + System.currentTimeMillis() + ".jpg");
                 fileObj.put("mime", "image/jpeg");
-                fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                if (bytes.length > STAGED_FILE_THRESHOLD_BYTES) {
+                    fileObj.put("stagedPath", writeStagedBytes(getContext().getApplicationContext(), bytes));
+                } else {
+                    fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                }
                 fileObj.put("size", bytes.length);
                 ret.put("ok", true);
                 ret.put("file", fileObj);
@@ -1322,15 +1649,18 @@ public class KapsulaNativePlugin extends Plugin {
                     break;
                 }
                 JSObject obj = readUriToJsObject(appCtx, uri, null);
-                if (obj != null) {
-                    long size = obj.optLong("size", 0);
-                    if (filesArr.length() > 0 && totalBytesRead + size > maxTotalBytes) {
-                        truncated = true;
-                        break;
-                    }
-                    totalBytesRead += size;
-                    filesArr.put(obj);
+                if (obj == null) {
+                    truncated = true;
+                    continue;
                 }
+                long size = obj.optLong("size", 0);
+                if (size <= 0 || totalBytesRead + size > maxTotalBytes) {
+                    truncated = true;
+                    if (filesArr.length() > 0) break;
+                    continue;
+                }
+                totalBytesRead += size;
+                filesArr.put(obj);
             }
             JSObject ret = new JSObject();
             ret.put("ok", filesArr.length() > 0);
@@ -1537,6 +1867,8 @@ public class KapsulaNativePlugin extends Plugin {
             ret.put("versionName", "1.0.0");
             ret.put("versionCode", 1);
         }
+        ret.put("distChannel", BuildConfig.DIST_CHANNEL);
+        ret.put("allowSelfUpdate", BuildConfig.ALLOW_SELF_UPDATE);
         call.resolve(ret);
     }
 
@@ -1585,8 +1917,115 @@ public class KapsulaNativePlugin extends Plugin {
         mainHandler.post(() -> notifyListeners("apkDownloadProgress", payload));
     }
 
+    @SuppressWarnings("deprecation")
+    private static Signature[] getSignaturesLegacy(PackageInfo info) {
+        return info != null ? info.signatures : null;
+    }
+
+    private static Set<String> extractSigningCertSha256Set(PackageInfo info) throws Exception {
+        Set<String> out = new HashSet<>();
+        if (info == null) return out;
+        Signature[] sigs = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            SigningInfo signingInfo = info.signingInfo;
+            if (signingInfo != null) {
+                sigs = signingInfo.hasMultipleSigners()
+                    ? signingInfo.getApkContentsSigners()
+                    : signingInfo.getSigningCertificateHistory();
+            }
+        }
+        if (sigs == null || sigs.length == 0) {
+            sigs = getSignaturesLegacy(info);
+        }
+        if (sigs != null) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            for (Signature sig : sigs) {
+                if (sig == null) continue;
+                byte[] digest = md.digest(sig.toByteArray());
+                out.add(bytesToHexLower(digest));
+                md.reset();
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static PackageInfo getPackageArchiveInfoLegacy(PackageManager pm, String archivePath, int flags) {
+        return pm.getPackageArchiveInfo(archivePath, flags);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static PackageInfo getInstalledSignaturesInfoLegacy(PackageManager pm, String pkg)
+        throws PackageManager.NameNotFoundException {
+        return pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES);
+    }
+
+    private static boolean verifyApkSignatureMatchesCurrentApp(Context ctx, File apkFile) {
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            String pkgName = ctx.getPackageName();
+            PackageInfo installedInfo;
+            PackageInfo archiveInfo;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                PackageManager.PackageInfoFlags flags =
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES);
+                installedInfo = pm.getPackageInfo(pkgName, flags);
+                archiveInfo = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), flags);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                installedInfo = pm.getPackageInfo(pkgName, PackageManager.GET_SIGNING_CERTIFICATES);
+                archiveInfo = getPackageArchiveInfoLegacy(
+                    pm,
+                    apkFile.getAbsolutePath(),
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                );
+            } else {
+                installedInfo = getInstalledSignaturesInfoLegacy(pm, pkgName);
+                archiveInfo = getPackageArchiveInfoLegacy(
+                    pm,
+                    apkFile.getAbsolutePath(),
+                    PackageManager.GET_SIGNATURES
+                );
+            }
+
+            if (installedInfo == null || archiveInfo == null) {
+                return false;
+            }
+            if (!pkgName.equals(archiveInfo.packageName)) {
+                return false;
+            }
+
+            long installedCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? installedInfo.getLongVersionCode()
+                : getVersionCodeLegacy(installedInfo);
+            long archiveCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? archiveInfo.getLongVersionCode()
+                : getVersionCodeLegacy(archiveInfo);
+            if (archiveCode < installedCode) {
+                return false;
+            }
+
+            Set<String> installedCerts = extractSigningCertSha256Set(installedInfo);
+            Set<String> archiveCerts = extractSigningCertSha256Set(archiveInfo);
+            if (installedCerts.isEmpty() || archiveCerts.isEmpty()) {
+                return false;
+            }
+            return !Collections.disjoint(installedCerts, archiveCerts);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     @PluginMethod
     public void downloadAndInstallApk(PluginCall call) {
+        if (!BuildConfig.ALLOW_SELF_UPDATE) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("error", "Обновления приложения доступны через Google Play");
+            call.resolve(ret);
+            return;
+        }
+
         final String url = call.getString("url", "");
         final String expectedShaRaw = call.getString("sha256", null);
         final String expectedSha256 = expectedShaRaw != null ? expectedShaRaw.trim().toLowerCase(Locale.US) : "";
@@ -1598,10 +2037,10 @@ public class KapsulaNativePlugin extends Plugin {
             call.resolve(ret);
             return;
         }
-        if (!expectedSha256.isEmpty() && !expectedSha256.matches("^[0-9a-f]{64}$")) {
+        if (expectedSha256.isEmpty() || !expectedSha256.matches("^[0-9a-f]{64}$")) {
             JSObject ret = new JSObject();
             ret.put("ok", false);
-            ret.put("error", "Некорректная контрольная сумма обновления");
+            ret.put("error", "Отсутствует контрольная сумма обновления — установка отменена");
             call.resolve(ret);
             return;
         }
@@ -1624,13 +2063,17 @@ public class KapsulaNativePlugin extends Plugin {
                     throw new Exception("Не удалось создать папку для загрузки обновления");
                 }
 
-                // Reuse already downloaded APK if SHA-256 matches (e.g. after returning from install permission settings)
+                // Reuse already downloaded APK only if both SHA-256 and signing certificate match
                 boolean needDownload = true;
-                if (!expectedSha256.isEmpty() && targetApk.exists() && targetApk.length() > 0) {
+                if (targetApk.exists() && targetApk.length() > 0) {
                     try {
-                        if (expectedSha256.equalsIgnoreCase(computeFileSha256(targetApk))) {
+                        if (expectedSha256.equalsIgnoreCase(computeFileSha256(targetApk))
+                            && verifyApkSignatureMatchesCurrentApp(appCtx, targetApk)) {
                             needDownload = false;
                             emitApkProgress(100);
+                        } else {
+                            //noinspection ResultOfMethodCallIgnored
+                            targetApk.delete();
                         }
                     } catch (Exception ignoredCache) {
                         needDownload = true;
@@ -1709,10 +2152,16 @@ public class KapsulaNativePlugin extends Plugin {
                         }
 
                         String actualSha256 = bytesToHexLower(digest.digest());
-                        if (!expectedSha256.isEmpty() && !expectedSha256.equalsIgnoreCase(actualSha256)) {
+                        if (!expectedSha256.equalsIgnoreCase(actualSha256)) {
                             //noinspection ResultOfMethodCallIgnored
                             tempApk.delete();
                             throw new Exception("Проверка целостности файла обновления не пройдена — установка отменена");
+                        }
+
+                        if (!verifyApkSignatureMatchesCurrentApp(appCtx, tempApk)) {
+                            //noinspection ResultOfMethodCallIgnored
+                            tempApk.delete();
+                            throw new Exception("Подпись файла обновления не совпадает с установленным приложением — установка отменена");
                         }
 
                         if (targetApk.exists()) {
@@ -1732,6 +2181,12 @@ public class KapsulaNativePlugin extends Plugin {
                             tempApk.delete();
                         }
                     }
+                }
+
+                if (!verifyApkSignatureMatchesCurrentApp(appCtx, targetApk)) {
+                    //noinspection ResultOfMethodCallIgnored
+                    targetApk.delete();
+                    throw new Exception("Подпись файла обновления не совпадает с установленным приложением — установка отменена");
                 }
 
                 // Android 8+ requires explicit "Install unknown apps" permission for in-app updates

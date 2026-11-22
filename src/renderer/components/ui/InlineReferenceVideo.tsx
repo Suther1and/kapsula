@@ -27,6 +27,8 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
 }) => {
   const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingPlayRef = useRef(false);
+  const [videoActivated, setVideoActivated] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [loop, setLoop] = useState(true);
@@ -39,17 +41,42 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
   const speed = SPEEDS[speedIdx] ?? 1;
 
   useEffect(() => {
+    setVideoActivated(false);
+    pendingPlayRef.current = false;
+    setPlaying(false);
+    setProgress(0);
+    setDuration(0);
+  }, [mediaPath]);
+
+  useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
     el.playbackRate = speed;
-  }, [speed]);
+  }, [speed, videoActivated]);
+
+  useEffect(() => {
+    if (!videoActivated || !pendingPlayRef.current) return;
+    const el = videoRef.current;
+    if (!el) return;
+    pendingPlayRef.current = false;
+    el.playbackRate = speed;
+    void Promise.resolve(el.play()).then(() => setPlaying(true)).catch(() => setPlaying(false));
+  }, [videoActivated, speed]);
 
   const togglePlay = (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (!videoActivated) {
+      pendingPlayRef.current = true;
+      setVideoActivated(true);
+      return;
+    }
     const el = videoRef.current;
-    if (!el) return;
+    if (!el) {
+      pendingPlayRef.current = true;
+      return;
+    }
     if (el.paused) {
-      void el.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+      void Promise.resolve(el.play()).then(() => setPlaying(true)).catch(() => setPlaying(false));
     } else {
       el.pause();
       setPlaying(false);
@@ -62,23 +89,36 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
     <div
       className="group/vid relative rounded-xl overflow-hidden bg-black/80 border border-[var(--k-border-hairline)] select-none"
       onClick={togglePlay}
+      onMouseEnter={() => {
+        if (!poster && !videoActivated) setVideoActivated(true);
+      }}
     >
-      <video
-        ref={videoRef}
-        src={src}
-        poster={poster}
-        muted={muted}
-        loop={loop}
-        playsInline
-        preload="metadata"
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => {
-          const d = e.currentTarget.duration || 0;
-          if (d > 0) setProgress((e.currentTarget.currentTime / d) * 100);
-        }}
-        onEnded={() => setPlaying(false)}
-        className={`w-full ${heightClass} object-contain bg-black block`}
-      />
+      {poster && !videoActivated ? (
+        <img
+          src={poster}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className={`w-full ${heightClass} object-contain bg-black block`}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          src={src}
+          poster={poster}
+          muted={muted}
+          loop={loop}
+          playsInline
+          preload={videoActivated ? 'metadata' : 'none'}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+          onTimeUpdate={(e) => {
+            const d = e.currentTarget.duration || 0;
+            if (d > 0) setProgress((e.currentTarget.currentTime / d) * 100);
+          }}
+          onEnded={() => setPlaying(false)}
+          className={`w-full ${heightClass} object-contain bg-black block`}
+        />
+      )}
 
       {/* Play/Pause badge */}
       {!playing ? (

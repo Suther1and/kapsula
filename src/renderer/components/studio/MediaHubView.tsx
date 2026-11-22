@@ -25,6 +25,7 @@ import { useI18n } from '@shared/i18n/react';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { getMediaCategory, isMediaItem, type MediaCategory } from '@shared/item-helpers';
+import { MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readFileAsBytes } from '../../lib/file-bytes';
 import {
   formatRelativeDate,
   friendlyErrorMessage,
@@ -59,19 +60,6 @@ interface MediaHubViewProps {
   onMoveToBoard: (itemId: string, boardId: string | null) => void;
   onDelete: (id: string) => void;
   onUpdateCanvasPosition: (itemId: string, x: number, y: number) => void;
-}
-
-function fileToBase64(file: File, readErrorMsg: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      const commaIdx = result.indexOf(',');
-      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
-    };
-    reader.onerror = () => reject(new Error(readErrorMsg));
-    reader.readAsDataURL(file);
-  });
 }
 
 export const MediaHubView: React.FC<MediaHubViewProps> = ({
@@ -211,30 +199,30 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
     try {
       for (const file of files) {
         try {
-          const nativePath = window.kapsula.getPathForFile(file);
+          const bytes = await readFileAsBytes(
+            file,
+            MAX_UPLOAD_IMAGE_OR_DOC_BYTES,
+            t('error.readFileFailed'),
+            locale
+          );
           if (file.type.startsWith('image/')) {
-            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
-              imageBase64: b64,
-              ...(nativePath ? { imageFilePath: nativePath } : {}),
+              imageBytes: bytes,
               title: file.name.replace(/\.[^.]+$/, ''),
               source: 'vault_ui',
             });
             addedCount += 1;
           } else if (file.type.startsWith('audio/')) {
-            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
-              audioBase64: b64,
+              audioBytes: bytes,
               audioMime: file.type,
               fileName: file.name,
               source: 'vault_ui',
             });
             addedCount += 1;
           } else {
-            const b64 = await fileToBase64(file, t('error.readFileFailed'));
             await window.kapsula.capture({
-              ...(nativePath ? { filePath: nativePath } : {}),
-              fileBase64: b64,
+              fileBytes: bytes,
               fileName: file.name,
               fileMime: file.type || 'application/octet-stream',
               source: 'vault_ui',
@@ -622,7 +610,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
 
                           {cat === 'video' && !item.mediaPath ? (
                             <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                              <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-black/65 text-white border border-white/25 backdrop-blur-xs">
+                              <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-black/74 text-white border border-white/25">
                                 <Play weight="fill" className="w-4 h-4 ml-0.5" />
                               </span>
                             </span>
@@ -634,12 +622,12 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                           {/* Top-left subtle badge for pinned or link source */}
                           <div className="absolute top-2 left-2 flex items-center gap-1">
                             {item.isPinned ? (
-                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/60 text-[var(--k-accent)] backdrop-blur-xs">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/72 text-[var(--k-accent)]">
                                 <PushPin weight="fill" className="w-3 h-3" />
                               </span>
                             ) : null}
                             {cat === 'link_visual' && item.domain ? (
-                              <span className="inline-flex items-center gap-1 h-5.5 px-2 rounded-md bg-black/60 text-[10.5px] font-medium text-white/90 backdrop-blur-xs max-w-[140px] truncate">
+                              <span className="inline-flex items-center gap-1 h-5.5 px-2 rounded-md bg-black/72 text-[10.5px] font-medium text-white/90 max-w-[140px] truncate">
                                 <GlobeSimple className="w-3 h-3 shrink-0" />
                                 <span className="truncate">{item.domain}</span>
                               </span>

@@ -1,6 +1,12 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
-import { APP_VERSION, computeVersionCodeFromSemver } from '@shared/app-version';
+import {
+  APP_VERSION,
+  BUILD_MOBILE_DIST_CHANNEL,
+  computeVersionCodeFromSemver,
+  type MobileDistChannel,
+} from '@shared/app-version';
 import { tm } from '../lib/mobile-i18n';
+import { base64ToBytes } from '../sync/mobile-crypto';
 
 export interface NativeDeviceInfo {
   model: string;
@@ -26,7 +32,8 @@ export type HapticStyle = 'light' | 'medium' | 'heavy' | 'success' | 'error';
 export interface SharedFilePayload {
   name: string;
   mime: string;
-  base64: string;
+  base64?: string;
+  stagedPath?: string;
   size: number;
 }
 
@@ -37,19 +44,22 @@ export interface SharedIntentPayload {
   subject?: string;
   url?: string;
   files?: SharedFilePayload[];
+  truncatedCount?: number;
   receivedAt: number;
 }
 
 export interface PickedFilePayload {
   name: string;
   mime: string;
-  base64: string;
+  base64?: string;
+  stagedPath?: string;
   size: number;
 }
 
 export interface VoiceRecordingStopResult {
   ok: boolean;
   base64?: string;
+  stagedPath?: string;
   mime?: string;
   durationSec?: number;
   peaks?: number[];
@@ -59,6 +69,8 @@ export interface VoiceRecordingStopResult {
 export interface NativeAppVersion {
   versionName: string;
   versionCode: number;
+  distChannel?: MobileDistChannel;
+  allowSelfUpdate?: boolean;
 }
 
 export interface ApkInstallResult {
@@ -73,6 +85,9 @@ interface KapsulaNativePluginInterface {
   isKeystoreAvailable(): Promise<{ available: boolean }>;
   keystoreEncrypt(options: { plainText: string }): Promise<{ cipherText: string }>;
   keystoreDecrypt(options: { cipherText: string }): Promise<{ plainText: string }>;
+  isAuthKeystoreAvailable(): Promise<{ available: boolean }>;
+  keystoreAuthEncrypt(options: { plainText: string }): Promise<{ cipherText: string }>;
+  keystoreAuthDecrypt(options: { cipherText: string }): Promise<{ plainText: string }>;
   checkBiometric(): Promise<{ available: boolean; biometryType: string }>;
   authenticateBiometric(options: {
     title: string;
@@ -99,6 +114,7 @@ interface KapsulaNativePluginInterface {
     truncated?: boolean;
     error?: string;
   }>;
+  deleteStagedFile(options: { stagedPath: string }): Promise<{ ok: boolean }>;
   getFoldState(): Promise<NativeFoldState>;
   getKeyboardState(): Promise<NativeKeyboardState>;
   hideKeyboard(): Promise<{ ok: boolean }>;
@@ -252,6 +268,22 @@ function pickFilesWeb(
   });
 }
 
+let activeNativeUiFlows = 0;
+
+function beginNativeUiFlow(): () => void {
+  activeNativeUiFlows += 1;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    activeNativeUiFlows = Math.max(0, activeNativeUiFlows - 1);
+  };
+}
+
+export function isNativeExternalFlowInFlight(): boolean {
+  return activeNativeUiFlows > 0;
+}
+
 export const mobileBridge = {
   isNativeAndroid,
 
@@ -297,6 +329,32 @@ export const mobileBridge = {
     return res.plainText;
   },
 
+  async isAuthKeystoreAvailable(): Promise<boolean> {
+    if (!isNativeAndroid()) return false;
+    try {
+      const res = await KapsulaNative.isAuthKeystoreAvailable();
+      return Boolean(res?.available);
+    } catch {
+      return false;
+    }
+  },
+
+  async keystoreAuthEncrypt(plainText: string): Promise<string> {
+    if (!isNativeAndroid()) {
+      throw new Error(tm('bridge.keystoreDeviceOnly'));
+    }
+    const res = await KapsulaNative.keystoreAuthEncrypt({ plainText });
+    return res.cipherText;
+  },
+
+  async keystoreAuthDecrypt(cipherText: string): Promise<string> {
+    if (!isNativeAndroid()) {
+      throw new Error(tm('bridge.keystoreDeviceOnly'));
+    }
+    const res = await KapsulaNative.keystoreAuthDecrypt({ cipherText });
+    return res.plainText;
+  },
+
   async checkBiometric(): Promise<{ available: boolean; biometryType: string }> {
     if (isNativeAndroid()) {
       try {
@@ -312,22 +370,27 @@ export const mobileBridge = {
     title: string,
     subtitle?: string
   ): Promise<{ ok: boolean; reason?: string; error?: string }> {
-    if (isNativeAndroid()) {
-      try {
-        return await KapsulaNative.authenticateBiometric({
-          title,
-          subtitle,
-          negativeButtonText: tm('common.cancel'),
-        });
-      } catch (err) {
-        return {
-          ok: false,
-          reason: 'error',
-          error: err instanceof Error ? err.message : tm('bridge.biometricFailed'),
-        };
+    const endFlow = beginNativeUiFlow();
+    try {
+      if (isNativeAndroid()) {
+        try {
+          return await KapsulaNative.authenticateBiometric({
+            title,
+            subtitle,
+            negativeButtonText: tm('common.cancel'),
+          });
+        } catch (err) {
+          return {
+            ok: false,
+            reason: 'error',
+            error: err instanceof Error ? err.message : tm('bridge.biometricFailed'),
+          };
+        }
       }
+      return { ok: true };
+    } finally {
+      endFlow();
     }
-    return { ok: true };
   },
 
   async copySensitive(
@@ -582,34 +645,44 @@ export const mobileBridge = {
   },
 
   async capturePhoto(): Promise<PickedFilePayload | null> {
-    if (isNativeAndroid()) {
-      try {
-        const res = await KapsulaNative.capturePhoto();
-        return res.ok && res.file ? res.file : null;
-      } catch {
-        return null;
+    const endFlow = beginNativeUiFlow();
+    try {
+      if (isNativeAndroid()) {
+        try {
+          const res = await KapsulaNative.capturePhoto();
+          return res.ok && res.file ? res.file : null;
+        } catch {
+          return null;
+        }
       }
+      const { files } = await pickFilesWeb('image/*', false);
+      return files[0] ?? null;
+    } finally {
+      endFlow();
     }
-    const { files } = await pickFilesWeb('image/*', false);
-    return files[0] ?? null;
   },
 
   async pickFileWithMeta(
     mime = '*/*',
     multiple = false
   ): Promise<{ files: PickedFilePayload[]; truncated: boolean }> {
-    if (isNativeAndroid()) {
-      try {
-        const res = await KapsulaNative.pickFile({ mime, multiple });
-        return {
-          files: res.ok && Array.isArray(res.files) ? res.files : [],
-          truncated: Boolean(res.truncated),
-        };
-      } catch {
-        return { files: [], truncated: false };
+    const endFlow = beginNativeUiFlow();
+    try {
+      if (isNativeAndroid()) {
+        try {
+          const res = await KapsulaNative.pickFile({ mime, multiple });
+          return {
+            files: res.ok && Array.isArray(res.files) ? res.files : [],
+            truncated: Boolean(res.truncated),
+          };
+        } catch {
+          return { files: [], truncated: false };
+        }
       }
+      return await pickFilesWeb(mime, multiple);
+    } finally {
+      endFlow();
     }
-    return pickFilesWeb(mime, multiple);
   },
 
   async pickFile(mime = '*/*', multiple = false): Promise<PickedFilePayload[]> {
@@ -763,16 +836,21 @@ export const mobileBridge = {
     if (!/^https?:\/\//i.test(clean) && !/^mailto:/i.test(clean) && !/^tel:/i.test(clean)) {
       return;
     }
-    if (isNativeAndroid()) {
-      try {
-        await KapsulaNative.openExternalUrl({ url: clean });
-        return;
-      } catch {
-        // fallback
+    const endFlow = beginNativeUiFlow();
+    try {
+      if (isNativeAndroid()) {
+        try {
+          await KapsulaNative.openExternalUrl({ url: clean });
+          return;
+        } catch {
+          // fallback
+        }
       }
-    }
-    if (typeof window !== 'undefined') {
-      window.open(clean, '_blank', 'noopener,noreferrer');
+      if (typeof window !== 'undefined') {
+        window.open(clean, '_blank', 'noopener,noreferrer');
+      }
+    } finally {
+      endFlow();
     }
   },
 
@@ -817,14 +895,54 @@ export const mobileBridge = {
     return () => window.removeEventListener('kapsula:auth-callback', handler);
   },
 
+  async deleteStagedFile(stagedPath?: string | null): Promise<void> {
+    if (!stagedPath || !isNativeAndroid()) return;
+    try {
+      await KapsulaNative.deleteStagedFile({ stagedPath });
+    } catch {
+      // ignore cleanup error
+    }
+  },
+
+  async readNativeFileBytes(file: { base64?: string | null; stagedPath?: string | null }): Promise<Uint8Array> {
+    if (file.stagedPath) {
+      try {
+        const src = Capacitor.convertFileSrc(file.stagedPath);
+        const resp = await fetch(src);
+        if (!resp.ok) {
+          throw new Error(`Failed to read staged file (${resp.status})`);
+        }
+        return new Uint8Array(await resp.arrayBuffer());
+      } finally {
+        await mobileBridge.deleteStagedFile(file.stagedPath);
+      }
+    }
+    if (file.base64) {
+      return base64ToBytes(file.base64);
+    }
+    return new Uint8Array(0);
+  },
+
   async getAppVersion(): Promise<NativeAppVersion> {
     if (isNativeAndroid()) {
       try {
         const res = await KapsulaNative.getAppVersion();
         if (res?.versionName) {
+          const distChannel: MobileDistChannel =
+            res.distChannel === 'play'
+              ? 'play'
+              : res.distChannel === 'direct'
+                ? 'direct'
+                : BUILD_MOBILE_DIST_CHANNEL;
+          const allowSelfUpdate =
+            typeof res.allowSelfUpdate === 'boolean'
+              ? res.allowSelfUpdate && distChannel !== 'play'
+              : distChannel !== 'play';
           return {
             versionName: String(res.versionName),
             versionCode: Number(res.versionCode) || 1,
+            distChannel,
+            allowSelfUpdate,
           };
         }
       } catch {
@@ -834,15 +952,24 @@ export const mobileBridge = {
     return {
       versionName: APP_VERSION,
       versionCode: computeVersionCodeFromSemver(APP_VERSION),
+      distChannel: BUILD_MOBILE_DIST_CHANNEL,
+      allowSelfUpdate: BUILD_MOBILE_DIST_CHANNEL !== 'play',
     };
   },
 
   async downloadAndInstallApk(url: string, sha256?: string | null): Promise<ApkInstallResult> {
+    const cleanSha = typeof sha256 === 'string' ? sha256.trim().toLowerCase() : '';
+    if (!/^[0-9a-f]{64}$/.test(cleanSha)) {
+      return {
+        ok: false,
+        error: tm('bridge.apkChecksumMissing'),
+      };
+    }
     if (isNativeAndroid()) {
       try {
         return await KapsulaNative.downloadAndInstallApk({
           url,
-          ...(sha256 ? { sha256 } : {}),
+          sha256: cleanSha,
         });
       } catch (err) {
         return {

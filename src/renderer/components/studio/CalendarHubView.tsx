@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowsClockwise,
@@ -24,6 +24,10 @@ import type {
   VaultTaskEntry,
 } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
+import {
+  buildDstSafeAllDayEnd,
+  expandCalendarEventOccurrences,
+} from '@shared/calendar-recurrence';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { friendlyErrorMessage } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
@@ -144,41 +148,15 @@ function expandRecurringEvents(
       continue;
     }
 
-    const duration = Math.max(0, ev.endAt - ev.startAt);
-    const origin = new Date(ev.startAt);
-    const origHours = origin.getHours();
-    const origMins = origin.getMinutes();
-    const origDayOfMonth = origin.getDate();
-    const origDayOfWeek = origin.getDay();
-
-    const startDay = startOfDay(new Date(Math.max(windowStartMs, startOfDay(origin).getTime())));
-    const endDay = startOfDay(new Date(windowEndMs));
-    const cursor = new Date(startDay);
-    let safety = 0;
-
-    while (cursor.getTime() <= endDay.getTime() && safety < 140) {
-      safety += 1;
-      const dow = cursor.getDay();
-      let matches = false;
-      if (rec === 'daily') matches = true;
-      else if (rec === 'weekdays') matches = dow >= 1 && dow <= 5;
-      else if (rec === 'weekly') matches = dow === origDayOfWeek;
-      else if (rec === 'monthly') matches = cursor.getDate() === origDayOfMonth;
-
-      if (matches) {
-        const instStart = new Date(cursor);
-        instStart.setHours(origHours, origMins, 0, 0);
-        const startMs = instStart.getTime();
-        const isOrigin = sameDay(cursor, origin);
-        out.push({
-          id: isOrigin ? ev.id : `${ev.id}::rec::${toLocalDateInput(startMs)}`,
-          startAt: startMs,
-          endAt: startMs + duration,
-          isRecurringInstance: !isOrigin,
-          ...baseEntry,
-        });
-      }
-      cursor.setDate(cursor.getDate() + 1);
+    const occs = expandCalendarEventOccurrences([ev], windowStartMs, windowEndMs);
+    for (const occ of occs) {
+      out.push({
+        id: occ.occurrenceId,
+        startAt: occ.startAt,
+        endAt: occ.endAt,
+        isRecurringInstance: occ.isRecurringInstance,
+        ...baseEntry,
+      });
     }
   }
 
@@ -209,6 +187,8 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const [dragOverDayKey, setDragOverDayKey] = useState<string | null>(null);
 
   const [quickLine, setQuickLine] = useState('');
+  const quickAddingRef = useRef(false);
+  const schedulingTaskRef = useRef(false);
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
@@ -583,34 +563,61 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     if (eventId) {
       const ev = events.find((e) => e.id === eventId);
       if (!ev) return;
-      const origStart = new Date(ev.startAt);
-      const duration = ev.endAt - ev.startAt;
-      const nextStart = new Date(targetDay);
-      nextStart.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
-      await window.kapsula.upsertCalendarEvent({
-        id: ev.id,
-        title: ev.title,
-        notes: ev.notes,
-        location: ev.location,
-        startAt: nextStart.getTime(),
-        endAt: nextStart.getTime() + duration,
-        allDay: ev.allDay,
-        hasEndTime: ev.hasEndTime,
-        kind: ev.kind,
-        recurrence: ev.recurrence ?? 'none',
-        color: ev.color,
-        linkedItemId: ev.linkedItemId,
-        checklist: ev.checklist,
-        attachments: ev.attachments,
-        isDone: ev.isDone,
-      });
-      setSelectedDay(startOfDay(targetDay));
-      toast.success(
-        t('cal.toast.movedTo', {
-          date: targetDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
-        })
-      );
-      await loadCalendar();
+      try {
+        const origStart = new Date(ev.startAt);
+        const origEnd = new Date(ev.endAt);
+        const nextStart = new Date(targetDay);
+        nextStart.setHours(
+          ev.allDay ? 0 : origStart.getHours(),
+          ev.allDay ? 0 : origStart.getMinutes(),
+          0,
+          0
+        );
+        let nextEndMs: number;
+        if (ev.allDay) {
+          nextEndMs = buildDstSafeAllDayEnd(nextStart);
+        } else {
+          const dayDelta = Math.round(
+            (startOfDay(origEnd).getTime() - startOfDay(origStart).getTime()) / 86_400_000
+          );
+          const nextEnd = new Date(nextStart);
+          nextEnd.setDate(nextEnd.getDate() + Math.max(0, dayDelta));
+          nextEnd.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
+          nextEndMs =
+            nextEnd.getTime() > nextStart.getTime()
+              ? nextEnd.getTime()
+              : nextStart.getTime() + Math.max(0, ev.endAt - ev.startAt);
+        }
+        await window.kapsula.upsertCalendarEvent({
+          id: ev.id,
+          title: ev.title,
+          notes: ev.notes,
+          location: ev.location,
+          startAt: nextStart.getTime(),
+          endAt: nextEndMs,
+          allDay: ev.allDay,
+          hasEndTime: ev.hasEndTime,
+          kind: ev.kind,
+          recurrence: ev.recurrence ?? 'none',
+          color: ev.color,
+          linkedItemId: ev.linkedItemId,
+          checklist: ev.checklist,
+          attachments: ev.attachments,
+          isDone: ev.isDone,
+          externalSource: ev.externalSource ?? null,
+          externalId: ev.externalId ?? null,
+          etag: ev.etag ?? null,
+        });
+        setSelectedDay(startOfDay(targetDay));
+        toast.success(
+          t('cal.toast.movedTo', {
+            date: targetDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
+          })
+        );
+        await loadCalendar();
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
       return;
     }
 
@@ -645,42 +652,49 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const handleQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = quickLine.trim();
-    if (!clean) return;
-    const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime(), locale);
-    if (parsed) {
+    if (!clean || quickAddingRef.current) return;
+    quickAddingRef.current = true;
+    try {
+      const parsed = parseRussianEvent(clean, Date.now(), selectedDay.getTime(), locale);
+      if (parsed) {
+        await window.kapsula.upsertCalendarEvent({
+          title: parsed.title || clean,
+          startAt: parsed.startAt,
+          endAt: parsed.endAt,
+          allDay: parsed.allDay,
+          hasEndTime: parsed.hasEndTime,
+          location: parsed.location,
+          notes: parsed.notes,
+          kind: 'event',
+          color: '#E86A33',
+        });
+        setQuickLine('');
+        const targetDay = startOfDay(new Date(parsed.startAt));
+        setSelectedDay(targetDay);
+        setCursorDate(new Date(targetDay.getFullYear(), targetDay.getMonth(), 1));
+        toast.success(t('cal.toast.parsedAdded', { label: parsed.label }));
+        await loadCalendar();
+        return;
+      }
+
+      const dayStart = new Date(selectedDay);
+      dayStart.setHours(10, 0, 0, 0);
       await window.kapsula.upsertCalendarEvent({
-        title: parsed.title || clean,
-        startAt: parsed.startAt,
-        endAt: parsed.endAt,
-        allDay: parsed.allDay,
-        hasEndTime: parsed.hasEndTime,
-        location: parsed.location,
-        notes: parsed.notes,
+        title: clean,
+        startAt: dayStart.getTime(),
+        endAt: dayStart.getTime() + 1_800_000,
+        hasEndTime: false,
         kind: 'event',
         color: '#E86A33',
       });
       setQuickLine('');
-      const targetDay = startOfDay(new Date(parsed.startAt));
-      setSelectedDay(targetDay);
-      setCursorDate(new Date(targetDay.getFullYear(), targetDay.getMonth(), 1));
-      toast.success(t('cal.toast.parsedAdded', { label: parsed.label }));
+      toast.success(t('cal.toast.addedSelectedDay'));
       await loadCalendar();
-      return;
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    } finally {
+      quickAddingRef.current = false;
     }
-
-    const dayStart = new Date(selectedDay);
-    dayStart.setHours(10, 0, 0, 0);
-    await window.kapsula.upsertCalendarEvent({
-      title: clean,
-      startAt: dayStart.getTime(),
-      endAt: dayStart.getTime() + 1_800_000,
-      hasEndTime: false,
-      kind: 'event',
-      color: '#E86A33',
-    });
-    setQuickLine('');
-    toast.success(t('cal.toast.addedSelectedDay'));
-    await loadCalendar();
   };
 
   const handleOpenQuickDetails = () => {
@@ -1292,7 +1306,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="divide-y divide-[var(--k-border-hairline)] min-h-[380px]">
+                <div
+                  data-testid="calendar-agenda-list"
+                  className="divide-y divide-[var(--k-border-hairline)] min-h-[380px]"
+                >
                   {combinedEntries.length === 0 ? (
                     <div className="py-16 text-center space-y-2">
                       <div className="text-[14px] font-medium text-[var(--k-ink-secondary)]">
@@ -1585,19 +1602,27 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     <button
                       type="button"
                       onClick={async () => {
-                        const slot = new Date(selectedDay);
-                        slot.setHours(12, 0, 0, 0);
-                        await window.kapsula.upsertCalendarEvent({
-                          title: taskItem.text,
-                          startAt: slot.getTime(),
-                          endAt: slot.getTime() + 1_800_000,
-                          hasEndTime: false,
-                          linkedItemId: taskItem.itemId,
-                          kind: 'task',
-                          color: '#3B82F6',
-                        });
-                        toast.success(t('cal.toast.taskAddedDay'));
-                        await loadCalendar();
+                        if (schedulingTaskRef.current) return;
+                        schedulingTaskRef.current = true;
+                        try {
+                          const slot = new Date(selectedDay);
+                          slot.setHours(12, 0, 0, 0);
+                          await window.kapsula.upsertCalendarEvent({
+                            title: taskItem.text,
+                            startAt: slot.getTime(),
+                            endAt: slot.getTime() + 1_800_000,
+                            hasEndTime: false,
+                            linkedItemId: taskItem.itemId,
+                            kind: 'task',
+                            color: '#3B82F6',
+                          });
+                          toast.success(t('cal.toast.taskAddedDay'));
+                          await loadCalendar();
+                        } catch (err) {
+                          toast.error(friendlyErrorMessage(err, undefined, locale));
+                        } finally {
+                          schedulingTaskRef.current = false;
+                        }
                       }}
                       className="k-interactive text-[11px] text-[var(--k-accent)] font-medium shrink-0 cursor-pointer"
                     >

@@ -36,6 +36,7 @@ import {
 import { APP_VERSION } from '@shared/app-version';
 import type { AppLocale, SecretPayload, VaultItem } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
+import { isPrivateOrLocalHostname } from '../pipeline/unfurler';
 import type { VaultCrypto } from '../security/vault-crypto';
 import {
   createKeyEnvelope,
@@ -217,7 +218,8 @@ class LocalSecureStore {
 
   constructor(
     private readonly dataDir: string,
-    private readonly safeStorage?: SafeStorageAdapter
+    private readonly safeStorage?: SafeStorageAdapter,
+    private readonly isPackaged = false
   ) {
     this.storePath = path.join(dataDir, '.sync-secrets.json');
     this.saltPath = path.join(dataDir, '.sync-local.salt');
@@ -229,7 +231,7 @@ class LocalSecureStore {
   }
 
   private isFallbackDiskKeyAllowed(): boolean {
-    return process.env.KAPSULA_ALLOW_FALLBACK_KEY === '1';
+    return !this.isPackaged && process.env.KAPSULA_ALLOW_FALLBACK_KEY === '1';
   }
 
   private getFallbackKey(): Buffer {
@@ -251,7 +253,11 @@ class LocalSecureStore {
     return this.fallbackKey;
   }
 
-  private encryptValueForDisk(plain: string, requireOsProtection = false): string | null {
+  private encryptValueForDisk(
+    plain: string,
+    requireOsProtection = false,
+    disallowFallbackDisk = false
+  ): string | null {
     if (this.safeStorage?.isEncryptionAvailable()) {
       try {
         return `os:${this.safeStorage.encryptString(plain).toString('base64')}`;
@@ -265,7 +271,7 @@ class LocalSecureStore {
       throw new Error('OS safeStorage is unavailable');
     }
 
-    if (!this.isFallbackDiskKeyAllowed()) {
+    if (disallowFallbackDisk || !this.isFallbackDiskKeyAllowed()) {
       return null;
     }
 
@@ -339,13 +345,24 @@ class LocalSecureStore {
     }
     const enc = this.cache[key];
     if (!enc) return null;
+    if (key.startsWith('sb:') && enc.startsWith('fb:')) {
+      return null;
+    }
     return this.decryptValue(enc);
   }
 
-  public set(key: string, value: string, opts?: { requireOsProtection?: boolean }): void {
-    const encrypted = this.encryptValueForDisk(value, Boolean(opts?.requireOsProtection));
+  public set(
+    key: string,
+    value: string,
+    opts?: { requireOsProtection?: boolean; disallowFallbackDisk?: boolean }
+  ): void {
+    const encrypted = this.encryptValueForDisk(
+      value,
+      Boolean(opts?.requireOsProtection),
+      Boolean(opts?.disallowFallbackDisk)
+    );
     if (encrypted === null) {
-      // Keep strictly in-memory when OS protection is unavailable and test fallback env is not set
+      // Keep strictly in-memory when OS protection is unavailable or disallowed for disk fallback
       this.ephemeralCache[key] = value;
       return;
     }
@@ -381,7 +398,8 @@ class LocalSecureStore {
   public createSupabaseStorageAdapter(): SupportedStorage {
     return {
       getItem: (key: string) => this.get(`sb:${key}`),
-      setItem: (key: string, value: string) => this.set(`sb:${key}`, value),
+      setItem: (key: string, value: string) =>
+        this.set(`sb:${key}`, value, { disallowFallbackDisk: true }),
       removeItem: (key: string) => this.remove(`sb:${key}`),
     };
   }
@@ -390,6 +408,7 @@ class LocalSecureStore {
 export class SyncEngine {
   private readonly repo: VaultRepository;
   private readonly vaultCrypto: VaultCrypto;
+  private readonly mediaDir: string;
   private readonly mediaManager: SyncMediaManager;
   private readonly secureStore: LocalSecureStore;
   private readonly callbacks: SyncEngineCallbacks;
@@ -424,6 +443,7 @@ export class SyncEngine {
   private inFlightSync: Promise<SyncActionResult> | null = null;
   private pendingResync = false;
   private pendingFullReconcile = false;
+  private completedFullReconcileSeq = 0;
   private dirtyTimer: ReturnType<typeof setTimeout> | null = null;
   private realtimeTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -432,10 +452,11 @@ export class SyncEngine {
   constructor(opts: SyncEngineOptions) {
     this.repo = opts.repo;
     this.vaultCrypto = opts.vaultCrypto;
+    this.mediaDir = opts.mediaDir;
     this.mediaManager = new SyncMediaManager(opts.mediaDir, opts.repo);
-    this.secureStore = new LocalSecureStore(opts.dataDir, opts.safeStorage);
-    this.callbacks = opts.callbacks ?? {};
     this.isPackaged = Boolean(opts.isPackaged);
+    this.secureStore = new LocalSecureStore(opts.dataDir, opts.safeStorage, this.isPackaged);
+    this.callbacks = opts.callbacks ?? {};
     this.appVersion = opts.appVersion ?? APP_VERSION;
     this.kdfIterations = opts.kdfIterationsOverride;
     this.disableTimers = Boolean(opts.disableTimers);
@@ -684,6 +705,7 @@ export class SyncEngine {
   private async resolveKeyStateAfterAuth(): Promise<void> {
     if (!this.userId) return;
     this.repo.setSyncState('last_user_id', this.userId);
+    this.repo.setSyncState('last_data_owner_id', this.userId);
     if (this.email) this.repo.setSyncState('last_user_email', this.email);
 
     const remoteEnvelope = await this.fetchRemoteEnvelope(this.userId);
@@ -715,9 +737,36 @@ export class SyncEngine {
     this.emitStatus();
   }
 
+  private wipeLocalUserData(): void {
+    this.repo.wipeAllUserData();
+    try {
+      if (this.mediaDir && fs.existsSync(this.mediaDir)) {
+        for (const entry of fs.readdirSync(this.mediaDir, { withFileTypes: true })) {
+          if (entry.isFile()) {
+            try {
+              fs.unlinkSync(path.join(this.mediaDir, entry.name));
+            } catch {
+              // ignore individual unlink failure
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore missing mediaDir
+    }
+    this.vaultCrypto.resetForAccountWipe();
+    this.callbacks.onOrbitsChanged?.();
+    this.callbacks.onBoardsChanged?.();
+    this.callbacks.onCalendarChanged?.();
+    this.callbacks.onBatchSynced?.();
+  }
+
   private resetCursorOnAccountSwitch(nextUserId: string): void {
-    const prevUserId = this.repo.getSyncState('last_user_id');
-    if (prevUserId && prevUserId !== nextUserId) {
+    const prevOwnerId =
+      this.repo.getSyncState('last_data_owner_id') || this.repo.getSyncState('last_user_id');
+    if (prevOwnerId && prevOwnerId !== nextUserId) {
+      // Hard cross-account isolation: wipe previous owner's local data before binding nextUserId
+      this.wipeLocalUserData();
       this.repo.deleteSyncState('last_cursor');
       this.repo.deleteSyncState('initial_enqueued_user');
       this.repo.clearSyncBlobCache();
@@ -741,14 +790,15 @@ export class SyncEngine {
       if (
         parsed.protocol !== 'https:' ||
         !parsed.hostname ||
+        isPrivateOrLocalHostname(parsed.hostname) ||
         parsed.username ||
         parsed.password ||
         /\s/.test(normalizedUrl)
       ) {
         throw new Error(
           this.isEn
-            ? 'Sync server URL must be a valid HTTPS address'
-            : 'Адрес сервера Supabase должен быть валидным HTTPS-адресом'
+            ? 'Sync server URL must be a valid public HTTPS address'
+            : 'Адрес сервера синхронизации должен быть публичным HTTPS-адресом'
         );
       }
       if (cleanKey.length < 16) {
@@ -760,7 +810,7 @@ export class SyncEngine {
       }
     }
 
-    await this.signOut();
+    await this.signOut({ preserveUnownedOfflineData: true });
     if (!normalizedUrl || !cleanKey) {
       this.repo.deleteSyncState('custom_supabase_url');
       this.secureStore.remove('custom_supabase_key');
@@ -959,12 +1009,24 @@ export class SyncEngine {
             : '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Kapsula</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;background:#161614;color:#f4f3ee;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:420px;padding:32px;border-radius:16px;background:#20201d;border:1px solid rgba(255,255,255,0.08)"><h2 style="margin:0 0 10px;font-size:20px">Вход не завершён</h2><p style="margin:0;color:#b6b4ad;font-size:14px;line-height:1.5">Можешь закрыть вкладку, вернуться в Kapsula и попробовать снова.</p></div></body></html>';
 
           let redirectTo = '';
+          const callbackState = crypto.randomBytes(24).toString('hex');
 
           server = http.createServer((req, res) => {
             try {
               const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
               if (reqUrl.pathname !== '/callback') {
                 res.writeHead(204);
+                res.end();
+                return;
+              }
+              const providedState = reqUrl.searchParams.get('kapsula_state') || '';
+              const stateBufA = Buffer.from(providedState, 'utf8');
+              const stateBufB = Buffer.from(callbackState, 'utf8');
+              if (
+                stateBufA.length !== stateBufB.length ||
+                !crypto.timingSafeEqual(stateBufA, stateBufB)
+              ) {
+                res.writeHead(400);
                 res.end();
                 return;
               }
@@ -1033,7 +1095,7 @@ export class SyncEngine {
               );
               return;
             }
-            redirectTo = `http://127.0.0.1:${port}/callback`;
+            redirectTo = `http://127.0.0.1:${port}/callback?kapsula_state=${callbackState}`;
 
             void (async () => {
               try {
@@ -1060,7 +1122,15 @@ export class SyncEngine {
                   );
                   return;
                 }
-                await openExternalFn(data.url);
+                const parsedOAuthUrl = new URL(data.url);
+                if (parsedOAuthUrl.protocol !== 'https:') {
+                  throw new Error(
+                    isEn
+                      ? 'Unsupported OAuth redirect address'
+                      : 'Неподдерживаемый адрес входа'
+                  );
+                }
+                await openExternalFn(parsedOAuthUrl.toString());
               } catch (openErr) {
                 finish(() => reject(new Error(this.formatSyncErr(openErr))));
               }
@@ -1429,11 +1499,13 @@ export class SyncEngine {
     }
   }
 
-  public async signOut(): Promise<SyncStatus> {
+  public async signOut(opts?: { preserveUnownedOfflineData?: boolean }): Promise<SyncStatus> {
     this.authGeneration += 1;
     this.pendingResync = false;
     this.stopBackgroundLoops();
     const prevUserId = this.userId;
+    const prevOwnerId =
+      this.repo.getSyncState('last_data_owner_id') || this.repo.getSyncState('last_user_id');
     try {
       if (this.client) {
         await this.client.auth.signOut();
@@ -1442,19 +1514,12 @@ export class SyncEngine {
       // Ignore network failure during local signOut
     }
     this.clearCachedDek(prevUserId);
-    // Always purge persisted Supabase session tokens even when signing out offline
+    // Always purge persisted Supabase session tokens + local user data on sign-out (Decision #2),
+    // preserving unowned offline data only when switching custom server URL prior to any account sign-in
     this.secureStore.removeByPrefix('sb:');
-    this.repo.deleteSyncState('pending_confirm_email');
-    this.repo.deleteSyncState('last_cursor');
-    this.repo.deleteSyncState('last_sync_at');
-    this.repo.deleteSyncState('last_reconcile_at');
-    this.repo.deleteSyncState('pending_secret_reconcile');
-    this.repo.deleteSyncState('last_user_id');
-    this.repo.deleteSyncState('last_user_email');
-    this.repo.deleteSyncState('initial_enqueued_user');
-    this.repo.deleteSyncState('recovery_key_saved');
-    this.repo.clearSyncBlobCache();
-    this.repo.clearAllDirtyEntities();
+    if (!(opts?.preserveUnownedOfflineData && !prevUserId && !prevOwnerId)) {
+      this.wipeLocalUserData();
+    }
     this.disabledOptionalEntityTypes.clear();
     this.setDek(null);
     this.needsEnvelopeVerification = false;
@@ -1467,6 +1532,42 @@ export class SyncEngine {
     this.state = 'signed_out';
     this.emitStatus();
     return this.getStatus();
+  }
+
+  public async deleteAccount(): Promise<{ ok: boolean; error?: string; status: SyncStatus }> {
+    const token = await this.getActiveAccessToken();
+    if (!token || !this.userId) {
+      return {
+        ok: false,
+        error: this.isEn
+          ? 'Sign in to your cloud account first'
+          : 'Сначала войди в облачный аккаунт',
+        status: this.getStatus(),
+      };
+    }
+
+    try {
+      const resp = await fetch(`${this.getSupabaseBaseUrl()}/functions/v1/delete-account`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: this.getSupabasePublishableKey(),
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const json = (await resp.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!resp.ok || !json?.ok) {
+        const msg =
+          json?.error ||
+          (this.isEn ? 'Could not delete cloud account' : 'Не удалось удалить аккаунт в облаке');
+        return { ok: false, error: msg, status: this.getStatus() };
+      }
+      await this.signOut();
+      return { ok: true, status: this.getStatus() };
+    } catch (err) {
+      return { ok: false, error: this.formatSyncErr(err), status: this.getStatus() };
+    }
   }
 
   public handleSystemResume(): void {
@@ -1639,16 +1740,19 @@ export class SyncEngine {
    * and stamps lastReconcileAt.
    */
   public async reconcileFull(): Promise<SyncStatus> {
-    if (this.inFlightSync) {
-      this.pendingResync = true;
-      this.pendingFullReconcile = true;
-      await this.inFlightSync.catch(() => {});
-      if (this.inFlightSync) {
-        await this.inFlightSync.catch(() => {});
+    const startSeq = this.completedFullReconcileSeq;
+    let queuedFull = false;
+    while (this.inFlightSync) {
+      if (!queuedFull && this.completedFullReconcileSeq === startSeq) {
+        this.pendingResync = true;
+        this.pendingFullReconcile = true;
+        queuedFull = true;
       }
-      return this.getStatus();
+      await this.inFlightSync.catch(() => {});
     }
-    await this.syncNow({ forceFullReconcile: true });
+    if (!this.disposed && this.userId && this.dek && this.completedFullReconcileSeq === startSeq) {
+      await this.syncNow({ forceFullReconcile: true });
+    }
     return this.getStatus();
   }
 
@@ -1705,6 +1809,7 @@ export class SyncEngine {
       deleted_at?: number | null;
       device_id?: string;
     } | null;
+    selectSupported: boolean;
     error: { message: string; code?: string } | null;
   }> {
     const req = client
@@ -1727,7 +1832,7 @@ export class SyncEngine {
         }>);
 
     if (res?.error) {
-      return { returnedRow: null, error: res.error };
+      return { returnedRow: null, selectSupported: hasSelect, error: res.error };
     }
     const rawData = res?.data;
     const row = Array.isArray(rawData)
@@ -1747,6 +1852,7 @@ export class SyncEngine {
             device_id: typeof row.device_id === 'string' ? row.device_id : undefined,
           }
         : null,
+      selectSupported: hasSelect,
       error: null,
     };
   }
@@ -1844,155 +1950,182 @@ export class SyncEngine {
         { updated_at: number; deleted_at: number | null; sync_version: number; device_id: string; purged?: boolean }
       >();
       const failedPullKeys = new Set<string>();
+      let cursorBlockedByRowError = false;
 
-      while (true) {
-        if (gen !== this.authGeneration || this.disposed) {
-          return { ok: false, error: cancelledMsg, status: this.getStatus() };
-        }
-
-        const { data: rows, error: pullErr } = await client
-          .from('sync_records')
-          .select('*')
-          .eq('user_id', userId)
-          .gt('server_seq', queryCursor)
-          .order('server_seq', { ascending: true })
-          .limit(PULL_PAGE_SIZE);
-
-        if (pullErr) {
-          throw new Error(pullErr.message);
-        }
-        const batch = (rows ?? []) as SyncRecordRow[];
-        if (batch.length === 0) break;
-
-        let pageMaxSeq = queryCursor;
-
-        for (const row of batch) {
+      try {
+        while (true) {
           if (gen !== this.authGeneration || this.disposed) {
             return { ok: false, error: cancelledMsg, status: this.getStatus() };
           }
-          const nextSeq = Number(row.server_seq) || queryCursor;
-          pageMaxSeq = Math.max(pageMaxSeq, nextSeq);
 
-          if (isFullReconcile) {
-            remoteSeenDuringFull.set(`${row.entity_type}:${row.entity_id}`, {
-              updated_at: Number(row.updated_at ?? 0),
-              deleted_at: row.deleted_at == null ? null : Number(row.deleted_at),
-              sync_version: Number(row.sync_version ?? 1),
-              device_id: row.device_id,
-            });
-          }
+          const { data: rows, error: pullErr } = await client
+            .from('sync_records')
+            .select('*')
+            .eq('user_id', userId)
+            .gt('server_seq', queryCursor)
+            .order('server_seq', { ascending: true })
+            .limit(PULL_PAGE_SIZE);
 
-          if (row.device_id === this.deviceId) {
-            highWaterCursor = Math.max(highWaterCursor, nextSeq);
-            this.repo.setSyncState('last_cursor', String(highWaterCursor));
-            continue;
+          if (pullErr) {
+            throw new Error(pullErr.message);
           }
-          if (row.schema_version > SYNC_SCHEMA_VERSION) {
-            // Skip future-version record safely without wedging the cursor
-            highWaterCursor = Math.max(highWaterCursor, nextSeq);
-            this.repo.setSyncState('last_cursor', String(highWaterCursor));
-            continue;
-          }
+          const batch = (rows ?? []) as SyncRecordRow[];
+          if (batch.length === 0) break;
 
-          try {
-            const dl = await this.applyIncomingRecord(client, userId, dek, row);
-            if (isFullReconcile && dl.wasPurged) {
-              const seen = remoteSeenDuringFull.get(`${row.entity_type}:${row.entity_id}`);
-              if (seen) seen.purged = true;
+          let pageMaxSeq = queryCursor;
+
+          for (const row of batch) {
+            if (gen !== this.authGeneration || this.disposed) {
+              return { ok: false, error: cancelledMsg, status: this.getStatus() };
             }
-            blobsDownloaded += dl.blobsDownloaded;
-            if (dl.freedMedia && dl.freedMedia.length > 0) {
-              for (const f of dl.freedMedia) freedMediaAll.add(f);
-            }
-            if (dl.applied) {
-              pulled++;
-              if (row.entity_type === 'orbit') orbitsTouched = true;
-              if (row.entity_type === 'focus_board') boardsTouched = true;
-              if (row.entity_type === 'calendar_event') calendarTouched = true;
-              if (row.entity_type === 'workspace_prefs') workspacePrefsTouched = true;
-              if (dl.upsertedItem) upsertedItems.push(dl.upsertedItem);
-              if (dl.deletedItemId) deletedItemIds.push(dl.deletedItemId);
-            } else if (dl.localStrictlyNewer) {
-              // Local state is strictly newer than stale cloud row — re-queue push to self-heal cloud!
-              this.repo.markDirty(row.entity_type, row.entity_id);
-            }
-          } catch (rowErr) {
-            if (isNetworkLikeError(rowErr)) {
-              throw rowErr;
-            }
+            const nextSeq = Number(row.server_seq) || queryCursor;
+            pageMaxSeq = Math.max(pageMaxSeq, nextSeq);
+
             if (isFullReconcile) {
-              failedPullKeys.add(`${row.entity_type}:${row.entity_id}`);
+              remoteSeenDuringFull.set(`${row.entity_type}:${row.entity_id}`, {
+                updated_at: Number(row.updated_at ?? 0),
+                deleted_at: row.deleted_at == null ? null : Number(row.deleted_at),
+                sync_version: Number(row.sync_version ?? 1),
+                device_id: row.device_id,
+              });
             }
-            if (isVaultLockedError(rowErr)) {
-              this.repo.setSyncState('pending_secret_reconcile', '1');
-            } else {
-              // Isolate corrupt/unreadable single record so subsequent deletes & notes still pull cleanly
-              recordErrors.push(rowErr);
+
+            if (row.device_id === this.deviceId) {
+              const localStamp = this.repo.getEntitySyncStamp(row.entity_type, row.entity_id);
+              const remoteUpdated = Number(row.updated_at ?? 0);
+              const remoteVersion = Number(row.sync_version ?? 1);
+              const remoteDeleted = row.deleted_at != null;
+              const localHasSameOrNewer =
+                localStamp !== null &&
+                localStamp.updatedAt >= remoteUpdated &&
+                localStamp.syncVersion >= remoteVersion &&
+                (localStamp.deletedAt != null) === remoteDeleted;
+              if (localHasSameOrNewer) {
+                if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
+                  highWaterCursor = nextSeq;
+                  this.repo.setSyncState('last_cursor', String(highWaterCursor));
+                }
+                continue;
+              }
+            }
+            if (row.schema_version > SYNC_SCHEMA_VERSION) {
+              // Skip future-version record safely without wedging the cursor
+              if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
+                highWaterCursor = nextSeq;
+                this.repo.setSyncState('last_cursor', String(highWaterCursor));
+              }
+              continue;
+            }
+
+            try {
+              const dl = await this.applyIncomingRecord(client, userId, dek, row, gen);
+              if (isFullReconcile && dl.wasPurged) {
+                const seen = remoteSeenDuringFull.get(`${row.entity_type}:${row.entity_id}`);
+                if (seen) seen.purged = true;
+              }
+              blobsDownloaded += dl.blobsDownloaded;
+              if (dl.freedMedia && dl.freedMedia.length > 0) {
+                for (const f of dl.freedMedia) freedMediaAll.add(f);
+              }
+              if (dl.applied) {
+                pulled++;
+                if (row.entity_type === 'orbit') orbitsTouched = true;
+                if (row.entity_type === 'focus_board') boardsTouched = true;
+                if (row.entity_type === 'calendar_event') calendarTouched = true;
+                if (row.entity_type === 'workspace_prefs') workspacePrefsTouched = true;
+                if (dl.upsertedItem) upsertedItems.push(dl.upsertedItem);
+                if (dl.deletedItemId) deletedItemIds.push(dl.deletedItemId);
+              } else if (dl.localStrictlyNewer) {
+                // Local state is strictly newer than stale cloud row — re-queue push to self-heal cloud!
+                this.repo.markDirty(row.entity_type, row.entity_id);
+              }
+            } catch (rowErr) {
+              if (isNetworkLikeError(rowErr)) {
+                throw rowErr;
+              }
+              if (isFullReconcile) {
+                failedPullKeys.add(`${row.entity_type}:${row.entity_id}`);
+              }
+              if (isVaultLockedError(rowErr)) {
+                this.repo.setSyncState('pending_secret_reconcile', '1');
+              } else {
+                // Isolate corrupt/unreadable single record so subsequent deletes & notes still pull cleanly,
+                // while holding last_cursor behind the first failed record for retry.
+                cursorBlockedByRowError = true;
+                recordErrors.push(rowErr);
+              }
+            }
+
+            if (!cursorBlockedByRowError && nextSeq > highWaterCursor) {
+              highWaterCursor = nextSeq;
+              this.repo.setSyncState('last_cursor', String(highWaterCursor));
             }
           }
 
-          highWaterCursor = Math.max(highWaterCursor, nextSeq);
-          this.repo.setSyncState('last_cursor', String(highWaterCursor));
+          if (batch.length < PULL_PAGE_SIZE || pageMaxSeq <= queryCursor) break;
+          queryCursor = pageMaxSeq;
         }
 
-        if (batch.length < PULL_PAGE_SIZE || pageMaxSeq <= queryCursor) break;
-        queryCursor = pageMaxSeq;
-      }
+        // On full reconcile, push any local tombstones missing remotely or overridden by stale live rows
+        if (isFullReconcile) {
+          const localTombstones = this.repo.listLocalTombstones();
+          const vaultLocked = this.vaultCrypto.isLocked();
+          for (const tomb of localTombstones) {
+            const tombKey = `${tomb.entityType}:${tomb.entityId}`;
+            if (failedPullKeys.has(tombKey)) {
+              continue;
+            }
+            if (vaultLocked && tomb.entityType === 'item' && tomb.dna === 'secret') {
+              this.repo.setSyncState('pending_secret_reconcile', '1');
+              continue;
+            }
+            const remoteInfo = remoteSeenDuringFull.get(tombKey);
+            if (!remoteInfo) {
+              this.repo.markDirty(tomb.entityType, tomb.entityId);
+            } else if (
+              remoteInfo.deleted_at == null ||
+              (tomb.purgedAt != null && remoteInfo.device_id !== this.deviceId && !remoteInfo.purged)
+            ) {
+              // Remote still has live (or unpurged) row while local was deleted/purged — bump timestamp & push tombstone
+              const bumpedUpdatedAt = Math.max(remoteInfo.updated_at + 1, Date.now());
+              const bumpedSyncVersion = Math.max(tomb.syncVersion, remoteInfo.sync_version) + 1;
+              this.repo.bumpEntityTimestampForSyncConflict(
+                tomb.entityType,
+                tomb.entityId,
+                bumpedUpdatedAt,
+                bumpedSyncVersion
+              );
+              this.repo.markDirty(tomb.entityType, tomb.entityId);
+            }
+          }
+        }
+      } finally {
+        if (gen === this.authGeneration && !this.disposed) {
+          if (freedMediaAll.size > 0) {
+            this.callbacks.onMediaCleanup?.(Array.from(freedMediaAll));
+          }
 
-      // On full reconcile, push any local tombstones missing remotely or overridden by stale live rows
-      if (isFullReconcile) {
-        const localTombstones = this.repo.listLocalTombstones();
-        const vaultLocked = this.vaultCrypto.isLocked();
-        for (const tomb of localTombstones) {
-          const tombKey = `${tomb.entityType}:${tomb.entityId}`;
-          if (failedPullKeys.has(tombKey)) {
-            continue;
-          }
-          if (vaultLocked && tomb.entityType === 'item' && tomb.dna === 'secret') {
-            this.repo.setSyncState('pending_secret_reconcile', '1');
-            continue;
-          }
-          const remoteInfo = remoteSeenDuringFull.get(tombKey);
-          if (!remoteInfo) {
-            this.repo.markDirty(tomb.entityType, tomb.entityId);
-          } else if (
-            remoteInfo.deleted_at == null ||
-            (tomb.purgedAt != null && remoteInfo.device_id !== this.deviceId && !remoteInfo.purged)
+          // Emit batched UI updates cleanly (even if a later pull page threw after page 1 committed to SQLite)
+          if (
+            upsertedItems.length + deletedItemIds.length > BATCH_UI_THRESHOLD &&
+            this.callbacks.onBatchSynced
           ) {
-            // Remote still has live (or unpurged) row while local was deleted/purged — bump timestamp & push tombstone
-            const bumpedUpdatedAt = Math.max(remoteInfo.updated_at + 1, Date.now());
-            const bumpedSyncVersion = Math.max(tomb.syncVersion, remoteInfo.sync_version) + 1;
-            this.repo.bumpEntityTimestampForSyncConflict(
-              tomb.entityType,
-              tomb.entityId,
-              bumpedUpdatedAt,
-              bumpedSyncVersion
-            );
-            this.repo.markDirty(tomb.entityType, tomb.entityId);
+            this.callbacks.onBatchSynced();
+          } else {
+            for (const it of upsertedItems) this.callbacks.onItemUpserted?.(it);
+            for (const id of deletedItemIds) this.callbacks.onItemDeleted?.(id);
+            if (orbitsTouched) this.callbacks.onOrbitsChanged?.();
+            if (boardsTouched) this.callbacks.onBoardsChanged?.();
+            if (calendarTouched) this.callbacks.onCalendarChanged?.();
+          }
+          if (workspacePrefsTouched) {
+            this.callbacks.onWorkspacePrefsChanged?.();
           }
         }
       }
 
       if (gen !== this.authGeneration || this.disposed) {
         return { ok: false, error: cancelledMsg, status: this.getStatus() };
-      }
-
-      if (freedMediaAll.size > 0) {
-        this.callbacks.onMediaCleanup?.(Array.from(freedMediaAll));
-      }
-
-      // Emit batched UI updates cleanly (prevents 200-call IPC storm on initial sync)
-      if (upsertedItems.length + deletedItemIds.length > BATCH_UI_THRESHOLD && this.callbacks.onBatchSynced) {
-        this.callbacks.onBatchSynced();
-      } else {
-        for (const it of upsertedItems) this.callbacks.onItemUpserted?.(it);
-        for (const id of deletedItemIds) this.callbacks.onItemDeleted?.(id);
-        if (orbitsTouched) this.callbacks.onOrbitsChanged?.();
-        if (boardsTouched) this.callbacks.onBoardsChanged?.();
-        if (calendarTouched) this.callbacks.onCalendarChanged?.();
-      }
-      if (workspacePrefsTouched) {
-        this.callbacks.onWorkspacePrefsChanged?.();
       }
 
       // 2. PUSH ALL DIRTY LOCAL ENTITIES IN DEPENDENCY-ORDERED BATCHES WITH PER-RECORD ISOLATION
@@ -2075,8 +2208,16 @@ export class SyncEngine {
               throw new Error(upsertResult.error.message);
             }
 
-            // Detect silent server drop by Postgres bump_sync_record_seq LWW trigger (HTTP 200 with OLD unchanged!)
+            // Detect silent server drop or missing confirmation row from upsert().select()
             const ret = upsertResult.returnedRow;
+            if (upsertResult.selectSupported && !ret) {
+              const noRowMsg = this.isEn
+                ? 'Server did not confirm sync write'
+                : 'Сервер не подтвердил запись синхронизации';
+              deferredLockedKeys.add(`${entry.entityType}:${entry.entityId}`);
+              recordErrors.push(new Error(noRowMsg));
+              continue;
+            }
             const serverDroppedWrite = Boolean(
               ret &&
                 ((ret.device_id && ret.device_id !== this.deviceId) ||
@@ -2112,6 +2253,14 @@ export class SyncEngine {
                   if (upsertResult.error) {
                     throw new Error(upsertResult.error.message);
                   }
+                  if (upsertResult.selectSupported && !upsertResult.returnedRow) {
+                    const retryNoRowMsg = this.isEn
+                      ? 'Server did not confirm sync write'
+                      : 'Сервер не подтвердил запись синхронизации';
+                    deferredLockedKeys.add(`${entry.entityType}:${entry.entityId}`);
+                    recordErrors.push(new Error(retryNoRowMsg));
+                    continue;
+                  }
                 }
               } else if (ret.device_id && ret.device_id !== this.deviceId) {
                 // Server kept a newer record from another device — pull it and preserve losing note text in sync_conflict!
@@ -2127,7 +2276,8 @@ export class SyncEngine {
                     client,
                     userId,
                     dek,
-                    remoteLatest as SyncRecordRow
+                    remoteLatest as SyncRecordRow,
+                    gen
                   );
                   blobsDownloaded += dl.blobsDownloaded;
                   if (dl.freedMedia && dl.freedMedia.length > 0) {
@@ -2167,7 +2317,20 @@ export class SyncEngine {
         }
       }
 
-      // 3. Upsert current device heartbeat & refresh device roster
+      // 3. Drain deferred permanent media blob deletes before finalizing cycle
+      const pendingDeletes = this.repo.getPendingBlobDeletes();
+      if (pendingDeletes.length > 0) {
+        try {
+          const deletedBlobIds = await this.mediaManager.deleteBlobs(client, userId, pendingDeletes);
+          if (deletedBlobIds.length > 0) {
+            this.repo.removePendingBlobDeletes(deletedBlobIds);
+          }
+        } catch {
+          // Non-fatal: remaining blob deletes retry on next sync cycle
+        }
+      }
+
+      // 4. Upsert current device heartbeat & refresh device roster
       await this.syncDeviceRoster(client, userId);
 
       if (gen !== this.authGeneration || this.disposed) {
@@ -2180,6 +2343,7 @@ export class SyncEngine {
       if (isFullReconcile || startFromZero) {
         this.lastReconcileAt = finishedAt;
         this.repo.setSyncState('last_reconcile_at', String(finishedAt));
+        this.completedFullReconcileSeq += 1;
       }
 
       if (recordErrors.length > 0) {
@@ -2510,7 +2674,8 @@ export class SyncEngine {
     client: SupabaseClient,
     userId: string,
     dek: Buffer,
-    row: SyncRecordRow
+    row: SyncRecordRow,
+    gen: number
   ): Promise<{
     applied: boolean;
     localStrictlyNewer: boolean;
@@ -2588,6 +2753,9 @@ export class SyncEngine {
           payload.mediaRefs
         );
       }
+      if (gen !== this.authGeneration || this.disposed) {
+        return { applied: false, localStrictlyNewer: false, blobsDownloaded: 0 };
+      }
       const res = this.repo.applySyncedCalendarEvent(payload, row.device_id, this.deviceId);
       return { ...res, blobsDownloaded };
     }
@@ -2662,6 +2830,9 @@ export class SyncEngine {
         dek,
         payload.mediaRefs
       );
+    }
+    if (gen !== this.authGeneration || this.disposed) {
+      return { applied: false, localStrictlyNewer: false, blobsDownloaded: 0 };
     }
 
     // Re-wrap cross-platform secret payload with THIS device's local VaultCrypto (AD-3)

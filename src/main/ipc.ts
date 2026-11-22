@@ -100,6 +100,10 @@ export interface AppRuntimeServices {
   refreshReminders?: () => void;
   reapplyShortcuts?: () => void;
   onLocaleChanged?: (locale: AppLocale) => void;
+  clipperControl?: {
+    getPairingInfo: () => { pairingCode: string; pairedCount: number };
+    resetPairing: () => { pairingCode: string; pairedCount: number };
+  };
 }
 
 const PIN_LOCKOUT_TIERS_MS: Array<{ minFails: number; durationMs: number }> = [
@@ -340,10 +344,27 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     if (!vaultLocked) return items;
     return items.map((it) => (it.dna === 'secret' ? redactLockedSecretItem(it, locale) : it));
   });
+  handleTrusted('vault:get-item', (_e, id: string, opts?: { includeDeleted?: boolean }) => {
+    const cleanId = String(id ?? '').trim();
+    if (!cleanId) return null;
+    const item = svc.repo.getItemById(cleanId, Boolean(opts?.includeDeleted));
+    if (!item) return null;
+    const s = svc.getSettingsState();
+    const vaultLocked = Boolean(s.hasMasterPin && !s.vaultUnlocked);
+    if (vaultLocked && item.dna === 'secret') {
+      const locale = s.locale ?? svc.repo.getLocale();
+      return redactLockedSecretItem(item, locale);
+    }
+    return item;
+  });
   handleTrusted('vault:stats', () => svc.repo.getStats());
 
   handleTrusted('vault:capture', async (_e, input: CaptureInput) => {
-    const item = await svc.pipeline.capture(input);
+    const sanitizedInput: CaptureInput = { ...(input ?? {}) };
+    delete sanitizedInput.filePath;
+    delete sanitizedInput.imageFilePath;
+    delete sanitizedInput.videoPath;
+    const item = await svc.pipeline.capture(sanitizedInput);
     emitCountsChanged();
     return item;
   });
@@ -730,15 +751,19 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       }
       if (field === 'totp') {
         if (!payload.totpSecret) return { ok: false, wipeSeconds: 0 };
-        const snap = generateTotp({
-          secret: payload.totpSecret,
-          algorithm: payload.totpAlgorithm,
-          digits: payload.totpDigits,
-          period: payload.totpPeriod,
-        });
-        await writeConcealedClipboardText(snap.code);
-        const wipeSeconds = trackAndScheduleSecretWipe(snap.code, s.clipboardAutoWipeSeconds);
-        return { ok: true, wipeSeconds };
+        try {
+          const snap = generateTotp({
+            secret: payload.totpSecret,
+            algorithm: payload.totpAlgorithm,
+            digits: payload.totpDigits,
+            period: payload.totpPeriod,
+          });
+          await writeConcealedClipboardText(snap.code);
+          const wipeSeconds = trackAndScheduleSecretWipe(snap.code, s.clipboardAutoWipeSeconds);
+          return { ok: true, wipeSeconds };
+        } catch {
+          return { ok: false, wipeSeconds: 0 };
+        }
       }
       const rawField = field === 'cvv' ? payload.cvv || '' : payload.secretValue || '';
       if (!rawField) return { ok: false, wipeSeconds: 0 };
@@ -985,15 +1010,40 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return handleSaveStructuredSecret(input);
   });
 
-  handleTrusted('secret:set-pin', (_e, pin: string | null) => {
+  handleTrusted('secret:set-pin', async (_e, pin: string | null, currentPin?: string) => {
     const s = svc.getSettingsState();
     const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
-    if ((s.hasMasterPin || svc.cryptoVault.isPinProtected()) && !s.vaultUnlocked) {
+    const hasExistingPin = Boolean(s.hasMasterPin || svc.cryptoVault.isPinProtected());
+    if (hasExistingPin && !s.vaultUnlocked) {
       throw new Error(
         isEn
           ? 'Unlock Vault with your current master PIN first'
           : 'Сначала разблокируй Сейф текущим мастер-кодом'
       );
+    }
+    if (hasExistingPin) {
+      const cleanCurrent = typeof currentPin === 'string' ? currentPin.trim() : '';
+      if (!cleanCurrent) {
+        throw new Error(
+          isEn
+            ? 'Enter your current master PIN to confirm'
+            : 'Введи текущий мастер-код для подтверждения'
+        );
+      }
+      let verified = false;
+      if (svc.cryptoVault.isPinProtected()) {
+        verified = await svc.cryptoVault.verifyPinProtectionAsync(cleanCurrent);
+      } else {
+        const storedHash = svc.repo.getSetting('master_pin_hash');
+        if (storedHash) {
+          verified = await VaultCrypto.verifyPinAsync(cleanCurrent, storedHash);
+        }
+      }
+      if (!verified) {
+        throw new Error(
+          isEn ? 'Current master PIN is incorrect' : 'Неверный текущий мастер-код'
+        );
+      }
     }
     if (pin === null || pin === '') {
       svc.cryptoVault.removePinProtection();
@@ -1016,10 +1066,10 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       } catch {
         // Non-fatal
       }
-      svc.cryptoVault.setPinProtection(cleanPin, {
+      await svc.cryptoVault.setPinProtectionAsync(cleanPin, {
         enableBiometric: Boolean(s.biometricUnlockEnabled),
       });
-      svc.repo.setSetting('master_pin_hash', VaultCrypto.hashPin(cleanPin));
+      svc.repo.setSetting('master_pin_hash', await VaultCrypto.hashPinAsync(cleanPin));
       resetPersistedPinLockState();
       svc.setVaultUnlocked(true);
     }
@@ -1027,7 +1077,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return true;
   });
 
-  handleTrusted('secret:unlock-pin', (_e, pin: string) => {
+  handleTrusted('secret:unlock-pin', async (_e, pin: string) => {
     const stored = svc.repo.getSetting('master_pin_hash');
     const isCryptoPinProtected = svc.cryptoVault.isPinProtected();
     if (!stored && !isCryptoPinProtected) {
@@ -1048,21 +1098,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       );
     }
 
+    const cleanPin = String(pin ?? '').trim();
     let ok = false;
     if (isCryptoPinProtected) {
-      ok = svc.cryptoVault.unlockWithPin(String(pin ?? ''));
+      ok = await svc.cryptoVault.unlockWithPinAsync(cleanPin);
       if (ok && !stored) {
         // Self-heal master_pin_hash if DB row was tampered with while PIN-KEK file remained intact
-        svc.repo.setSetting('master_pin_hash', VaultCrypto.hashPin(String(pin ?? '').trim()));
+        svc.repo.setSetting('master_pin_hash', await VaultCrypto.hashPinAsync(cleanPin));
       }
     } else if (stored) {
-      ok = VaultCrypto.verifyPin(String(pin ?? ''), stored);
+      ok = await VaultCrypto.verifyPinAsync(cleanPin, stored);
       if (ok) {
         // Seamless v8 migration: upgrade legacy DPAPI + SQLite-hash vault to 2-tier PIN-KEK wrapping!
         try {
           gcalBridge.getStatus();
-          svc.cryptoVault.setPinProtection(String(pin ?? '').trim());
-          svc.repo.setSetting('master_pin_hash', VaultCrypto.hashPin(String(pin ?? '').trim()));
+          await svc.cryptoVault.setPinProtectionAsync(cleanPin);
+          svc.repo.setSetting('master_pin_hash', await VaultCrypto.hashPinAsync(cleanPin));
         } catch {
           // Keep unlocked even if migration could not write disk in a read-only dir
         }
@@ -1506,9 +1557,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       budgetReached: budget.limitReached,
       capUsd: s.monthlyCapUsd,
       repo: svc.repo,
-      onSpendUsd: (usd) => {
+      onSpendUsd: (usd, isCloudProxy) => {
         if (usd > 0) {
-          svc.repo.logAiUsage(s.aiProvider, 'audio-dictation', 0, 0, usd);
+          svc.repo.logAiUsage(s.aiProvider, 'audio-dictation', 0, 0, usd, Boolean(isCloudProxy));
         }
       },
     });
@@ -2040,21 +2091,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
   const resolveDataDir = () =>
     svc.dataDir || process.env.KAPSULA_DATA_DIR || path.join(app.getPath('userData'), 'kapsula-data');
 
-  handleTrusted('vault:storage-summary', () => {
+  handleTrusted('vault:storage-summary', async () => {
     const dir = resolveDataDir();
     let totalBytes = 0;
     let mediaFilesCount = 0;
 
-    const walk = (cur: string, inMedia: boolean) => {
+    const walk = async (cur: string, inMedia: boolean): Promise<void> => {
       try {
-        for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+        const entries = await fs.promises.readdir(cur, { withFileTypes: true });
+        for (const entry of entries) {
           if (entry.name === '_electron-profile') continue;
           const full = path.join(cur, entry.name);
           if (entry.isDirectory()) {
-            walk(full, inMedia || entry.name === 'media');
+            await walk(full, inMedia || entry.name === 'media');
           } else if (entry.isFile()) {
             try {
-              const st = fs.statSync(full);
+              const st = await fs.promises.stat(full);
               totalBytes += st.size;
               if (inMedia) mediaFilesCount += 1;
             } catch {
@@ -2067,7 +2119,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       }
     };
 
-    walk(dir, false);
+    await walk(dir, false);
     const stats = svc.repo.getStats();
     return {
       itemCount: stats.total,
@@ -2124,7 +2176,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       calendarEvents: svc.repo.listCalendarEvents(),
       items,
     };
-    fs.writeFileSync(pick.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    await fs.promises.writeFile(pick.filePath, JSON.stringify(payload, null, 2), 'utf8');
     return { canceled: false, itemCount: items.length, filePath: pick.filePath };
   });
 
@@ -2170,7 +2222,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       const pngBuf = first.thumbnail.toPNG();
       const s = svc.getSettingsState();
       const item = await svc.pipeline.capture({
-        imageBase64: pngBuf.toString('base64'),
+        imageBytes: new Uint8Array(pngBuf.buffer, pngBuf.byteOffset, pngBuf.byteLength),
         mode: s.activeMode,
         focusBoardId: s.activeFocusBoardId,
         source: wasHudVisible ? 'hud' : 'vault_ui',
@@ -2277,13 +2329,56 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return svc.windows.pasteBackFromHud();
   });
 
+  const SAFE_OPEN_EXTENSIONS = new Set([
+    '.pdf',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
+    '.gif',
+    '.bmp',
+    '.mp3',
+    '.wav',
+    '.m4a',
+    '.ogg',
+    '.webm',
+    '.mp4',
+    '.mov',
+    '.txt',
+    '.md',
+    '.csv',
+    '.json',
+    '.docx',
+    '.xlsx',
+    '.pptx',
+    '.eml',
+    '.rtf',
+    '.odt',
+    '.ods',
+    '.odp',
+  ]);
+
   handleTrusted('media:open', async (_e, filename: string) => {
     if (!filename) return false;
     const mediaRoot = path.resolve(svc.pipeline.getMediaDir());
     const safe = path.basename(filename);
     const target = path.resolve(mediaRoot, safe);
     if (!target.startsWith(mediaRoot + path.sep) || !fs.existsSync(target)) return false;
-    const err = await shell.openPath(target);
+    let realRoot: string;
+    let realTarget: string;
+    try {
+      realRoot = fs.realpathSync(mediaRoot);
+      realTarget = fs.realpathSync(target);
+    } catch {
+      return false;
+    }
+    if (!realTarget.startsWith(realRoot + path.sep)) return false;
+    const ext = path.extname(realTarget).toLowerCase();
+    if (!SAFE_OPEN_EXTENSIONS.has(ext)) {
+      shell.showItemInFolder(realTarget);
+      return true;
+    }
+    const err = await shell.openPath(realTarget);
     return !err;
   });
 
@@ -2348,7 +2443,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
   handleTrusted('sync:sign-out', async () => {
     if (!svc.syncEngine) throw new Error(syncNotReadyErr());
-    return svc.syncEngine.signOut();
+    const status = await svc.syncEngine.signOut();
+    svc.setVaultUnlocked(true);
+    emitSettings();
+    svc.windows.broadcast('vault:batch-synced', undefined);
+    return status;
+  });
+
+  handleTrusted('sync:delete-account', async () => {
+    if (!svc.syncEngine) throw new Error(syncNotReadyErr());
+    const res = await svc.syncEngine.deleteAccount();
+    if (res.ok) {
+      svc.setVaultUnlocked(true);
+      emitSettings();
+      svc.windows.broadcast('vault:batch-synced', undefined);
+    }
+    return res;
   });
 
   handleTrusted('sync:setup-passphrase', async (_e, passphrase: string) => {
@@ -2411,6 +2521,16 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     await writeConcealedClipboardText(clean);
     trackAndScheduleSecretWipe(clean, effectiveWipeSec);
     return { ok: true, wipeSeconds: effectiveWipeSec };
+  });
+
+  handleTrusted('clipper:get-pairing-info', () => {
+    if (svc.clipperControl) return svc.clipperControl.getPairingInfo();
+    return { pairingCode: '', pairedCount: 0 };
+  });
+
+  handleTrusted('clipper:reset-pairing', () => {
+    if (svc.clipperControl) return svc.clipperControl.resetPairing();
+    return { pairingCode: '', pairedCount: 0 };
   });
 
   // In-App Cloud Updates (Windows NSIS auto-update + macOS .dmg release checker)

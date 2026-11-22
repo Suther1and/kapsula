@@ -18,6 +18,11 @@ import { useI18n } from '@shared/i18n/react';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { isMacPlatform } from '@shared/shortcuts';
 import { friendlyErrorMessage } from '../../lib/format';
+import {
+  MAX_UPLOAD_IMAGE_OR_DOC_BYTES,
+  MAX_UPLOAD_VIDEO_BYTES,
+  readFileAsBytes,
+} from '../../lib/file-bytes';
 import { playTactileTick } from '../../lib/tactileSound';
 import { ReminderPopover } from '../ui/ReminderPopover';
 import { SectionPickerPopover } from '../ui/SectionPickerPopover';
@@ -37,7 +42,6 @@ interface PendingImageDraft {
   file: File;
   previewUrl: string;
   name: string;
-  nativePath?: string;
 }
 
 const GENERIC_CLIPBOARD_IMAGE_RE = /^image(?:\.[a-z0-9]+)?$/i;
@@ -75,19 +79,6 @@ function extractClipboardImages(dt: DataTransfer | null | undefined): File[] {
     }
   }
   return out;
-}
-
-function fileToBase64(file: File, readErrorMsg: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      const commaIdx = result.indexOf(',');
-      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
-    };
-    reader.onerror = () => reject(new Error(readErrorMsg));
-    reader.readAsDataURL(file);
-  });
 }
 
 export const OmniComposer: React.FC<OmniComposerProps> = ({
@@ -186,7 +177,6 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
   const appendPendingImages = useCallback((files: File[]) => {
     if (files.length === 0) return;
     const nextDrafts: PendingImageDraft[] = files.map((file) => {
-      const nativePath = window.kapsula.getPathForFile(file) || undefined;
       const safeName = GENERIC_CLIPBOARD_IMAGE_RE.test(file.name)
         ? ''
         : file.name.replace(/\.[^.]+$/, '');
@@ -198,7 +188,6 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         file,
         previewUrl: URL.createObjectURL(file),
         name: safeName,
-        nativePath,
       };
     });
     setPendingImages((prev) => [...prev, ...nextDrafts]);
@@ -248,8 +237,12 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         };
       } else {
         const firstImg = pendingImages[0]!;
-        const firstPath = firstImg.nativePath;
-        const firstBase64 = firstPath ? undefined : await fileToBase64(firstImg.file, readErr);
+        const firstBytes = await readFileAsBytes(
+          firstImg.file,
+          MAX_UPLOAD_IMAGE_OR_DOC_BYTES,
+          readErr,
+          locale
+        );
 
         let bodyText = trimmed;
         let galleryPaths: string[] | undefined;
@@ -258,10 +251,14 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           const extraFilenames: string[] = [];
           const markdownImages: string[] = [];
           for (const extraImg of pendingImages.slice(1)) {
-            const extraPath = extraImg.nativePath;
-            const extraB64 = extraPath ? undefined : await fileToBase64(extraImg.file, readErr);
+            const extraBytes = await readFileAsBytes(
+              extraImg.file,
+              MAX_UPLOAD_IMAGE_OR_DOC_BYTES,
+              readErr,
+              locale
+            );
             const saved = await window.kapsula.saveNoteImage({
-              ...(extraPath ? { filePath: extraPath } : { base64: extraB64 }),
+              bytes: extraBytes,
               mimeType: extraImg.file.type || 'image/png',
               fileName: extraImg.file.name,
             });
@@ -296,7 +293,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
 
         captureInput = {
           ...(bodyText ? { text: bodyText } : {}),
-          ...(firstPath ? { imageFilePath: firstPath } : { imageBase64: firstBase64 }),
+          imageBytes: firstBytes,
           ...(captionTitle ? { title: captionTitle } : {}),
           source: 'vault_ui',
           orbitOverride: selectedOrbit || undefined,
@@ -348,16 +345,15 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     let attachedText = text.trim();
     for (const file of otherFiles) {
       try {
-        const nativePath = window.kapsula.getPathForFile(file);
         const safeName = GENERIC_CLIPBOARD_IMAGE_RE.test(file.name)
           ? ''
           : file.name.replace(/\.[^.]+$/, '');
         const noteText = attachedText || undefined;
 
         if (file.type.startsWith('video/') || VIDEO_EXT_RE.test(file.name)) {
-          const b64 = nativePath ? undefined : await fileToBase64(file, readErr);
+          const videoBytes = await readFileAsBytes(file, MAX_UPLOAD_VIDEO_BYTES, readErr, locale);
           const created = await window.kapsula.capture({
-            ...(nativePath ? { videoPath: nativePath } : { videoBase64: b64 }),
+            videoBytes,
             ...(noteText ? { text: noteText } : {}),
             videoMime: file.type || 'video/mp4',
             fileName: file.name,
@@ -368,9 +364,9 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           });
           onCaptured(created);
         } else if (file.type.startsWith('audio/')) {
-          const b64 = await fileToBase64(file, readErr);
+          const audioBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
           const created = await window.kapsula.capture({
-            audioBase64: b64,
+            audioBytes,
             audioMime: file.type,
             fileName: file.name,
             ...(noteText ? { text: noteText } : {}),
@@ -380,10 +376,9 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           });
           onCaptured(created);
         } else {
-          const b64 = nativePath ? undefined : await fileToBase64(file, readErr);
+          const fileBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
           const created = await window.kapsula.capture({
-            ...(nativePath ? { filePath: nativePath } : {}),
-            ...(b64 ? { fileBase64: b64 } : {}),
+            fileBytes,
             ...(noteText ? { text: noteText } : {}),
             fileName: file.name,
             fileMime: file.type || 'application/octet-stream',

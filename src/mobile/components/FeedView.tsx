@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowSquareOut,
@@ -92,6 +92,7 @@ const SORT_LABEL_KEYS: Record<FeedSort, MobileDictKey> = {
 
 const FEED_TASK_RE = /^\s*[-*•]\s+(?:\\\[|\[)([ xX])(?:\\\]|\])\s+(.+)$/;
 const FEED_FENCE_RE = /^\s*(```|~~~)/;
+const MOBILE_PAGE_SIZE = 60;
 
 type ReadableBodyLine =
   | { kind: 'blank' }
@@ -233,6 +234,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
   // Multi-select bulk mode
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedBulkIds, setSelectedBulkIds] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(MOBILE_PAGE_SIZE);
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
 
   const orbitMap = useMemo(() => new Map(orbits.map((o) => [o.id, o])), [orbits]);
   const boardMap = useMemo(() => new Map(boards.map((b) => [b.id, b])), [boards]);
@@ -284,6 +287,31 @@ export const FeedView: React.FC<FeedViewProps> = ({
     if (!selectedItemId) return null;
     return filteredItems.find((i) => i.id === selectedItemId) ?? null;
   }, [filteredItems, selectedItemId]);
+
+  useEffect(() => {
+    setVisibleCount(MOBILE_PAGE_SIZE);
+  }, [feedMode, dnaFilter, selectedOrbitId, selectedBoardId, searchQuery, sortMode]);
+
+  const renderedItems = useMemo(
+    () => filteredItems.slice(0, visibleCount),
+    [filteredItems, visibleCount]
+  );
+
+  useEffect(() => {
+    if (visibleCount >= filteredItems.length) return;
+    const el = feedSentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((prev) => Math.min(filteredItems.length, prev + MOBILE_PAGE_SIZE));
+        }
+      },
+      { rootMargin: '300px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visibleCount, filteredItems.length]);
 
   const toggleBulkSelection = (id: string) => {
     setSelectedBulkIds((prev) => {
@@ -698,7 +726,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               className="w-full h-full object-cover block"
             >
               {item.isPinned ? (
-                <span className="absolute top-2 right-2 inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/55 text-[var(--k-accent)] backdrop-blur-sm">
+                <span className="absolute top-2 right-2 inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/72 text-[var(--k-accent)]">
                   <PushPin weight="fill" className="w-3.5 h-3.5" />
                 </span>
               ) : null}
@@ -706,8 +734,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
           ) : null}
 
           <div className="k-m-card space-y-2">
-            <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--k-ink-muted)]">
-              <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
+            <div className="flex items-center justify-between gap-1.5 text-[11px] text-[var(--k-ink-muted)]">
+              <span className="inline-flex items-center gap-1 min-w-0 truncate">
                 {multiSelectMode ? (
                   <span
                     className={`inline-flex items-center justify-center w-4 h-4 rounded-md border shrink-0 ${
@@ -726,11 +754,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 )}
                 <span className="truncate">{item.domain || getDnaLabel(item.dna, item.subKind)}</span>
               </span>
-              <span className="inline-flex items-center gap-1.5 shrink-0">
+              <span className="inline-flex items-center gap-1 shrink-0">
                 {item.isPinned && !hasVisual ? (
-                  <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)]" />
+                  <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)] shrink-0" />
                 ) : null}
-                <span>{formatDateCompact(item.contentUpdatedAt || item.createdAt)}</span>
+                <span className="whitespace-nowrap">
+                  {formatDateCompact(item.contentUpdatedAt || item.createdAt)}
+                </span>
                 {!multiSelectMode ? (
                   <button
                     type="button"
@@ -741,7 +771,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                       setActionItem(item);
                     }}
                     aria-label={t('feed.actionsAria')}
-                    className="inline-flex items-center justify-center w-6 h-6 -mr-1 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]"
+                    className="inline-flex items-center justify-center w-5 h-6 -mr-1 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]"
                   >
                     <DotsThree weight="bold" className="w-4 h-4" />
                   </button>
@@ -812,10 +842,10 @@ export const FeedView: React.FC<FeedViewProps> = ({
   };
 
   const masonryColumns = useMemo(() => {
-    if (!isExpanded) return [filteredItems];
+    if (!isExpanded) return [renderedItems];
     const cols: [VaultItem[], VaultItem[]] = [[], []];
     const heights: [number, number] = [0, 0];
-    for (const item of filteredItems) {
+    for (const item of renderedItems) {
       const est =
         112 +
         (item.imagePath || item.thumbPath || item.ogImageUrl ? 175 : 0) +
@@ -826,7 +856,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
       heights[colIdx] += est;
     }
     return cols;
-  }, [filteredItems, isExpanded]);
+  }, [renderedItems, isExpanded]);
 
   const useHingeSplit = Boolean(isExpanded && selectedItem && hingeListWidthPx && hingeListWidthPx >= 260);
 
@@ -1081,9 +1111,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
             </div>
           ) : (
             <div data-testid="feed-grid" className="flex flex-col gap-2.5">
-              {filteredItems.map(renderCard)}
+              {renderedItems.map(renderCard)}
             </div>
           )}
+          {visibleCount < filteredItems.length ? (
+            <div ref={feedSentinelRef} aria-hidden="true" className="h-4 w-full" />
+          ) : null}
         </div>
       </div>
 

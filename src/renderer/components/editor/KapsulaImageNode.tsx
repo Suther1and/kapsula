@@ -27,6 +27,7 @@ import {
 import { toast } from 'sonner';
 import { translate } from '@shared/i18n';
 import { useI18n } from '@shared/i18n/react';
+import { MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readFileAsBytes } from '../../lib/file-bytes';
 import { friendlyErrorMessage, getMediaUrl } from '../../lib/format';
 
 function getDomLocale() {
@@ -91,45 +92,6 @@ export function extractImageFilesFromDataTransfer(
   return files;
 }
 
-function bufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
-async function fileToBase64Payload(file: File): Promise<{
-  base64: string;
-  mimeType: string;
-  fileName: string;
-}> {
-  const mimeType = file.type || 'image/png';
-  const fileName = file.name || `image-${Date.now()}.png`;
-  try {
-    const buf = await file.arrayBuffer();
-    if (buf.byteLength > 0) {
-      return { base64: bufferToBase64(buf), mimeType, fileName };
-    }
-  } catch {
-    // Fallback to FileReader below
-  }
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(new Error(translate(getDomLocale(), 'error.readImageFailed')));
-    reader.readAsDataURL(file);
-  });
-  const commaIdx = dataUrl.indexOf(',');
-  return {
-    base64: commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl,
-    mimeType,
-    fileName,
-  };
-}
-
 export async function saveAndInsertImageFiles(
   editor: Editor,
   files: File[],
@@ -142,21 +104,22 @@ export async function saveAndInsertImageFiles(
   if (!files.length) return 0;
   opts?.onBeforeSave?.();
   const insertedNodes: Array<{ src: string; alt: string }> = [];
+  const domLocale = getDomLocale();
 
   try {
     for (const file of files) {
-      const { base64, mimeType, fileName } = await fileToBase64Payload(file);
-      let filePath = '';
-      try {
-        filePath = window.kapsula.getPathForFile?.(file) || '';
-      } catch {
-        filePath = '';
-      }
-      if (!base64 && !filePath) continue;
+      const mimeType = file.type || 'image/png';
+      const fileName = file.name || `image-${Date.now()}.png`;
+      const bytes = await readFileAsBytes(
+        file,
+        MAX_UPLOAD_IMAGE_OR_DOC_BYTES,
+        translate(domLocale, 'error.readImageFailed'),
+        domLocale
+      );
+      if (bytes.byteLength === 0) continue;
 
       const saved = await window.kapsula.saveNoteImage({
-        ...(base64 ? { base64 } : {}),
-        ...(filePath ? { filePath } : {}),
+        bytes,
         mimeType,
         fileName,
       });

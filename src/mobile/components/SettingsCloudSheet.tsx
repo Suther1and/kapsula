@@ -62,7 +62,7 @@ import {
 } from '../lib/mobile-ai';
 import { formatSyncTimeLabel } from '../lib/mobile-helpers';
 import { tm, useMobileI18n } from '../lib/mobile-i18n';
-import type { MobileUpdateCheckResult } from '../lib/mobile-updater';
+import { isSelfUpdateAllowed, type MobileUpdateCheckResult } from '../lib/mobile-updater';
 import { mobileBridge, type NativeAppVersion } from '../native/bridge';
 import type { MobileAiConfig } from '../storage/mobile-store';
 import type { MobileSyncEngine } from '../sync/mobile-sync-engine';
@@ -265,6 +265,7 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   );
   const [customKey, setCustomKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirmCloudAction, setConfirmCloudAction] = useState<null | 'signout' | 'delete'>(null);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const [cloudAiQuota, setCloudAiQuota] = useState<MobileCloudAiQuota | null>(null);
@@ -275,10 +276,18 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
   const [showBgSliders, setShowBgSliders] = useState(appearance.bgPreset === 'custom');
 
   useEffect(() => {
+    if (appearance.accentMode === 'preset') {
+      const preset = ACCENT_PRESETS.find((p) => p.id === appearance.accentPreset);
+      const swatch = theme === 'light' ? preset?.swatchLight : preset?.swatchDark;
+      if (swatch) {
+        setHexDraft(swatch.toUpperCase());
+        return;
+      }
+    }
     if (appearance.accentHex) {
       setHexDraft(appearance.accentHex.toUpperCase());
     }
-  }, [appearance.accentHex]);
+  }, [appearance.accentMode, appearance.accentPreset, appearance.accentHex, theme]);
 
   // Master PIN form state
   const [pinEditorOpen, setPinEditorOpen] = useState(false);
@@ -857,8 +866,20 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   keyboardOpen ? 'p-3 space-y-2.5' : 'p-4 space-y-3'
                 }`}
               >
-                <div className="text-[14px] font-semibold text-[var(--k-ink-primary)]">
-                  {t('settings.passphraseTitle')}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
+                    {t('settings.passphraseTitle')}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      setConfirmCloudAction((prev) => (prev === 'signout' ? null : 'signout'))
+                    }
+                    className="text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] font-medium shrink-0 disabled:opacity-50"
+                  >
+                    {t('settings.signOutBtn')}
+                  </button>
                 </div>
                 {!keyboardOpen ? (
                   <p className="text-[12.5px] leading-relaxed text-[var(--k-ink-secondary)]">
@@ -920,17 +941,29 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                   <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] truncate">
                     {t('settings.decryptTitle')}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setUnlockMode(unlockMode === 'passphrase' ? 'recovery' : 'passphrase')
-                    }
-                    className="text-[12px] text-[var(--k-accent)] font-medium shrink-0"
-                  >
-                    {unlockMode === 'passphrase'
-                      ? t('settings.byRecoveryKey')
-                      : t('settings.byPassphrase')}
-                  </button>
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setUnlockMode(unlockMode === 'passphrase' ? 'recovery' : 'passphrase')
+                      }
+                      className="text-[12px] text-[var(--k-accent)] font-medium"
+                    >
+                      {unlockMode === 'passphrase'
+                        ? t('settings.byRecoveryKey')
+                        : t('settings.byPassphrase')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        setConfirmCloudAction((prev) => (prev === 'signout' ? null : 'signout'))
+                      }
+                      className="text-[12px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] font-medium disabled:opacity-50"
+                    >
+                      {t('settings.signOutBtn')}
+                    </button>
+                  </div>
                 </div>
 
                 {unlockMode === 'passphrase' ? (
@@ -1087,14 +1120,26 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
 
                     <button
                       type="button"
-                      onClick={async () => {
-                        await syncEngine.signOut();
-                        toast(t('settings.signedOutToast'));
-                      }}
-                      className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-danger)]"
+                      disabled={busy}
+                      onClick={() =>
+                        setConfirmCloudAction((prev) => (prev === 'signout' ? null : 'signout'))
+                      }
+                      className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-danger)] disabled:opacity-50"
                     >
                       <SignOut className="w-3.5 h-3.5" />
                       {t('settings.signOutBtn')}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        setConfirmCloudAction((prev) => (prev === 'delete' ? null : 'delete'))
+                      }
+                      className="k-tap inline-flex items-center gap-1 px-3 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] font-medium text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] disabled:opacity-50"
+                    >
+                      <Trash className="w-3.5 h-3.5" />
+                      {t('settings.deleteAccountBtn')}
                     </button>
                   </div>
 
@@ -1192,6 +1237,96 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
               </div>
             ) : null}
 
+            {syncStatus.userId && confirmCloudAction === 'signout' ? (
+              <div className="rounded-2xl p-3.5 bg-[var(--k-bg-surface-2)] border border-[var(--k-amber)]/50 space-y-2.5">
+                <div className="flex items-start gap-2">
+                  <WarningCircle className="w-4 h-4 text-[var(--k-amber)] shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-[13px] font-semibold text-[var(--k-ink-primary)]">
+                      {t('settings.signOutConfirmTitle')}
+                    </div>
+                    <p className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
+                      {t('settings.signOutConfirmDesc')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmCloudAction(null)}
+                    className="k-tap h-9 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] text-[var(--k-ink-secondary)] disabled:opacity-50"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await syncEngine.signOut();
+                        setConfirmCloudAction(null);
+                        toast(t('settings.signedOutToast'));
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="k-tap h-9 px-3.5 rounded-xl bg-[var(--k-danger)] text-white text-[12.5px] font-semibold disabled:opacity-50"
+                  >
+                    {t('settings.signOutConfirmBtn')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {syncStatus.userId && confirmCloudAction === 'delete' ? (
+              <div className="rounded-2xl p-3.5 bg-[var(--k-danger)]/10 border border-[var(--k-danger)]/45 space-y-2.5">
+                <div className="flex items-start gap-2">
+                  <WarningCircle className="w-4 h-4 text-[var(--k-danger)] shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-[13px] font-semibold text-[var(--k-ink-primary)]">
+                      {t('settings.deleteAccountConfirmTitle')}
+                    </div>
+                    <p className="text-[12px] text-[var(--k-ink-secondary)] mt-0.5 leading-relaxed">
+                      {t('settings.deleteAccountConfirmDesc')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmCloudAction(null)}
+                    className="k-tap h-9 px-3 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[12.5px] text-[var(--k-ink-secondary)] disabled:opacity-50"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        const res = await syncEngine.deleteAccount();
+                        if (res.ok) {
+                          setConfirmCloudAction(null);
+                          toast.success(t('settings.deleteAccountDone'));
+                        } else {
+                          toast.error(res.error || t('settings.deleteAccountErr'));
+                        }
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="k-tap h-9 px-3.5 rounded-xl bg-[var(--k-danger)] text-white text-[12.5px] font-semibold disabled:opacity-50"
+                  >
+                    {t('settings.deleteAccountConfirmBtn')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="rounded-2xl p-3.5 bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
               <button
                 type="button"
@@ -1277,74 +1412,86 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                     </span>
                   </div>
 
-                  <div className="text-[12px] leading-relaxed text-[var(--k-ink-secondary)]">
-                    {updateInfo?.status === 'update_available' && updateInfo.latestVersion ? (
-                      <span className="text-[var(--k-accent)] font-medium">
-                        {t('settings.updateAvailableLabel', { version: updateInfo.latestVersion })}
-                      </span>
-                    ) : updateInfo?.status === 'up_to_date' ? (
-                      <span>{t('settings.upToDateLabel')}</span>
-                    ) : updateInfo?.status === 'error' && updateInfo.error ? (
-                      <span className="text-[var(--k-amber)]">{updateInfo.error}</span>
-                    ) : (
-                      <span>{t('settings.updatesHint')}</span>
-                    )}
-                  </div>
-
-                  {updateInstalling && updateDownloadPercent !== null ? (
-                    <div className="space-y-1">
-                      <div className="h-1.5 w-full rounded-full bg-[var(--k-bg-surface-1)] overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-[var(--k-accent)] transition-[width] duration-150"
-                          style={{ width: `${Math.max(4, Math.min(100, updateDownloadPercent))}%` }}
-                        />
-                      </div>
-                      <div className="text-[11px] text-[var(--k-ink-muted)] text-right k-tabular">
-                        {t('settings.downloadingPct', { pct: updateDownloadPercent })}
-                      </div>
+                  {!isSelfUpdateAllowed(appVersion) ? (
+                    <div className="text-[12px] leading-relaxed text-[var(--k-ink-secondary)]">
+                      {t('settings.playUpdatesHint')}
                     </div>
-                  ) : null}
+                  ) : (
+                    <>
+                      <div className="text-[12px] leading-relaxed text-[var(--k-ink-secondary)]">
+                        {updateInfo?.status === 'update_available' && updateInfo.latestVersion ? (
+                          <span className="text-[var(--k-accent)] font-medium">
+                            {t('settings.updateAvailableLabel', { version: updateInfo.latestVersion })}
+                          </span>
+                        ) : updateInfo?.status === 'up_to_date' ? (
+                          <span>{t('settings.upToDateLabel')}</span>
+                        ) : updateInfo?.status === 'error' && updateInfo.error ? (
+                          <span className="text-[var(--k-amber)]">{updateInfo.error}</span>
+                        ) : (
+                          <span>{t('settings.updatesHint')}</span>
+                        )}
+                      </div>
 
-                  <div className="flex items-center gap-2">
-                    {updateInfo?.status === 'update_available' && updateInfo.apkUrl ? (
-                      <>
-                        <button
-                          type="button"
-                          data-testid="settings-install-update-btn"
-                          disabled={updateInstalling}
-                          onClick={() => void onInstallUpdate()}
-                          className="k-tap flex-1 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
-                        >
-                          {updateInstalling ? t('settings.downloadingShort') : t('settings.installUpdateBtn')}
-                        </button>
-                        <button
-                          type="button"
-                          data-testid="settings-check-updates-btn"
-                          disabled={updateChecking || updateInstalling}
-                          onClick={() => void onCheckUpdates()}
-                          aria-label={t('settings.checkUpdatesAria')}
-                          className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] disabled:opacity-50 shrink-0"
-                        >
-                          <ArrowsClockwise
-                            className={`w-4 h-4 ${updateChecking ? 'animate-spin' : ''}`}
-                          />
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        data-testid="settings-check-updates-btn"
-                        disabled={updateChecking || updateInstalling}
-                        onClick={() => void onCheckUpdates()}
-                        className="k-tap w-full h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] text-[12.5px] font-medium text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
-                      >
-                        <ArrowsClockwise
-                          className={`w-3.5 h-3.5 text-[var(--k-accent)] ${updateChecking ? 'animate-spin' : ''}`}
-                        />
-                        {updateChecking ? t('settings.checkingUpdates') : t('settings.checkUpdatesBtn')}
-                      </button>
-                    )}
-                  </div>
+                      {updateInstalling && updateDownloadPercent !== null ? (
+                        <div className="space-y-1">
+                          <div className="h-1.5 w-full rounded-full bg-[var(--k-bg-surface-1)] overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-[var(--k-accent)] transition-[width] duration-150"
+                              style={{ width: `${Math.max(4, Math.min(100, updateDownloadPercent))}%` }}
+                            />
+                          </div>
+                          <div className="text-[11px] text-[var(--k-ink-muted)] text-right k-tabular">
+                            {t('settings.downloadingPct', { pct: updateDownloadPercent })}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex items-center gap-2">
+                        {updateInfo?.status === 'update_available' && updateInfo.apkUrl ? (
+                          <>
+                            <button
+                              type="button"
+                              data-testid="settings-install-update-btn"
+                              disabled={updateInstalling}
+                              onClick={() => void onInstallUpdate()}
+                              className="k-tap flex-1 h-9 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-semibold disabled:opacity-50"
+                            >
+                              {updateInstalling
+                                ? t('settings.downloadingShort')
+                                : updateInfo.sha256
+                                  ? t('settings.installUpdateBtn')
+                                  : t('settings.openReleasePageBtn')}
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="settings-check-updates-btn"
+                              disabled={updateChecking || updateInstalling}
+                              onClick={() => void onCheckUpdates()}
+                              aria-label={t('settings.checkUpdatesAria')}
+                              className="k-tap inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] disabled:opacity-50 shrink-0"
+                            >
+                              <ArrowsClockwise
+                                className={`w-4 h-4 ${updateChecking ? 'animate-spin' : ''}`}
+                              />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid="settings-check-updates-btn"
+                            disabled={updateChecking || updateInstalling}
+                            onClick={() => void onCheckUpdates()}
+                            className="k-tap w-full h-9 rounded-xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] text-[12.5px] font-medium text-[var(--k-ink-primary)] inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            <ArrowsClockwise
+                              className={`w-3.5 h-3.5 text-[var(--k-accent)] ${updateChecking ? 'animate-spin' : ''}`}
+                            />
+                            {updateChecking ? t('settings.checkingUpdates') : t('settings.checkUpdatesBtn')}
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Safe Redacted Diagnostics */}
@@ -1484,9 +1631,11 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
                       data-testid={`accent-preset-${preset.id}`}
                       onClick={() => {
                         mobileBridge.haptic('light');
+                        setHexDraft(swatch.toUpperCase());
                         onChangeAppearance({
                           accentMode: 'preset',
                           accentPreset: preset.id,
+                          accentHex: swatch,
                         });
                       }}
                       className={`k-tap flex items-center gap-2.5 px-3 h-10 rounded-xl border text-left transition-colors ${
@@ -2028,6 +2177,9 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
 
               <p className="text-[12px] leading-relaxed text-[var(--k-ink-muted)]">
                 {t('settings.aiKeyOptionalHint')}
+              </p>
+              <p className="text-[11.5px] leading-relaxed text-[var(--k-ink-muted)]">
+                {t('settings.aiCloudPrivacyHint')}
               </p>
 
               <div className="grid grid-cols-3 gap-1.5">

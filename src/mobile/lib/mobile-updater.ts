@@ -1,8 +1,21 @@
+import { BUILD_MOBILE_DIST_CHANNEL } from '@shared/app-version';
 import { mobileBridge } from '../native/bridge';
 import { tm } from './mobile-i18n';
 
 export const GITHUB_LATEST_RELEASE_URL =
   'https://api.github.com/repos/Suther1and/kapsula/releases/latest';
+export const GITHUB_RELEASES_PAGE_URL =
+  'https://github.com/Suther1and/kapsula/releases/latest';
+
+export function isSelfUpdateAllowed(appVersion?: {
+  distChannel?: string;
+  allowSelfUpdate?: boolean;
+}): boolean {
+  if (BUILD_MOBILE_DIST_CHANNEL === 'play') return false;
+  if (appVersion?.distChannel === 'play') return false;
+  if (appVersion?.allowSelfUpdate === false) return false;
+  return true;
+}
 
 export const ALLOWED_APK_URL_PREFIXES = [
   'https://github.com/Suther1and/kapsula/',
@@ -19,6 +32,7 @@ export interface MobileUpdateCheckResult {
   latestVersion: string | null;
   latestVersionCode: number | null;
   apkUrl: string | null;
+  releaseUrl?: string | null;
   sha256: string | null;
   releaseNotes: string;
   checkedAt: number;
@@ -35,6 +49,7 @@ interface GitHubReleasePayload {
   tag_name?: string;
   name?: string;
   body?: string;
+  html_url?: string;
   assets?: GitHubReleaseAsset[];
 }
 
@@ -277,6 +292,11 @@ export async function checkForMobileUpdate(opts?: {
       { versionName: latestVersion, versionCode: latestVersionCode }
     );
 
+    const rawHtmlUrl =
+      typeof release.html_url === 'string' && release.html_url.startsWith('https://github.com/Suther1and/kapsula/')
+        ? release.html_url.trim()
+        : GITHUB_RELEASES_PAGE_URL;
+
     if (newer && apkUrl) {
       return {
         status: 'update_available',
@@ -285,6 +305,7 @@ export async function checkForMobileUpdate(opts?: {
         latestVersion,
         latestVersionCode,
         apkUrl,
+        releaseUrl: rawHtmlUrl,
         sha256,
         releaseNotes,
         checkedAt,
@@ -298,6 +319,7 @@ export async function checkForMobileUpdate(opts?: {
       latestVersion,
       latestVersionCode,
       apkUrl,
+      releaseUrl: rawHtmlUrl,
       sha256,
       releaseNotes,
       checkedAt,

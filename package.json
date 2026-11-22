@@ -23,8 +23,10 @@
     "pack:mac:universal": "node scripts/pack-mac.mjs --arch=universal",
     "build:mobile": "vite build --config vite.mobile.config.ts",
     "build:android-icons": "node scripts/generate-android-icons.mjs",
-    "pack:android": "node scripts/pack-android.mjs --variant=release",
-    "pack:android:debug": "node scripts/pack-android.mjs --variant=debug"
+    "pack:android": "node scripts/pack-android.mjs --flavor=direct --variant=release --format=apk",
+    "pack:android:debug": "node scripts/pack-android.mjs --flavor=direct --variant=debug --format=apk",
+    "pack:android:aab": "node scripts/pack-android.mjs --flavor=play --variant=release --format=aab",
+    "pack:android:play:debug": "node scripts/pack-android.mjs --flavor=play --variant=debug --format=apk"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -55,7 +57,6 @@
     "motion": "^12.23.24",
     "overlayscrollbars": "^2.17.0",
     "overlayscrollbars-react": "^0.5.7",
-    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "sonner": "^2.0.8",
@@ -64,14 +65,15 @@
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",
     "@tailwindcss/vite": "^4.3.5",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24.9.0",
-    "@types/qrcode": "^1.5.5",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.1.0",
     "electron": "^45.3.2",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.0",
+    "jsdom": "^31.0.1",
     "playwright": "^1.56.1",
     "tailwindcss": "^4.3.5",
     "typescript": "^5.9.3",
@@ -95,20 +97,12 @@
     "files": [
       "dist/**/*",
       "!dist/mobile/**",
-      "extension/**/*",
+      "!dist/main/*.swift",
+      "!node_modules/@capacitor{,/**/*}",
+      "!node_modules/@types{,/**/*}",
       "build/icon.png",
-      "build/icon.icns",
-      "build/tray.png",
-      "build/trayTemplate.png",
-      "build/trayTemplate@2x.png",
-      "build/icon.ico",
+      "LICENSE",
       "package.json"
-    ],
-    "asarUnpack": [
-      "dist/main/winrt-ocr.ps1",
-      "dist/main/macos-vision-ocr",
-      "dist/main/macos-vision-ocr.swift",
-      "build/trayTemplate*.png"
     ],
     "extraResources": [
       {
@@ -122,6 +116,14 @@
         "dir"
       ],
       "icon": "build/icon.ico",
+      "files": [
+        "!dist/main/macos-vision-ocr*",
+        "build/icon.ico",
+        "build/tray.png"
+      ],
+      "asarUnpack": [
+        "dist/main/winrt-ocr.ps1"
+      ],
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
@@ -138,6 +140,16 @@
       "artifactName": "Kapsula-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "files": [
+        "!dist/main/winrt-ocr.ps1",
+        "build/icon.icns",
+        "build/trayTemplate.png",
+        "build/trayTemplate@2x.png"
+      ],
+      "asarUnpack": [
+        "dist/main/macos-vision-ocr",
+        "build/trayTemplate*.png"
+      ],
       "target": [
         {
           "target": "dmg",
@@ -148,6 +160,8 @@
         }
       ],
       "extendInfo": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSMinimumSystemVersion": "12.0",
         "NSMicrophoneUsageDescription": "Kapsula использует микрофон для записи голосовых заметок и диктовки.",
         "NSScreenCaptureUsageDescription": "Kapsula использует захват экрана для сохранения скриншотов в хранилище.",
         "NSAppleEventsUsageDescription": "Kapsula использует системные события для быстрой вставки текста из быстрой панели."

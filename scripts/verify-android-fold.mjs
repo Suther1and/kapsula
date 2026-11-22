@@ -143,6 +143,7 @@ async function main() {
         tags: ['fold', 'android'],
         isPinned: true,
         remindAt: Date.now() + 3_600_000,
+        mediaMeta: { inNotesHub: true },
       });
 
       const linkItem = await store.createItem({

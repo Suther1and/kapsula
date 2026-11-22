@@ -1,5 +1,6 @@
 import type { AppLocale } from '@shared/i18n/core';
 import { normalizeLocale } from '@shared/i18n/core';
+import { isUntitledPlaceholderTitle } from '@shared/item-helpers';
 import {
   DEFAULT_APPEARANCE_CONFIG,
 } from '@shared/color-engine';
@@ -54,7 +55,8 @@ import type {
   VaultItem,
   VaultTaskEntry,
 } from '@shared/types';
-import { bytesToBase64 } from '../sync/mobile-crypto';
+import { mobileBridge } from '../native/bridge';
+import { base64ToBytes, bytesToBase64 } from '../sync/mobile-crypto';
 import { sanitizeMobileMediaFilename } from '../sync/mobile-media';
 import {
   buildSecretMetaFromInput,
@@ -415,11 +417,16 @@ export class MobileVaultStore {
   private readonly mediaFilesMap = new Map<string, StoredMediaFile>();
   private readonly secureKvMap = new Map<string, string>();
   private readonly mediaObjectUrlCache = new Map<string, string>();
+  private readonly mediaRefCounts = new Map<string, number>();
+  private dataVersion = 0;
+  private readonly snapshotCache = new Map<string, unknown>();
 
   private dirtySeqCounter = 1;
   private initialized = false;
   private readonly isMemoryOnly: boolean;
   private deviceNameLabel = 'Android';
+  private cachedPinFailedAttempts = 0;
+  private cachedPinLockedUntil = 0;
   private mutationListener: ((entityType: SyncEntityType, entityId: string) => void) | null = null;
   private changeListeners = new Set<() => void>();
   public readonly localCrypto: MobileLocalCrypto;
@@ -474,7 +481,74 @@ export class MobileVaultStore {
     blobs.forEach((b) => this.blobCacheMap.set(b.localName, b));
     secure.forEach((s) => this.secureKvMap.set(s.key, s.value));
 
+    await this.loadPinLockoutState();
+    this.localCrypto.setPinProtectedMode(this.hasMasterPin());
+    this.bumpDataVersion();
     this.initialized = true;
+  }
+
+  private async loadPinLockoutState(): Promise<void> {
+    const legacyAttempts = this.syncStateMap.get('pin_failed_attempts');
+    const legacyUntil = this.syncStateMap.get('pin_locked_until');
+    const requireOs = mobileBridge.isNativeAndroid();
+
+    if (legacyAttempts !== undefined) {
+      const n = Number(legacyAttempts) || 0;
+      if (n > 0) {
+        try {
+          await this.setSecureValue('pin_failed_attempts', String(n), {
+            requireOsProtection: requireOs,
+          });
+        } catch {
+          // ignore if Keystore unavailable during migration
+        }
+      }
+      await this.deleteSyncState('pin_failed_attempts');
+    }
+    if (legacyUntil !== undefined) {
+      const n = Number(legacyUntil) || 0;
+      if (n > 0) {
+        try {
+          await this.setSecureValue('pin_locked_until', String(n), {
+            requireOsProtection: requireOs,
+          });
+        } catch {
+          // ignore if Keystore unavailable during migration
+        }
+      }
+      await this.deleteSyncState('pin_locked_until');
+    }
+
+    const secAttempts = await this.getSecureValue('pin_failed_attempts');
+    const secUntil = await this.getSecureValue('pin_locked_until');
+    this.cachedPinFailedAttempts = Math.max(0, Number(secAttempts || '0') || 0);
+    this.cachedPinLockedUntil = Math.max(0, Number(secUntil || '0') || 0);
+  }
+
+  private async persistPinLockoutState(attempts: number, lockedUntil: number): Promise<void> {
+    this.cachedPinFailedAttempts = attempts;
+    this.cachedPinLockedUntil = lockedUntil;
+    const requireOs = mobileBridge.isNativeAndroid();
+    try {
+      if (attempts > 0) {
+        await this.setSecureValue('pin_failed_attempts', String(attempts), {
+          requireOsProtection: requireOs,
+        });
+      } else {
+        await this.removeSecureValue('pin_failed_attempts');
+      }
+      if (lockedUntil > 0) {
+        await this.setSecureValue('pin_locked_until', String(lockedUntil), {
+          requireOsProtection: requireOs,
+        });
+      } else {
+        await this.removeSecureValue('pin_locked_until');
+      }
+    } catch {
+      // In-memory lockout values remain enforced if Keystore is temporarily unavailable
+    }
+    await this.deleteSyncState('pin_failed_attempts');
+    await this.deleteSyncState('pin_locked_until');
   }
 
   public setDeviceNameLabel(name: string): void {
@@ -494,7 +568,13 @@ export class MobileVaultStore {
     };
   }
 
+  private bumpDataVersion(): void {
+    this.dataVersion += 1;
+    this.snapshotCache.clear();
+  }
+
   private emitChange(): void {
+    this.bumpDataVersion();
     this.changeListeners.forEach((fn) => {
       try {
         fn();
@@ -535,6 +615,11 @@ export class MobileVaultStore {
     return this.secureKvMap.has(key);
   }
 
+  public hasOsProtectedSecureKey(key: string): boolean {
+    const raw = this.secureKvMap.get(key);
+    return Boolean(raw && raw.startsWith('aks:'));
+  }
+
   public async setSecureValue(
     key: string,
     plainValue: string,
@@ -561,31 +646,148 @@ export class MobileVaultStore {
     }
   }
 
-  // ==================== Master PIN & Exponential Backoff ====================
+  // ==================== Master PIN, 2-Tier VDK & Exponential Backoff ====================
 
   public hasMasterPin(): boolean {
     return this.secureKvMap.has('vault_master_pin_hash');
   }
 
+  public isVaultLocked(): boolean {
+    return this.localCrypto.isLocked();
+  }
+
+  public lockVault(): void {
+    this.localCrypto.lock();
+  }
+
+  private async storeBiometricVdk(vdk: Uint8Array): Promise<void> {
+    const b64 = bytesToBase64(vdk);
+    if (mobileBridge.isNativeAndroid()) {
+      const authAvailable = await mobileBridge.isAuthKeystoreAvailable();
+      if (!authAvailable) {
+        await this.removeSecureValue('vault_vdk_bio_wrapped');
+        return;
+      }
+      try {
+        const cipher = await mobileBridge.keystoreAuthEncrypt(b64);
+        const value = `aks_auth:${cipher}`;
+        this.secureKvMap.set('vault_vdk_bio_wrapped', value);
+        await this.backend.put('secure_kv', 'vault_vdk_bio_wrapped', {
+          key: 'vault_vdk_bio_wrapped',
+          value,
+        });
+      } catch {
+        // User-auth window wasn't active yet; clear stale bio wrap cleanly so PIN remains fallback
+        await this.removeSecureValue('vault_vdk_bio_wrapped');
+      }
+      return;
+    }
+    await this.setSecureValue('vault_vdk_bio_wrapped', b64);
+  }
+
+  public async enableBiometricVdkWrap(): Promise<void> {
+    if (!this.hasMasterPin()) return;
+    const vdk = this.localCrypto.getVdkCopy();
+    if (!vdk) {
+      throw new Error(tm('vaultCrypto.locked', undefined, this.getLocale()));
+    }
+    try {
+      await this.storeBiometricVdk(vdk);
+    } finally {
+      vdk.fill(0);
+    }
+  }
+
+  public async disableBiometricVdkWrap(): Promise<void> {
+    await this.removeSecureValue('vault_vdk_bio_wrapped');
+  }
+
+  private async migrateSecretsToCurrentVdk(): Promise<void> {
+    for (const item of this.itemsMap.values()) {
+      if (
+        item.dna !== 'secret' ||
+        item.purgedAt != null ||
+        !item.encryptedSecretPayload ||
+        item.encryptedSecretPayload.startsWith('vdk:')
+      ) {
+        continue;
+      }
+      const plain = await this.localCrypto.decryptSecretPayload(item.encryptedSecretPayload);
+      const reencrypted = await this.localCrypto.encryptSecretPayload(plain);
+      const updated: StoredMobileItem = {
+        ...item,
+        encryptedSecretPayload: reencrypted,
+      };
+      this.itemsMap.set(item.id, updated);
+      await this.backend.put('items', item.id, updated);
+    }
+  }
+
   public async setMasterPin(pin: string): Promise<void> {
+    if (this.hasMasterPin() && this.isVaultLocked()) {
+      throw new Error(tm('vaultCrypto.locked', undefined, this.getLocale()));
+    }
+    const requireOs = mobileBridge.isNativeAndroid();
     const hashed = await hashMasterPin(pin);
-    await this.setSecureValue('vault_master_pin_hash', hashed);
-    await this.deleteSyncState('pin_failed_attempts');
-    await this.deleteSyncState('pin_locked_until');
+    await this.setSecureValue('vault_master_pin_hash', hashed, {
+      requireOsProtection: requireOs,
+    });
+
+    const vdk = this.localCrypto.getVdkCopy() ?? this.localCrypto.generateVdk();
+    try {
+      const wrappedPin = await this.localCrypto.wrapVdkWithPin(vdk, pin);
+      await this.setSecureValue('vault_vdk_pin_wrapped', wrappedPin, {
+        requireOsProtection: requireOs,
+      });
+      this.localCrypto.setPinProtectedMode(true);
+      this.localCrypto.setUnlockedVdk(vdk);
+      await this.migrateSecretsToCurrentVdk();
+
+      if (this.getSyncState('pref_biometric_vault') !== '0') {
+        await this.storeBiometricVdk(vdk);
+      } else {
+        await this.removeSecureValue('vault_vdk_bio_wrapped');
+      }
+    } finally {
+      vdk.fill(0);
+    }
+
+    await this.persistPinLockoutState(0, 0);
     this.emitChange();
   }
 
   public async removeMasterPin(): Promise<void> {
+    if (this.isVaultLocked()) {
+      throw new Error(tm('vaultCrypto.locked', undefined, this.getLocale()));
+    }
+    const requireOs = mobileBridge.isNativeAndroid();
+    for (const item of this.itemsMap.values()) {
+      if (item.dna !== 'secret' || item.purgedAt != null || !item.encryptedSecretPayload) {
+        continue;
+      }
+      if (item.encryptedSecretPayload.startsWith('vdk:')) {
+        const plain = await this.localCrypto.decryptSecretPayload(item.encryptedSecretPayload);
+        const migrated = await this.localCrypto.encryptString(JSON.stringify(plain), requireOs);
+        const updated: StoredMobileItem = {
+          ...item,
+          encryptedSecretPayload: migrated,
+        };
+        this.itemsMap.set(item.id, updated);
+        await this.backend.put('items', item.id, updated);
+      }
+    }
+
+    this.localCrypto.setPinProtectedMode(false);
     await this.removeSecureValue('vault_master_pin_hash');
-    await this.deleteSyncState('pin_failed_attempts');
-    await this.deleteSyncState('pin_locked_until');
+    await this.removeSecureValue('vault_vdk_pin_wrapped');
+    await this.removeSecureValue('vault_vdk_bio_wrapped');
+    await this.persistPinLockoutState(0, 0);
     this.emitChange();
   }
 
   public getPinLockoutRemainingSec(nowMs = Date.now()): number {
-    const until = Number(this.getSyncState('pin_locked_until') || '0') || 0;
-    if (until <= nowMs) return 0;
-    return Math.ceil((until - nowMs) / 1000);
+    if (this.cachedPinLockedUntil <= nowMs) return 0;
+    return Math.ceil((this.cachedPinLockedUntil - nowMs) / 1000);
   }
 
   public async verifyMasterPinWithBackoff(
@@ -609,27 +811,106 @@ export class MobileVaultStore {
 
     const matched = await verifyMasterPin(pin, storedHash);
     if (matched) {
-      await this.deleteSyncState('pin_failed_attempts');
-      await this.deleteSyncState('pin_locked_until');
+      await this.persistPinLockoutState(0, 0);
       return { ok: true, lockoutRemainingSec: 0 };
     }
 
-    const attempts = (Number(this.getSyncState('pin_failed_attempts') || '0') || 0) + 1;
-    await this.setSyncState('pin_failed_attempts', String(attempts));
+    const attempts = this.cachedPinFailedAttempts + 1;
     const lockSec = pinLockoutDurationSec(attempts);
     if (lockSec > 0) {
-      await this.setSyncState('pin_locked_until', String(nowMs + lockSec * 1000));
+      await this.persistPinLockoutState(attempts, nowMs + lockSec * 1000);
       return {
         ok: false,
         lockoutRemainingSec: lockSec,
         error: tm('store.pinWrongWithDelay', { sec: lockSec }, locale),
       };
     }
+    await this.persistPinLockoutState(attempts, 0);
     return {
       ok: false,
       lockoutRemainingSec: 0,
       error: tm('vault.pinWrong', undefined, locale),
     };
+  }
+
+  public async unlockVaultWithPin(
+    pin: string,
+    nowMs = Date.now()
+  ): Promise<{ ok: boolean; lockoutRemainingSec: number; error?: string }> {
+    const verified = await this.verifyMasterPinWithBackoff(pin, nowMs);
+    if (!verified.ok) return verified;
+
+    const requireOs = mobileBridge.isNativeAndroid();
+    const wrapped = await this.getSecureValue('vault_vdk_pin_wrapped');
+    if (wrapped) {
+      const vdk = await this.localCrypto.unwrapVdkWithPin(wrapped, pin);
+      if (!vdk) {
+        return {
+          ok: false,
+          lockoutRemainingSec: 0,
+          error: tm('vaultCrypto.decryptFailed', undefined, this.getLocale()),
+        };
+      }
+      try {
+        this.localCrypto.setPinProtectedMode(true);
+        this.localCrypto.setUnlockedVdk(vdk);
+        await this.migrateSecretsToCurrentVdk();
+      } finally {
+        vdk.fill(0);
+      }
+      return { ok: true, lockoutRemainingSec: 0 };
+    }
+
+    // Migrate legacy PIN vault without VDK wrapper yet
+    const freshVdk = this.localCrypto.generateVdk();
+    try {
+      const newWrapped = await this.localCrypto.wrapVdkWithPin(freshVdk, pin);
+      await this.setSecureValue('vault_vdk_pin_wrapped', newWrapped, {
+        requireOsProtection: requireOs,
+      });
+      this.localCrypto.setPinProtectedMode(true);
+      this.localCrypto.setUnlockedVdk(freshVdk);
+      await this.migrateSecretsToCurrentVdk();
+      if (this.getSyncState('pref_biometric_vault') !== '0') {
+        await this.storeBiometricVdk(freshVdk);
+      }
+    } finally {
+      freshVdk.fill(0);
+    }
+    return { ok: true, lockoutRemainingSec: 0 };
+  }
+
+  public async unlockVaultWithBiometric(): Promise<{ ok: boolean; needsPinFallback?: boolean }> {
+    if (!this.hasMasterPin()) {
+      this.localCrypto.setPinProtectedMode(false);
+      return { ok: true };
+    }
+    const rawEntry = this.secureKvMap.get('vault_vdk_bio_wrapped');
+    if (!rawEntry) {
+      return { ok: false, needsPinFallback: true };
+    }
+    try {
+      let b64: string | null = null;
+      if (rawEntry.startsWith('aks_auth:')) {
+        if (!mobileBridge.isNativeAndroid()) return { ok: false, needsPinFallback: true };
+        b64 = await mobileBridge.keystoreAuthDecrypt(rawEntry.slice('aks_auth:'.length));
+      } else {
+        b64 = await this.getSecureValue('vault_vdk_bio_wrapped');
+      }
+      if (!b64) return { ok: false, needsPinFallback: true };
+      const vdk = base64ToBytes(b64);
+      if (vdk.length !== 32) return { ok: false, needsPinFallback: true };
+      try {
+        this.localCrypto.setPinProtectedMode(true);
+        this.localCrypto.setUnlockedVdk(vdk);
+      } finally {
+        vdk.fill(0);
+      }
+      await this.persistPinLockoutState(0, 0);
+      return { ok: true };
+    } catch {
+      return { ok: false, needsPinFallback: true };
+    }
   }
 
   // ==================== Mobile AI Config (Encrypted in secure_kv) ====================
@@ -653,15 +934,22 @@ export class MobileVaultStore {
     if (patch.provider !== undefined) {
       await this.setSyncState('pref_ai_provider', patch.provider);
     }
+    const requireOs = mobileBridge.isNativeAndroid();
     if (patch.googleKey !== undefined) {
       const clean = (patch.googleKey ?? '').trim();
-      if (clean) await this.setSecureValue('ai_key_google', clean);
-      else await this.removeSecureValue('ai_key_google');
+      if (clean) {
+        await this.setSecureValue('ai_key_google', clean, { requireOsProtection: requireOs });
+      } else {
+        await this.removeSecureValue('ai_key_google');
+      }
     }
     if (patch.openrouterKey !== undefined) {
       const clean = (patch.openrouterKey ?? '').trim();
-      if (clean) await this.setSecureValue('ai_key_openrouter', clean);
-      else await this.removeSecureValue('ai_key_openrouter');
+      if (clean) {
+        await this.setSecureValue('ai_key_openrouter', clean, { requireOsProtection: requireOs });
+      } else {
+        await this.removeSecureValue('ai_key_openrouter');
+      }
     }
     this.emitChange();
     return this.getMobileAiConfig();
@@ -1003,6 +1291,161 @@ export class MobileVaultStore {
     await this.backend.clear('sync_blob_cache');
   }
 
+  public getPendingBlobDeletes(): string[] {
+    const raw = this.getSyncState('pending_blob_deletes');
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (v): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/i.test(v)
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  public async removePendingBlobDeletes(blobIds: string[]): Promise<void> {
+    if (blobIds.length === 0) return;
+    const drop = new Set(blobIds);
+    const remaining = this.getPendingBlobDeletes().filter((id) => !drop.has(id));
+    if (remaining.length === 0) {
+      await this.deleteSyncState('pending_blob_deletes');
+    } else {
+      await this.setSyncState('pending_blob_deletes', JSON.stringify(remaining));
+    }
+  }
+
+  public async enqueuePendingBlobDeletes(
+    localNames: string[],
+    excludeItemId?: string
+  ): Promise<void> {
+    if (!localNames || localNames.length === 0) return;
+    const queue = new Set(this.getPendingBlobDeletes());
+    let changed = false;
+
+    for (const rawName of localNames) {
+      const safe = sanitizeMobileMediaFilename(rawName);
+      if (!safe) continue;
+      if (this.isMediaReferencedByAnyItem(safe, excludeItemId)) continue;
+
+      const cached = this.getBlobCache(safe);
+      if (!cached) continue;
+      this.blobCacheMap.delete(safe);
+      await this.backend.delete('sync_blob_cache', safe);
+
+      if (!/^[a-f0-9]{64}$/i.test(cached.blobId)) continue;
+      let sharedStillUsed = false;
+      for (const sibling of this.blobCacheMap.values()) {
+        if (
+          sibling.blobId === cached.blobId &&
+          sibling.localName !== safe &&
+          this.isMediaReferencedByAnyItem(sibling.localName, excludeItemId)
+        ) {
+          sharedStillUsed = true;
+          break;
+        }
+      }
+      if (sharedStillUsed) continue;
+
+      if (!queue.has(cached.blobId)) {
+        queue.add(cached.blobId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.setSyncState('pending_blob_deletes', JSON.stringify(Array.from(queue)));
+    }
+  }
+
+  public async wipeAllUserData(): Promise<void> {
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      for (const url of this.mediaObjectUrlCache.values()) {
+        URL.revokeObjectURL(url);
+      }
+    }
+    this.mediaObjectUrlCache.clear();
+    this.mediaRefCounts.clear();
+    this.bumpDataVersion();
+    this.itemsMap.clear();
+    this.orbitsMap.clear();
+    this.boardsMap.clear();
+    this.calendarMap.clear();
+    this.revisionsMap.clear();
+    this.dirtyMap.clear();
+    this.blobCacheMap.clear();
+    this.mediaFilesMap.clear();
+
+    const clearedStores: StoreName[] = [
+      'items',
+      'orbits',
+      'focus_boards',
+      'calendar_events',
+      'item_revisions',
+      'sync_dirty',
+      'sync_blob_cache',
+      'media_files',
+    ];
+    for (const storeName of clearedStores) {
+      await this.backend.clear(storeName);
+    }
+
+    const preservedSyncKeys = new Set([
+      'device_id',
+      'custom_supabase_url',
+      'mobile_locale',
+      'appearance_config_json',
+      'pref_biometric_vault',
+    ]);
+    for (const key of Array.from(this.syncStateMap.keys())) {
+      if (!preservedSyncKeys.has(key)) {
+        await this.deleteSyncState(key);
+      }
+    }
+
+    const preservedSecureKeys = new Set(['custom_supabase_key']);
+    for (const key of Array.from(this.secureKvMap.keys())) {
+      if (!preservedSecureKeys.has(key)) {
+        await this.removeSecureValue(key);
+      }
+    }
+
+    this.localCrypto.resetForAccountWipe();
+    this.emitChange();
+  }
+
+  public retainMediaUrl(localName: string | null | undefined): void {
+    if (!localName || /^(?:https?:|data:|blob:)/i.test(localName)) return;
+    const safe = sanitizeMobileMediaFilename(localName);
+    if (!safe) return;
+    this.mediaRefCounts.set(safe, (this.mediaRefCounts.get(safe) ?? 0) + 1);
+  }
+
+  public releaseMediaUrl(localName: string | null | undefined): void {
+    if (!localName || /^(?:https?:|data:|blob:)/i.test(localName)) return;
+    const safe = sanitizeMobileMediaFilename(localName);
+    if (!safe) return;
+    const prev = this.mediaRefCounts.get(safe) ?? 0;
+    if (prev <= 1) {
+      this.mediaRefCounts.delete(safe);
+      if (this.mediaObjectUrlCache.size > 40) {
+        this.evictMediaLru();
+      }
+    } else {
+      this.mediaRefCounts.set(safe, prev - 1);
+    }
+  }
+
+  public getActiveMediaUrlRefCount(localName: string): number {
+    const safe = sanitizeMobileMediaFilename(localName);
+    return safe ? (this.mediaRefCounts.get(safe) ?? 0) : 0;
+  }
+
+  public getMediaObjectUrlCacheSize(): number {
+    return this.mediaObjectUrlCache.size;
+  }
+
   private evictMediaLru(): void {
     const MAX_CACHED_FILES = 24;
     while (this.mediaFilesMap.size > MAX_CACHED_FILES) {
@@ -1011,14 +1454,14 @@ export class MobileVaultStore {
       this.mediaFilesMap.delete(oldestKey);
     }
     const MAX_CACHED_URLS = 40;
-    while (this.mediaObjectUrlCache.size > MAX_CACHED_URLS) {
-      const oldestKey = this.mediaObjectUrlCache.keys().next().value;
-      if (!oldestKey) break;
-      const url = this.mediaObjectUrlCache.get(oldestKey);
+    if (this.mediaObjectUrlCache.size <= MAX_CACHED_URLS) return;
+    for (const [key, url] of Array.from(this.mediaObjectUrlCache.entries())) {
+      if (this.mediaObjectUrlCache.size <= MAX_CACHED_URLS) break;
+      if ((this.mediaRefCounts.get(key) ?? 0) > 0) continue;
       if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
         URL.revokeObjectURL(url);
       }
-      this.mediaObjectUrlCache.delete(oldestKey);
+      this.mediaObjectUrlCache.delete(key);
     }
   }
 
@@ -1120,6 +1563,29 @@ export class MobileVaultStore {
     }
   }
 
+  private createOrGetObjectUrlForFile(file: StoredMediaFile): string | null {
+    const safe = sanitizeMobileMediaFilename(file.localName) ?? file.localName;
+    const cached = this.mediaObjectUrlCache.get(safe);
+    if (cached) {
+      this.mediaObjectUrlCache.delete(safe);
+      this.mediaObjectUrlCache.set(safe, cached);
+      return cached;
+    }
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      return null;
+    }
+    const blobPart: BlobPart =
+      file.bytes.byteOffset === 0 &&
+      file.bytes.byteLength === file.bytes.buffer.byteLength &&
+      file.bytes.buffer instanceof ArrayBuffer
+        ? file.bytes.buffer
+        : file.bytes.slice().buffer;
+    const url = URL.createObjectURL(new Blob([blobPart], { type: file.mime }));
+    this.mediaObjectUrlCache.set(safe, url);
+    this.evictMediaLru();
+    return url;
+  }
+
   public getMediaObjectUrl(localName: string | null | undefined): string | null {
     if (!localName) return null;
     if (/^(?:https?:|data:|blob:)/i.test(localName)) return localName;
@@ -1132,15 +1598,8 @@ export class MobileVaultStore {
       return cached;
     }
     const file = this.getMediaFile(safe);
-    if (!file || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-      return null;
-    }
-    const copy = new Uint8Array(new ArrayBuffer(file.bytes.byteLength));
-    copy.set(file.bytes);
-    const url = URL.createObjectURL(new Blob([copy], { type: file.mime }));
-    this.mediaObjectUrlCache.set(safe, url);
-    this.evictMediaLru();
-    return url;
+    if (!file) return null;
+    return this.createOrGetObjectUrlForFile(file);
   }
 
   public async ensureMediaObjectUrl(localName: string | null | undefined): Promise<string | null> {
@@ -1150,7 +1609,7 @@ export class MobileVaultStore {
     if (syncHit) return syncHit;
     const loaded = await this.loadMediaFile(localName);
     if (!loaded) return null;
-    return this.getMediaObjectUrl(loaded.localName);
+    return this.createOrGetObjectUrlForFile(loaded);
   }
 
   public ensureMediaUrl(localName: string | null | undefined): Promise<string | null> {
@@ -1171,6 +1630,14 @@ export class MobileVaultStore {
     includeArchived?: boolean;
     includeSecrets?: boolean;
   }): VaultItem[] {
+    const cacheKey = `listItems:${this.dataVersion}:${Boolean(opts?.includeDeleted)}:${Boolean(
+      opts?.onlyDeleted
+    )}:${Boolean(opts?.includePurged)}:${Boolean(opts?.includeArchived)}:${
+      opts?.includeSecrets !== false
+    }`;
+    const cached = this.snapshotCache.get(cacheKey);
+    if (cached) return cached as VaultItem[];
+
     const out: VaultItem[] = [];
     this.itemsMap.forEach((raw) => {
       if (!opts?.includePurged && raw.purgedAt != null) return;
@@ -1183,13 +1650,14 @@ export class MobileVaultStore {
       if (opts?.includeSecrets === false && raw.dna === 'secret') return;
       out.push(this.toPublicItem(raw));
     });
-    if (opts?.onlyDeleted) {
-      return out.sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0));
-    }
-    return out.sort((a, b) => {
-      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-      return b.createdAt - a.createdAt;
-    });
+    const sorted = opts?.onlyDeleted
+      ? out.sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0))
+      : out.sort((a, b) => {
+          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+          return b.createdAt - a.createdAt;
+        });
+    this.snapshotCache.set(cacheKey, sorted);
+    return sorted;
   }
 
   public listTrashedItems(): VaultItem[] {
@@ -1197,13 +1665,19 @@ export class MobileVaultStore {
   }
 
   public listArchivedItems(): VaultItem[] {
+    const cacheKey = `listArchivedItems:${this.dataVersion}`;
+    const cached = this.snapshotCache.get(cacheKey);
+    if (cached) return cached as VaultItem[];
+
     const out: VaultItem[] = [];
     this.itemsMap.forEach((raw) => {
       if (raw.purgedAt != null || raw.deletedAt != null) return;
       if (!raw.isArchived) return;
       out.push(this.toPublicItem(raw));
     });
-    return out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    const sorted = out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    this.snapshotCache.set(cacheKey, sorted);
+    return sorted;
   }
 
   public getRawItem(id: string): StoredMobileItem | null {
@@ -1219,6 +1693,11 @@ export class MobileVaultStore {
   }
 
   public listOrbits(includeDeleted = false): OrbitDef[] {
+    const locale = this.getLocale();
+    const cacheKey = `listOrbits:${this.dataVersion}:${locale}:${includeDeleted}`;
+    const cached = this.snapshotCache.get(cacheKey);
+    if (cached) return cached as OrbitDef[];
+
     const counts = new Map<string, number>();
     this.itemsMap.forEach((it) => {
       if (it.deletedAt || it.purgedAt || it.isArchived) return;
@@ -1231,8 +1710,12 @@ export class MobileVaultStore {
       const { syncVersion: _sv, lastDeviceId: _ld, ...pub } = o;
       out.push({ ...pub, itemCount: counts.get(o.id) ?? 0 });
     });
-    const intl = getMobileIntlLocale(this.getLocale());
-    return out.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, intl));
+    const intl = getMobileIntlLocale(locale);
+    const sorted = out.sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, intl)
+    );
+    this.snapshotCache.set(cacheKey, sorted);
+    return sorted;
   }
 
   public getRawOrbit(id: string): StoredMobileOrbit | null {
@@ -1967,6 +2450,7 @@ export class MobileVaultStore {
       await this.clearDirtyKeyForce('item_revision', rk);
     }
 
+    await this.enqueuePendingBlobDeletes(mediaToClean, id);
     await this.deleteMediaFilesIfUnreferenced(mediaToClean, id);
     await this.markDirty('item', id);
     this.emitChange();
@@ -2007,13 +2491,20 @@ export class MobileVaultStore {
   // ==================== Vault Secrets (TOTP 2FA + Hardware Keystore) ====================
 
   public async upsertSecret(input: StructuredSecretInput): Promise<VaultItem> {
+    const locale = this.getLocale();
+    if (this.isVaultLocked()) {
+      throw new Error(tm('vaultCrypto.locked', undefined, locale));
+    }
     const existing = input.id ? this.itemsMap.get(input.id) : undefined;
     let existingDec: SecretPayload | null = null;
     if (existing?.encryptedSecretPayload) {
       try {
         existingDec = await this.localCrypto.decryptSecretPayload(existing.encryptedSecretPayload);
-      } catch {
-        existingDec = null;
+      } catch (err) {
+        if (err instanceof Error && err.message === tm('vaultCrypto.locked', undefined, locale)) {
+          throw err;
+        }
+        throw new Error(tm('vaultCrypto.pinReencryptErr', undefined, locale));
       }
     }
 
@@ -2021,7 +2512,6 @@ export class MobileVaultStore {
       typeof input.totpUriOrSecret === 'string' && input.totpUriOrSecret.trim()
         ? parseOtpAuthUri(input.totpUriOrSecret)
         : null;
-    const locale = this.getLocale();
     if (typeof input.totpUriOrSecret === 'string' && input.totpUriOrSecret.trim() && !parsedTotp) {
       throw new Error(tm('vault.totpParseError', undefined, locale));
     }
@@ -2171,6 +2661,9 @@ export class MobileVaultStore {
   }
 
   public async revealSecret(itemId: string): Promise<SecretPayload | null> {
+    if (this.isVaultLocked()) {
+      throw new Error(tm('vaultCrypto.locked', undefined, this.getLocale()));
+    }
     const raw = this.itemsMap.get(itemId);
     if (!raw || raw.deletedAt || raw.purgedAt || !raw.encryptedSecretPayload) return null;
     return this.localCrypto.decryptSecretPayload(raw.encryptedSecretPayload);
@@ -2736,7 +3229,7 @@ export class MobileVaultStore {
   }
 
   public async updateVaultTaskText(task: VaultTaskEntry, rawNextText: string): Promise<VaultItem | null> {
-    const nextText = rawNextText.trim();
+    const nextText = rawNextText.replace(/[\r\n]+/g, ' ').trim();
     if (!nextText) return null;
     const current = this.itemsMap.get(task.itemId);
     if (!current || current.deletedAt || current.purgedAt) return null;
@@ -2804,7 +3297,16 @@ export class MobileVaultStore {
       lines.splice(target.lineIndex, 1);
       const remainingBody = lines.join('\n').trim();
       const hasAttachments = Boolean(current.imagePath || current.mediaPath || current.url);
-      if (!remainingBody && !hasAttachments && parsed.length === 1) {
+      const hasCustomTitle =
+        Boolean(current.title.trim()) &&
+        !isUntitledPlaceholderTitle(current.title) &&
+        current.title.trim() !== task.text.trim();
+      const hasMetadata =
+        current.tags.length > 0 ||
+        current.remindAt != null ||
+        current.annotations.length > 0 ||
+        current.linksOut.length > 0;
+      if (!remainingBody && !hasAttachments && !hasCustomTitle && !hasMetadata && parsed.length === 1) {
         await this.deleteItem(current.id);
       } else {
         await this.updateItem(current.id, { body: remainingBody });
@@ -2826,6 +3328,67 @@ export class MobileVaultStore {
   }
 
   // ==================== Incoming Sync Apply (Deterministic LWW + Purge + Conflict Revisions) ====================
+
+  public getEntitySyncStamp(
+    entityType: SyncEntityType | string,
+    entityId: string
+  ): { updatedAt: number; syncVersion: number; deletedAt: number | null } | null {
+    if (entityType === 'item') {
+      const row = this.itemsMap.get(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.purgedAt ?? row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'orbit') {
+      const row = this.orbitsMap.get(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt ?? row.createdAt ?? 0,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'focus_board') {
+      const row = this.boardsMap.get(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt ?? row.createdAt ?? 0,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'calendar_event') {
+      const row = this.calendarMap.get(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'item_revision') {
+      const row = this.revisionsMap.get(entityId);
+      if (!row) return null;
+      return {
+        updatedAt: row.updatedAt ?? row.createdAt,
+        syncVersion: row.syncVersion ?? 1,
+        deletedAt: row.deletedAt ?? null,
+      };
+    }
+    if (entityType === 'workspace_prefs') {
+      const updated = Number(this.getSyncState('workspace_prefs_updated_at') || '0') || 0;
+      if (updated <= 0) return null;
+      return {
+        updatedAt: updated,
+        syncVersion: Number(this.getSyncState('workspace_prefs_sync_version') || '1') || 1,
+        deletedAt: null,
+      };
+    }
+    return null;
+  }
 
   public async applySyncedOrbit(
     payload: SyncedOrbitPayload,
@@ -2867,6 +3430,7 @@ export class MobileVaultStore {
     this.orbitsMap.set(stored.id, stored);
     await this.backend.put('orbits', stored.id, stored);
     await this.clearDirtyKeyForce('orbit', stored.id);
+    this.bumpDataVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -2910,6 +3474,7 @@ export class MobileVaultStore {
     this.boardsMap.set(stored.id, stored);
     await this.backend.put('focus_boards', stored.id, stored);
     await this.clearDirtyKeyForce('focus_board', stored.id);
+    this.bumpDataVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -2936,6 +3501,21 @@ export class MobileVaultStore {
     if (cmp !== 'remote') {
       return { applied: false, localStrictlyNewer: cmp === 'local' };
     }
+    let safeExtSource = payload.externalSource;
+    let safeExtId = payload.externalId;
+    if (safeExtSource && safeExtId) {
+      for (const other of this.calendarMap.values()) {
+        if (
+          other.id !== payload.id &&
+          other.externalSource === safeExtSource &&
+          other.externalId === safeExtId
+        ) {
+          safeExtSource = null;
+          safeExtId = null;
+          break;
+        }
+      }
+    }
     const stored: StoredMobileCalendarEvent = {
       id: payload.id,
       title: payload.title,
@@ -2952,8 +3532,8 @@ export class MobileVaultStore {
       linkedItemId: payload.linkedItemId,
       checklist: payload.checklist ?? [],
       attachments: payload.attachments ?? [],
-      externalSource: payload.externalSource,
-      externalId: payload.externalId,
+      externalSource: safeExtSource,
+      externalId: safeExtId,
       etag: payload.etag,
       createdAt: payload.createdAt,
       updatedAt: payload.updatedAt,
@@ -2964,6 +3544,7 @@ export class MobileVaultStore {
     this.calendarMap.set(stored.id, stored);
     await this.backend.put('calendar_events', stored.id, stored);
     await this.clearDirtyKeyForce('calendar_event', stored.id);
+    this.bumpDataVersion();
     return { applied: true, localStrictlyNewer: false };
   }
 
@@ -3012,7 +3593,32 @@ export class MobileVaultStore {
     const forcePurgeWin = isRemotePurge && (!existing || existing.purgedAt == null);
 
     if (cmp !== 'remote' && !forcePurgeWin) {
-      // Preserve losing remote note body in item_revisions on live content conflict!
+      const remoteContentDiffers = Boolean(
+        existing &&
+          (existing.deletedAt != null ||
+            (payload.title ?? '') !== (existing.title ?? '') ||
+            (payload.body ?? '') !== (existing.body ?? '') ||
+            (payload.orbit ?? '') !== (existing.orbit ?? '') ||
+            (payload.remindAt ?? null) !== (existing.remindAt ?? null) ||
+            JSON.stringify(payload.tags ?? []) !== JSON.stringify(existing.tags ?? []) ||
+            (payload.mediaMeta?.transcript ?? '') !== (existing.mediaMeta?.transcript ?? '') ||
+            JSON.stringify(payload.extractedActions ?? []) !==
+              JSON.stringify(existing.extractedActions ?? []))
+      );
+      const remoteTextChangedOrRestored = Boolean(
+        existing &&
+          (existing.deletedAt != null ||
+            (payload.title ?? '') !== (existing.title ?? '') ||
+            (payload.body ?? '') !== (existing.body ?? ''))
+      );
+      const remoteRevHash = computeLightContentHash([payload.title ?? '', payload.body ?? '']);
+      const alreadyInRevisions = Boolean(
+        existing &&
+          Array.from(this.revisionsMap.values()).some(
+            (r) => r.itemId === existing.id && !r.deletedAt && r.contentHash === remoteRevHash
+          )
+      );
+      // Preserve losing remote live edit in item_revisions (source = 'sync_conflict') if its text wasn't already captured
       if (
         cmp === 'local' &&
         existing &&
@@ -3020,8 +3626,10 @@ export class MobileVaultStore {
         !existing.purgedAt &&
         !effectiveRemoteDeletedAt &&
         !isRemotePurge &&
-        (payload.body || '').trim() &&
-        (existing.deletedAt != null || (payload.body || '').trim() !== existing.body.trim())
+        ((payload.body || '').trim().length > 0 || (payload.title || '').trim().length > 0) &&
+        remoteContentDiffers &&
+        remoteTextChangedOrRestored &&
+        !alreadyInRevisions
       ) {
         await this.saveItemRevision(existing.id, 'sync_conflict', {
           title: payload.title,
@@ -3095,6 +3703,7 @@ export class MobileVaultStore {
       await this.backend.put('items', purged.id, purged);
       await this.clearDirtyKeyForce('item', purged.id);
       if (mediaToClean.length > 0) {
+        await this.enqueuePendingBlobDeletes(mediaToClean, purged.id);
         await this.deleteMediaFilesIfUnreferenced(mediaToClean, purged.id);
       }
       const revIds: string[] = [];
@@ -3109,21 +3718,73 @@ export class MobileVaultStore {
       return { applied: true, localStrictlyNewer: false, item: null };
     }
 
-    // Preserve losing local note text on LWW overwrite conflict (non-secret)
+    // Preserve losing local edit / secret payload on LWW overwrite conflict
+    const localContentDiffers = Boolean(
+      existing &&
+        (effectiveRemoteDeletedAt != null ||
+          (payload.title ?? '') !== (existing.title ?? '') ||
+          (payload.body ?? '') !== (existing.body ?? '') ||
+          (payload.orbit ?? '') !== (existing.orbit ?? '') ||
+          (payload.remindAt ?? null) !== (existing.remindAt ?? null) ||
+          JSON.stringify(payload.tags ?? []) !== JSON.stringify(existing.tags ?? []) ||
+          (payload.mediaMeta?.transcript ?? '') !== (existing.mediaMeta?.transcript ?? '') ||
+          JSON.stringify(payload.extractedActions ?? []) !==
+            JSON.stringify(existing.extractedActions ?? []))
+    );
+    const isConcurrentLocalEdit = Boolean(
+      existing &&
+        (this.dirtyMap.has(`item:${existing.id}`) ||
+          (existing.lastDeviceId === localDeviceId && remoteDeviceId !== localDeviceId))
+    );
     if (
       existing &&
       existing.dna !== 'secret' &&
       !existing.deletedAt &&
       !existing.purgedAt &&
-      existing.body.trim() &&
-      (effectiveRemoteDeletedAt != null || existing.body.trim() !== (payload.body || '').trim()) &&
-      (this.dirtyMap.has(`item:${existing.id}`) || existing.lastDeviceId === localDeviceId)
+      (existing.body.trim().length > 0 || existing.title.trim().length > 0) &&
+      localContentDiffers &&
+      isConcurrentLocalEdit
     ) {
       await this.saveItemRevision(existing.id, 'sync_conflict', {
         title: existing.title,
         content: existing.body,
         deviceName: this.deviceNameLabel,
       });
+    } else if (
+      existing &&
+      existing.dna === 'secret' &&
+      !existing.deletedAt &&
+      !existing.purgedAt &&
+      existing.encryptedSecretPayload &&
+      localEncryptedSecret &&
+      existing.encryptedSecretPayload !== localEncryptedSecret &&
+      isConcurrentLocalEdit
+    ) {
+      const conflictId = generateUuid();
+      const conflictTitle = tm(
+        'sync.secretConflictCopy',
+        { title: existing.title || 'Secret' },
+        this.getLocale()
+      ).slice(0, 140);
+      const nowCopy = Date.now();
+      const conflictCopy: StoredMobileItem = {
+        ...existing,
+        id: conflictId,
+        title: conflictTitle,
+        tags: [...existing.tags],
+        source: 'sync_conflict' as ItemSource,
+        contentHash: `conflict:${existing.id}:${existing.syncVersion}:${nowCopy}`,
+        createdAt: nowCopy,
+        updatedAt: nowCopy,
+        contentUpdatedAt: nowCopy,
+        deletedAt: null,
+        purgedAt: null,
+        syncVersion: 1,
+        lastDeviceId: localDeviceId,
+      };
+      this.itemsMap.set(conflictId, conflictCopy);
+      await this.backend.put('items', conflictId, conflictCopy);
+      await this.markDirty('item', conflictId, true);
     }
 
     // On reversible soft-delete from remote, preserve local encrypted secret payload if remote omitted it
@@ -3186,6 +3847,7 @@ export class MobileVaultStore {
     this.itemsMap.set(stored.id, stored);
     await this.backend.put('items', stored.id, stored);
     await this.clearDirtyKeyForce('item', stored.id);
+    this.bumpDataVersion();
     return {
       applied: true,
       localStrictlyNewer: false,

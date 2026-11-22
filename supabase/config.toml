@@ -1,0 +1,8 @@
+[functions.ai-proxy]
+verify_jwt = false
+
+[functions.gcal-oauth]
+verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = false

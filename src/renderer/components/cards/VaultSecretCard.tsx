@@ -13,9 +13,10 @@ import {
   User,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
-import type { SecretCopyField, SecretPayload, TotpCodeSnapshot, VaultItem } from '@shared/types';
+import type { SecretCopyField, SecretPayload, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { formatCardPanGroups } from '../../lib/format';
+import { useTotpSnapshot } from '../../lib/totp-ticker';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { SecretMorphField } from '../ui/SecretMorphField';
 
@@ -92,7 +93,7 @@ const TotpCountdownRing: React.FC<TotpCountdownRingProps> = ({
   );
 };
 
-export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
+export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
   item,
   compactList = false,
   vaultLocked,
@@ -105,7 +106,6 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
   const [revealed, setRevealed] = useState(false);
   const [payload, setPayload] = useState<SecretPayload | null>(null);
   const [loadingReveal, setLoadingReveal] = useState(false);
-  const [totpSnap, setTotpSnap] = useState<TotpCodeSnapshot | null>(null);
   const [totpCopied, setTotpCopied] = useState(false);
 
   const meta = item.secretMeta;
@@ -117,7 +117,6 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
     if (vaultLocked || isTrashed) {
       setRevealed(false);
       setPayload(null);
-      setTotpSnap(null);
     }
   }, [vaultLocked, isTrashed]);
 
@@ -127,29 +126,11 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
   }, [item.id, item.updatedAt, item.contentUpdatedAt]);
 
   const effectiveRevealed = revealed && !vaultLocked && !isTrashed;
-
-  // Live 1s polling for 2FA TOTP code when secret has TOTP and vault is unlocked (never in Trash)
-  useEffect(() => {
-    if (!hasTotp || vaultLocked || isTrashed) {
-      setTotpSnap(null);
-      return;
-    }
-    let cancelled = false;
-    const poll = () => {
-      window.kapsula
-        .getTotpCode(item.id)
-        .then((snap) => {
-          if (!cancelled) setTotpSnap(snap);
-        })
-        .catch(() => {});
-    };
-    poll();
-    const timer = window.setInterval(poll, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [item.id, hasTotp, vaultLocked, isTrashed, item.updatedAt]);
+  const totpSnap = useTotpSnapshot(
+    item.id,
+    hasTotp && !vaultLocked && !isTrashed,
+    item.updatedAt
+  );
 
   const handleToggleReveal = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -734,4 +715,4 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = ({
       </div>
     </div>
   );
-};
+});

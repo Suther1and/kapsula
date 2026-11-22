@@ -66,6 +66,34 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       }
     };
 
+    let cachedFontSize = 15;
+    const refreshFontSize = () => {
+      try {
+        cachedFontSize = parseFloat(window.getComputedStyle(viewDom).fontSize) || 15;
+      } catch {
+        cachedFontSize = 15;
+      }
+    };
+    refreshFontSize();
+
+    const findScrollAncestors = (start: HTMLElement): HTMLElement[] => {
+      const list: HTMLElement[] = [start];
+      let cur: HTMLElement | null = start.parentElement;
+      while (cur) {
+        try {
+          const style = window.getComputedStyle(cur);
+          if (/(?:auto|scroll|overlay)/.test(`${style.overflowY} ${style.overflowX}`)) {
+            list.push(cur);
+          }
+        } catch {
+          // ignore
+        }
+        cur = cur.parentElement;
+      }
+      return list;
+    };
+    const scrollTargets = findScrollAncestors(containerEl);
+
     const scheduleBlinkResume = () => {
       setBlinking(false);
       clearBlinkTimer();
@@ -147,8 +175,7 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       const offsetX = computeOpticalOffsetX(charBefore, charAfter);
 
       const rawHeight = coords.bottom - coords.top;
-      const fallbackFontSize = parseFloat(window.getComputedStyle(view.dom).fontSize) || 15;
-      const height = Math.max(16, Math.round(rawHeight > 4 ? rawHeight : fallbackFontSize * 1.25));
+      const height = Math.max(16, Math.round(rawHeight > 4 ? rawHeight : cachedFontSize * 1.25));
 
       const rawX =
         coords.left - hostRect.left - containerEl.clientLeft + containerEl.scrollLeft + offsetX;
@@ -225,6 +252,11 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       scheduleRafCompute(false);
     };
 
+    const onResizeLayout = () => {
+      refreshFontSize();
+      scheduleRafCompute(false);
+    };
+
     const onCompositionStart = () => {
       isComposingRef.current = true;
       clearBlinkTimer();
@@ -246,11 +278,13 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
 
     viewDom.addEventListener('compositionstart', onCompositionStart);
     viewDom.addEventListener('compositionend', onCompositionEnd);
-    window.addEventListener('resize', onLayout);
-    window.addEventListener('scroll', onLayout, true);
+    window.addEventListener('resize', onResizeLayout);
+    for (const target of scrollTargets) {
+      target.addEventListener('scroll', onLayout, { passive: true });
+    }
 
     const resizeObserver =
-      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onLayout) : null;
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResizeLayout) : null;
     resizeObserver?.observe(containerEl);
     resizeObserver?.observe(viewDom);
 
@@ -272,8 +306,10 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       editor.off('blur', onBlur);
       viewDom?.removeEventListener('compositionstart', onCompositionStart);
       viewDom?.removeEventListener('compositionend', onCompositionEnd);
-      window.removeEventListener('resize', onLayout);
-      window.removeEventListener('scroll', onLayout, true);
+      window.removeEventListener('resize', onResizeLayout);
+      for (const target of scrollTargets) {
+        target.removeEventListener('scroll', onLayout);
+      }
       resizeObserver?.disconnect();
     };
   }, [editor, containerEl]);
