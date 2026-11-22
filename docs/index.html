@@ -10,13 +10,13 @@
   <meta property="og:site_name" content="Kapsula" />
   <meta property="og:url" content="https://suther1and.github.io/kapsula/" />
   <meta property="og:title" content="Kapsula — Notes, links, tasks, and encrypted vault" />
-  <meta property="og:description" content="Instant capture with Ctrl+Space, rich link extraction, task boards, 2FA Vault, and end-to-end encrypted sync on Windows, macOS, and Android." />
+  <meta property="og:description" content="Instant capture with Alt+Space / ⌥+Space, rich link extraction, task boards, 2FA Vault, and end-to-end encrypted sync on Windows, macOS, and Android." />
   <meta property="og:image" content="https://suther1and.github.io/kapsula/assets/theme-terracotta-en-dark.png?v=1.0.4" />
   <meta property="og:image:width" content="1792" />
   <meta property="og:image:height" content="1120" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Kapsula — Notes, links, tasks, and encrypted vault" />
-  <meta name="twitter:description" content="Instant capture with Ctrl+Space, rich link extraction, task boards, 2FA Vault, and end-to-end encrypted sync on Windows, macOS, and Android." />
+  <meta name="twitter:description" content="Instant capture with Alt+Space / ⌥+Space, rich link extraction, task boards, 2FA Vault, and end-to-end encrypted sync on Windows, macOS, and Android." />
   <meta name="twitter:image" content="https://suther1and.github.io/kapsula/assets/theme-terracotta-en-dark.png?v=1.0.4" />
   <link rel="icon" type="image/png" href="assets/kapsula-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -100,7 +100,7 @@ Direction Contract:
         <div class="hero-copy">
           <h1 data-i18n="hero.title">Notes, links, and secrets — held in one place</h1>
           <p class="hero-lead" data-i18n-html="hero.lead">
-            Press <kbd>Ctrl+Space</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.
+            Press <kbd>Alt+Space</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.
           </p>
 
           <div class="hero-actions">
@@ -113,7 +113,7 @@ Direction Contract:
           <p class="hero-meta" id="hero-meta-line">
             <span id="release-version">v1.0.4</span>
             <span class="meta-sep" aria-hidden="true">·</span>
-            <span data-i18n="hero.metaPlatforms">Windows, macOS &amp; Android</span>
+            <a class="meta-platforms-link" href="#download" data-i18n="hero.metaPlatforms">Windows, macOS &amp; Android</a>
             <span class="meta-sep" id="hero-file-sep" aria-hidden="true">·</span>
             <code class="meta-file" id="hero-file-name">Kapsula-1.0.4-windows.exe</code>
           </p>
@@ -122,24 +122,24 @@ Direction Contract:
         <div class="hero-stage">
           <div class="stage-bar">
             <div class="view-tabs" role="tablist" aria-label="Workspace modes">
-              <button type="button" class="view-tab" id="hero-tab-feed" role="tab" aria-selected="true" aria-controls="hero-panel" tabindex="0" data-hero-shot="theme-terracotta" data-i18n="hero.tabFeed">Workspace</button>
-              <button type="button" class="view-tab" id="hero-tab-hud" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="hud-search" data-i18n="hero.tabHud">Quick HUD</button>
+              <button type="button" class="view-tab" id="hero-tab-hud" role="tab" aria-selected="true" aria-controls="hero-panel" tabindex="0" data-hero-shot="hud-search" data-i18n="hero.tabHud">Alt+Space</button>
+              <button type="button" class="view-tab" id="hero-tab-feed" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="theme-terracotta" data-i18n="hero.tabFeed">Workspace</button>
               <button type="button" class="view-tab" id="hero-tab-studio" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="note-studio" data-i18n="hero.tabStudio">Link Studio</button>
               <button type="button" class="view-tab" id="hero-tab-tasks" role="tab" aria-selected="false" aria-controls="hero-panel" tabindex="-1" data-hero-shot="tasks-kanban" data-i18n="hero.tabTasks">Task Board</button>
             </div>
           </div>
 
-          <div class="hero-stage-panel" id="hero-panel" role="tabpanel" aria-labelledby="hero-tab-feed">
+          <div class="hero-stage-panel" id="hero-panel" role="tabpanel" aria-labelledby="hero-tab-hud">
             <img
               id="hero-stage-img"
-              class="shot-surface hero-shot"
-              src="assets/theme-terracotta-en-dark.png"
-              alt="Kapsula desktop workspace"
+              class="shot-surface hero-shot is-hud"
+              src="assets/hud-search-en-dark.png"
+              alt="Kapsula Command HUD search launcher"
               loading="eager"
               decoding="async"
             />
           </div>
-          <span class="stage-note" id="hero-stage-note" data-i18n="hero.noteFeed">All notes, pinned items, and folders</span>
+          <span class="stage-note" id="hero-stage-note">Instant Alt+Space search across notes &amp; 2FA</span>
         </div>
       </div>
     </section>
@@ -185,7 +185,7 @@ Direction Contract:
           <article class="pillar">
             <h3 data-i18n="pillar1.title">Instant Command HUD</h3>
             <p data-i18n="pillar1.desc">
-              Pull up Ctrl+Space anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.
+              Pull up Alt+Space anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.
             </p>
           </article>
           <article class="pillar">
@@ -345,7 +345,7 @@ Direction Contract:
               Free desktop and Android installers with clean, human-readable filenames. Updates preserve your local vault.
             </p>
           </div>
-          <a class="release-link" href="https://github.com/Suther1and/kapsula/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer" data-i18n="dl.allReleases">
+          <a class="release-link" id="release-notes-link" href="https://github.com/Suther1and/kapsula/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer" data-i18n="dl.allReleases">
             Release notes on GitHub ↗
           </a>
         </div>
@@ -426,6 +426,17 @@ Direction Contract:
       </div>
     </div>
   </footer>
+
+  <div class="lightbox" id="shot-lightbox" role="dialog" aria-modal="true" aria-label="Screenshot preview" hidden>
+    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M18 6 6 18M6 6l12 12"/>
+      </svg>
+    </button>
+    <figure class="lightbox-figure" id="lightbox-figure">
+      <figcaption id="lightbox-caption"></figcaption>
+    </figure>
+  </div>
 
   <script src="app.js"></script>
 </body>

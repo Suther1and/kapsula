@@ -6,17 +6,17 @@
   const DOWNLOAD_BASE = 'https://github.com/Suther1and/kapsula/releases/download/v';
 
   const HERO_VIEWS = {
+    'hud-search': {
+      enNote: 'Instant {shortcut} search across notes & 2FA',
+      ruNote: 'Мгновенный поиск по\u00A0{shortcut} поверх окон',
+      enAlt: 'Kapsula Command HUD search launcher',
+      ruAlt: 'Быстрый поиск по\u00A0{shortcut} в\u00A0Kapsula',
+    },
     'theme-terracotta': {
       enNote: 'All notes, pinned items, and folders',
       ruNote: 'Лента заметок, закрепы и\u00A0разделы',
       enAlt: 'Kapsula desktop workspace',
       ruAlt: 'Рабочее пространство Kapsula на\u00A0компьютере',
-    },
-    'hud-search': {
-      enNote: 'Instant Ctrl+Space search across notes & 2FA',
-      ruNote: 'Мгновенный поиск по\u00A0Ctrl+Пробел поверх окон',
-      enAlt: 'Kapsula Command HUD search launcher',
-      ruAlt: 'Быстрый поиск по\u00A0Ctrl+Пробел в\u00A0Kapsula',
     },
     'note-studio': {
       enNote: 'Full post extraction from Telegram, YouTube, X & GitHub',
@@ -77,11 +77,11 @@
 
       'hero.title': 'Notes, links, and secrets — held in one place',
       'hero.lead':
-        'Press <kbd>Ctrl+Space</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.',
+        'Press <kbd>{shortcut}</kbd> in any app to save a note, unpack a link, or grab a 2FA code. Offline first, with end-to-end encrypted sync when you turn on cloud.',
       'hero.secondaryCta': 'Watch 30s walkthrough',
       'hero.metaPlatforms': 'Windows, macOS & Android',
       'hero.tabFeed': 'Workspace',
-      'hero.tabHud': 'Quick HUD',
+      'hero.tabHud': '{shortcut}',
       'hero.tabStudio': 'Link Studio',
       'hero.tabTasks': 'Task Board',
 
@@ -92,7 +92,7 @@
 
       'pillar1.title': 'Instant Command HUD',
       'pillar1.desc':
-        'Pull up Ctrl+Space anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.',
+        'Pull up {shortcut} anywhere to search notes, paste results, record voice memos, or copy 2FA codes without losing focus.',
       'pillar2.title': 'Clean Link & Task Extraction',
       'pillar2.desc':
         'Telegram posts, YouTube, X, and GitHub URLs keep full text, code blocks, and previews. Checklists flow into boards and Google Calendar.',
@@ -124,7 +124,7 @@
       'duo2.desc':
         'One-handed bottom bar on phones and an automatic two-pane workspace on Android foldables.',
 
-      'dl.title': 'Download Kapsula v1.0.4',
+      'dl.title': 'Download Kapsula v{version}',
       'dl.sub':
         'Free desktop and Android installers with clean, human-readable filenames. Updates preserve your local vault.',
       'dl.allReleases': 'Release notes on GitHub ↗',
@@ -140,7 +140,7 @@
       'dl.helpMac':
         '<strong>macOS:</strong> Drag Kapsula.app to Applications. If Gatekeeper blocks an unnotarized build, run once in Terminal: <code>xattr -cr /Applications/Kapsula.app</code>',
       'dl.helpAndroid':
-        '<strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v1.0.4.',
+        '<strong>Android:</strong> Allow app installs from your browser or file manager once. Signed with the persistent release key so later updates install directly over v{version}.',
 
       'footer.repo': 'GitHub',
       'footer.releases': 'Releases',
@@ -151,7 +151,7 @@
         'mac-arm': 'Download for macOS (Apple Silicon)',
         'mac-x64': 'Download for macOS (Intel)',
         android: 'Download Android APK',
-        fallback: 'Download Kapsula v1.0.4',
+        fallback: 'Download Kapsula v{version}',
       },
     },
     ru: {
@@ -167,11 +167,11 @@
 
       'hero.title': 'Заметки, ссылки и\u00A0пароли в\u00A0одном быстром окне',
       'hero.lead':
-        'Нажмите <kbd>Ctrl+Пробел</kbd> в\u00A0любой программе, чтобы записать мысль, разобрать ссылку или скопировать 2FA-код. Работает без сети, а\u00A0облако включается по желанию.',
+        'Нажмите <kbd>{shortcut}</kbd> в\u00A0любой программе, чтобы записать мысль, разобрать ссылку или скопировать 2FA-код. Работает без сети, а\u00A0облако включается по желанию.',
       'hero.secondaryCta': 'Ролик за 30\u00A0секунд',
       'hero.metaPlatforms': 'Windows, macOS и\u00A0Android',
       'hero.tabFeed': 'Лента',
-      'hero.tabHud': 'Ctrl+Пробел',
+      'hero.tabHud': '{shortcut}',
       'hero.tabStudio': 'Редактор',
       'hero.tabTasks': 'Задачи',
 
@@ -182,7 +182,7 @@
 
       'pillar1.title': 'Панель поверх всех окон',
       'pillar1.desc':
-        'Вызывайте поиск по Ctrl+Пробел из любой программы: находите заметки, диктуйте голосом или копируйте коды подтверждения без смены окна.',
+        'Вызывайте поиск по {shortcut} из любой программы: находите заметки, диктуйте голосом или копируйте коды подтверждения без смены окна.',
       'pillar2.title': 'Глубокий разбор ссылок и\u00A0дел',
       'pillar2.desc':
         'Посты из Телеграма, YouTube, X и\u00A0GitHub сохраняются с\u00A0текстом, кодом и\u00A0обложкой. Чеклисты сами уходят на доску и\u00A0в\u00A0Google Календарь.',
@@ -214,7 +214,7 @@
       'duo2.desc':
         'Нижняя панель под большой палец на смартфонах и\u00A0широкий двухпанельный режим на Android Fold.',
 
-      'dl.title': 'Скачать Kapsula v1.0.4',
+      'dl.title': 'Скачать Kapsula v{version}',
       'dl.sub':
         'Готовые установщики под Windows, macOS и\u00A0Android. Обновления сохраняют все локальные записи и\u00A0сейф.',
       'dl.allReleases': 'История версий на GitHub ↗',
@@ -230,7 +230,7 @@
       'dl.helpMac':
         '<strong>macOS:</strong> перетащите Kapsula.app в\u00A0Программы. Если система не открывает ненотаризованную сборку, выполните в\u00A0Терминале: <code>xattr -cr /Applications/Kapsula.app</code>',
       'dl.helpAndroid':
-        '<strong>Android:</strong> при первом запуске разрешите установку из браузера или проводника. Релизный APK подписан постоянным ключом — будущие обновления встанут поверх без потери базы.',
+        '<strong>Android:</strong> при первом запуске разрешите установку из браузера или проводника. Релизный APK подписан постоянным ключом — будущие обновления встанут поверх v{version} без потери базы.',
 
       'footer.repo': 'GitHub',
       'footer.releases': 'Релизы',
@@ -241,7 +241,7 @@
         'mac-arm': 'Скачать для macOS (Apple Silicon)',
         'mac-x64': 'Скачать для macOS (Intel)',
         android: 'Скачать APK для Android',
-        fallback: 'Скачать Kapsula v1.0.4',
+        fallback: 'Скачать Kapsula v{version}',
       },
     },
   };
@@ -275,7 +275,8 @@
     lang: getInitialLang(),
     theme: initialTheme,
     accent: initialAccent,
-    heroShot: 'theme-terracotta',
+    version: DEFAULT_VERSION,
+    heroShot: 'hud-search',
     bandAccent: getInitialBandAccent(initialAccent),
     bandTheme: initialTheme === 'dark' ? 'light' : 'dark',
     bandView: 'workspace',
@@ -313,6 +314,142 @@
     return null;
   }
 
+  function isMacPlatform() {
+    const p = detectPlatform();
+    return p === 'mac-arm' || p === 'mac-x64';
+  }
+
+  function getHudShortcut(lang = state.lang) {
+    if (lang === 'ru') return isMacPlatform() ? '⌥+Пробел' : 'Alt+Пробел';
+    return isMacPlatform() ? '⌥+Space' : 'Alt+Space';
+  }
+
+  function formatCopy(str) {
+    return String(str || '')
+      .replace(/\{shortcut\}/g, getHudShortcut(state.lang))
+      .replace(/\{version\}/g, state.version);
+  }
+
+  const preloadCache = new Map();
+  const swapTokens = Object.create(null);
+
+  function preloadImage(src) {
+    if (!src) return Promise.resolve();
+    if (preloadCache.has(src)) return preloadCache.get(src);
+    const p = new Promise((resolve) => {
+      const loader = new Image();
+      const done = () => resolve();
+      loader.onload = () => {
+        if (typeof loader.decode === 'function') {
+          loader.decode().then(done, done);
+        } else {
+          done();
+        }
+      };
+      loader.onerror = done;
+      loader.src = src;
+    });
+    preloadCache.set(src, p);
+    return p;
+  }
+
+  function swapImageSmooth(imgEl, nextSrc, nextAlt, tokenKey, opts = {}) {
+    if (!imgEl) return;
+    const isHud = Boolean(opts.isHud);
+    const useTransition = Boolean(opts.animate && imgEl.dataset.initialized === '1');
+    const prevAttrSrc = imgEl.getAttribute('src') || '';
+
+    if (!useTransition || prevAttrSrc === nextSrc) {
+      imgEl.src = nextSrc;
+      if (nextAlt) imgEl.alt = nextAlt;
+      if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
+      imgEl.dataset.initialized = '1';
+      return;
+    }
+
+    const token = (swapTokens[tokenKey] || 0) + 1;
+    swapTokens[tokenKey] = token;
+
+    preloadImage(nextSrc).then(() => {
+      if (swapTokens[tokenKey] !== token) return;
+      const parent = imgEl.parentElement;
+      if (!parent) {
+        imgEl.src = nextSrc;
+        if (nextAlt) imgEl.alt = nextAlt;
+        if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
+        return;
+      }
+
+      parent.querySelectorAll('.swap-overlay').forEach((n) => n.remove());
+
+      const isHeroShot = imgEl.classList.contains('hero-shot');
+      const overlay = document.createElement('img');
+      overlay.className = 'shot-surface swap-overlay';
+      if (imgEl.classList.contains('contrast-shot')) overlay.classList.add('contrast-shot');
+      if (isHeroShot) overlay.classList.add('hero-shot');
+      if ('isHud' in opts) overlay.classList.toggle('is-hud', isHud);
+      overlay.src = nextSrc;
+      overlay.alt = '';
+      overlay.setAttribute('aria-hidden', 'true');
+
+      if (isHeroShot) {
+        overlay.style.inset = '0';
+        overlay.style.margin = 'auto';
+      } else {
+        overlay.style.left = `${imgEl.offsetLeft}px`;
+        overlay.style.top = `${imgEl.offsetTop}px`;
+        overlay.style.width = `${imgEl.offsetWidth}px`;
+        overlay.style.height = `${imgEl.offsetHeight}px`;
+      }
+
+      parent.appendChild(overlay);
+      const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduced) {
+        void overlay.offsetWidth;
+        overlay.style.opacity = '1';
+        if (isHeroShot) imgEl.style.opacity = '0';
+      }
+
+      const finish = () => {
+        if (swapTokens[tokenKey] !== token) {
+          if (isHeroShot) imgEl.style.opacity = '';
+          overlay.remove();
+          return;
+        }
+        if (isHeroShot) {
+          imgEl.style.transition = 'none';
+          imgEl.style.opacity = '';
+        }
+        imgEl.src = nextSrc;
+        if (nextAlt) imgEl.alt = nextAlt;
+        if ('isHud' in opts) imgEl.classList.toggle('is-hud', isHud);
+        requestAnimationFrame(() => {
+          if (isHeroShot) imgEl.style.transition = '';
+          overlay.remove();
+        });
+      };
+
+      if (reduced) finish();
+      else setTimeout(finish, 190);
+    });
+  }
+
+  function preloadInteractiveShots() {
+    const urls = [
+      shotPath('hud-search'),
+      shotPath('theme-terracotta'),
+      shotPath('note-studio'),
+      shotPath('tasks-kanban'),
+      shotPath('settings-appearance', state.lang, state.bandTheme),
+    ];
+    Object.keys(ACCENT_META).forEach((acc) => {
+      urls.push(shotPath(`theme-${acc}`, state.lang, state.bandTheme));
+    });
+    urls.forEach((u) => {
+      preloadImage(u);
+    });
+  }
+
   function compareSemver(a, b) {
     const pa = String(a || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
     const pb = String(b || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -339,7 +476,8 @@
       heroBtn.setAttribute('href', (cardLink && cardLink.getAttribute('href')) || '#download');
     }
     if (heroLabel) {
-      heroLabel.textContent = (platform && I18N[state.lang].cta[platform]) || I18N[state.lang].cta.fallback;
+      const rawLabel = (platform && I18N[state.lang].cta[platform]) || I18N[state.lang].cta.fallback;
+      heroLabel.textContent = formatCopy(rawLabel);
     }
     if (heroFile && heroFileSep) {
       if (platform && state.filenames[platform]) {
@@ -353,18 +491,22 @@
     }
   }
 
-  function applyHeroStage() {
-    const view = HERO_VIEWS[state.heroShot] || HERO_VIEWS['theme-terracotta'];
+  function applyHeroStage(animate = false) {
+    const view = HERO_VIEWS[state.heroShot] || HERO_VIEWS['hud-search'];
     const img = document.getElementById('hero-stage-img');
     const note = document.getElementById('hero-stage-note');
     const panel = document.getElementById('hero-panel');
 
     if (img) {
-      img.src = shotPath(state.heroShot);
-      img.alt = state.lang === 'ru' ? view.ruAlt : view.enAlt;
+      const nextSrc = shotPath(state.heroShot);
+      const nextAlt = formatCopy(state.lang === 'ru' ? view.ruAlt : view.enAlt);
+      swapImageSmooth(img, nextSrc, nextAlt, 'hero', {
+        animate,
+        isHud: state.heroShot === 'hud-search',
+      });
     }
     if (note) {
-      note.textContent = state.lang === 'ru' ? view.ruNote : view.enNote;
+      note.textContent = formatCopy(state.lang === 'ru' ? view.ruNote : view.enNote);
     }
     document.querySelectorAll('[data-hero-shot]').forEach((btn) => {
       const isSelected = btn.dataset.heroShot === state.heroShot;
@@ -376,7 +518,7 @@
     });
   }
 
-  function applyThemesBand() {
+  function applyThemesBand(animate = false) {
     const meta = ACCENT_META[state.bandAccent] || ACCENT_META.emerald;
     const img = document.getElementById('theme-preview-img');
     const cap = document.getElementById('theme-stage-caption');
@@ -384,7 +526,7 @@
 
     const base = state.bandView === 'settings' ? 'settings-appearance' : `theme-${state.bandAccent}`;
     if (img) {
-      img.src = shotPath(base, state.lang, state.bandTheme);
+      swapImageSmooth(img, shotPath(base, state.lang, state.bandTheme), img.alt, 'themes', { animate });
     }
     if (cap) {
       cap.textContent = state.lang === 'ru' ? meta.ruDesc : meta.enDesc;
@@ -405,9 +547,9 @@
     });
   }
 
-  function applyAllLocalizedShots() {
-    applyHeroStage();
-    applyThemesBand();
+  function applyAllLocalizedShots(animate = false) {
+    applyHeroStage(animate);
+    applyThemesBand(animate);
     document.querySelectorAll('img[data-shot-base]').forEach((img) => {
       const base = img.dataset.shotBase;
       if (base) img.src = shotPath(base);
@@ -465,14 +607,14 @@
     document.querySelectorAll('[data-i18n]').forEach((el) => {
       const key = el.dataset.i18n;
       if (key && typeof dict[key] === 'string') {
-        el.textContent = dict[key];
+        el.textContent = formatCopy(dict[key]);
       }
     });
 
     document.querySelectorAll('[data-i18n-html]').forEach((el) => {
       const key = el.dataset.i18nHtml;
       if (key && typeof dict[key] === 'string') {
-        el.innerHTML = dict[key];
+        el.innerHTML = formatCopy(dict[key]);
       }
     });
 
@@ -488,8 +630,17 @@
       );
     }
 
+    const lb = document.getElementById('shot-lightbox');
+    const lbClose = document.getElementById('lightbox-close');
+    if (lb) {
+      lb.setAttribute('aria-label', state.lang === 'ru' ? 'Просмотр скриншота' : 'Screenshot preview');
+    }
+    if (lbClose) {
+      lbClose.setAttribute('aria-label', state.lang === 'ru' ? 'Закрыть' : 'Close');
+    }
+
     updateDownloadsAndPlatform();
-    applyAllLocalizedShots();
+    applyAllLocalizedShots(false);
     applyVideoLocale();
   }
 
@@ -509,7 +660,8 @@
         localStorage.setItem('kapsula-docs-theme', state.theme);
       } catch (e) {}
     }
-    applyAllLocalizedShots();
+    applyAllLocalizedShots(Boolean(persist));
+    setTimeout(preloadInteractiveShots, 200);
   }
 
   function applyGlobalAccent(accent, persist = true) {
@@ -522,10 +674,120 @@
     }
   }
 
+  function getCaptionForShot(img) {
+    if (!img) return '';
+    if (img.id === 'hero-stage-img') {
+      return document.getElementById('hero-stage-note')?.textContent || img.alt || '';
+    }
+    if (img.id === 'theme-preview-img') {
+      return document.getElementById('theme-stage-caption')?.textContent || img.alt || '';
+    }
+    const fig = img.closest('figure');
+    const strong = fig ? fig.querySelector('figcaption strong') : null;
+    if (strong && strong.textContent) return strong.textContent;
+    if (img.classList.contains('sync-desktop-img') || img.classList.contains('sync-mobile-img')) {
+      return document.querySelector('#sync h2')?.textContent || img.alt || '';
+    }
+    return img.alt || '';
+  }
+
+  function initLightbox() {
+    const lightbox = document.getElementById('shot-lightbox');
+    const lbFigure = document.getElementById('lightbox-figure');
+    const lbCap = document.getElementById('lightbox-caption');
+    const lbClose = document.getElementById('lightbox-close');
+    if (!lightbox || !lbFigure || !lbCap || !lbClose) return;
+
+    let lastTrigger = null;
+    let hideTimer = null;
+    let activeImg = null;
+
+    const closeLightbox = () => {
+      if (lightbox.hidden) return;
+      lightbox.classList.remove('is-open');
+      document.documentElement.style.overflow = '';
+      const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const finishHide = () => {
+        lightbox.hidden = true;
+        if (activeImg) {
+          activeImg.remove();
+          activeImg = null;
+        }
+        if (lastTrigger && typeof lastTrigger.focus === 'function') {
+          lastTrigger.focus({ preventScroll: true });
+        }
+        lastTrigger = null;
+      };
+      if (reduced) finishHide();
+      else hideTimer = setTimeout(finishHide, 170);
+    };
+
+    const openLightbox = (img) => {
+      const src = img.currentSrc || img.getAttribute('src');
+      if (!src) return;
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      if (activeImg) {
+        activeImg.remove();
+        activeImg = null;
+      }
+      lastTrigger = img;
+      const lbImg = document.createElement('img');
+      lbImg.id = 'lightbox-img';
+      lbImg.src = src;
+      lbImg.alt = img.alt || '';
+      lbImg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeLightbox();
+      });
+      activeImg = lbImg;
+      lbFigure.insertBefore(lbImg, lbCap);
+      lbCap.textContent = getCaptionForShot(img);
+      lightbox.hidden = false;
+      document.documentElement.style.overflow = 'hidden';
+      requestAnimationFrame(() => {
+        lightbox.classList.add('is-open');
+        lbClose.focus({ preventScroll: true });
+      });
+    };
+
+    document.querySelectorAll('.shot-surface').forEach((img) => {
+      if (img.classList.contains('swap-overlay')) return;
+      img.setAttribute('data-zoomable', 'true');
+      img.setAttribute('tabindex', '0');
+      img.setAttribute('role', 'button');
+      img.addEventListener('click', () => openLightbox(img));
+      img.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openLightbox(img);
+        }
+      });
+    });
+
+    lbClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeLightbox();
+    });
+    lightbox.addEventListener('click', (e) => {
+      if (e.target === lightbox || e.target === lbFigure) closeLightbox();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !lightbox.hidden) {
+        closeLightbox();
+      }
+    });
+  }
+
   function bindEvents() {
     document.querySelectorAll('.lang-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (btn.dataset.lang) applyLanguage(btn.dataset.lang, true);
+        if (btn.dataset.lang) {
+          applyLanguage(btn.dataset.lang, true);
+          setTimeout(preloadInteractiveShots, 200);
+        }
       });
     });
 
@@ -541,7 +803,7 @@
       btn.addEventListener('click', () => {
         if (btn.dataset.heroShot) {
           state.heroShot = btn.dataset.heroShot;
-          applyHeroStage();
+          applyHeroStage(true);
         }
       });
       btn.addEventListener('keydown', (e) => {
@@ -555,7 +817,7 @@
           const target = heroTabs[nextIndex];
           if (target && target.dataset.heroShot) {
             state.heroShot = target.dataset.heroShot;
-            applyHeroStage();
+            applyHeroStage(true);
             target.focus();
           }
         }
@@ -569,7 +831,7 @@
         state.bandAccent = accent;
         state.bandView = 'workspace';
         applyGlobalAccent(accent, true);
-        applyThemesBand();
+        applyThemesBand(true);
       });
     });
 
@@ -577,7 +839,8 @@
       btn.addEventListener('click', () => {
         if (btn.dataset.bandMode) {
           state.bandTheme = btn.dataset.bandMode === 'dark' ? 'dark' : 'light';
-          applyThemesBand();
+          applyThemesBand(true);
+          setTimeout(preloadInteractiveShots, 150);
         }
       });
     });
@@ -586,7 +849,7 @@
       btn.addEventListener('click', () => {
         if (btn.dataset.themeView) {
           state.bandView = btn.dataset.themeView === 'settings' ? 'settings' : 'workspace';
-          applyThemesBand();
+          applyThemesBand(true);
         }
       });
     });
@@ -618,6 +881,8 @@
         frame.setAttribute('data-playing', 'false');
       });
     }
+
+    initLightbox();
   }
 
   async function hydrateLatestRelease() {
@@ -656,10 +921,16 @@
         },
       };
 
+      state.version = ver;
+
       const vPill = document.getElementById('release-version');
       const vFooter = document.getElementById('footer-version');
+      const relNotesLink = document.getElementById('release-notes-link');
       if (vPill) vPill.textContent = `v${ver}`;
       if (vFooter) vFooter.textContent = `v${ver}`;
+      if (relNotesLink) {
+        relNotesLink.setAttribute('href', rel.html_url || `https://github.com/Suther1and/kapsula/releases/tag/v${ver}`);
+      }
 
       Object.keys(resolved).forEach((key) => {
         state.filenames[key] = resolved[key].name;
@@ -668,7 +939,8 @@
         const label = document.querySelector(`[data-file-label="${key}"]`);
         if (label) label.textContent = resolved[key].name;
       });
-      updateDownloadsAndPlatform();
+
+      applyLanguage(state.lang, false);
     } catch (e) {}
   }
 
@@ -676,5 +948,6 @@
   applyGlobalAccent(state.accent, false);
   applyLanguage(state.lang, false);
   bindEvents();
+  setTimeout(preloadInteractiveShots, 400);
   hydrateLatestRelease();
 })();

@@ -21,7 +21,7 @@
 
 > Jump to: **[Installers v1.0.4](#download-v104)** · **[Переключиться на русский](#русский)**
 
-**Kapsula** keeps your notes, rich web & Telegram saves, tasks, voice memos, 2FA codes, and payment secrets inside one fast local vault. Everything works offline first with instant search (`Ctrl+Space` / `Cmd+Space`), then optionally syncs through end-to-end encryption where your keys never leave your devices.
+**Kapsula** keeps your notes, rich web & Telegram saves, tasks, voice memos, 2FA codes, and payment secrets inside one fast local vault. Everything works offline first with instant search (`Alt+Space` / `⌥+Space`), then optionally syncs through end-to-end encryption where your keys never leave your devices.
 
 <p align="center">
   <img src="docs/assets/theme-terracotta-en-dark.png" alt="Kapsula workspace on desktop" width="100%" />
@@ -33,7 +33,7 @@
   <tr>
     <td width="50%" valign="top">
       <img src="docs/assets/hud-search-en-dark.png" alt="Command HUD Launcher" width="100%" />
-      <p><strong>Global Command HUD (<code>Ctrl+Space</code>)</strong><br/>Search every note, task, saved post, or credential from anywhere on your desktop, copy 2FA codes in one keystroke, or capture an audio memo without switching windows.</p>
+      <p><strong>Global Command HUD (<code>Alt+Space</code> / <code>⌥+Space</code>)</strong><br/>Search every note, task, saved post, or credential from anywhere on your desktop, copy 2FA codes in one keystroke, or capture an audio memo without switching windows.</p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/assets/note-studio-en-dark.png" alt="Note Studio and Link Extraction" width="100%" />
@@ -94,7 +94,7 @@
 
 > Перейти к: **[Скачать v1.0.4](#скачать-v104)** · **[Back to English](#english)**
 
-**Kapsula** собирает заметки, посты из Телеграма и веб-ссылки, задачи, голосовые наброски, 2FA-коды и пароли в одном быстром локальном пространстве. Записи, ссылки и файлы хранятся на устройстве — поиск открывается по `Ctrl+Пробел`. Облако включается по желанию и синхронизирует базу между компьютерами и Android в зашифрованном виде.
+**Kapsula** собирает заметки, посты из Телеграма и веб-ссылки, задачи, голосовые наброски, 2FA-коды и пароли в одном быстром локальном пространстве. Записи, ссылки и файлы хранятся на устройстве — поиск открывается по `Alt+Пробел` (`⌥+Пробел` на macOS). Облако включается по желанию и синхронизирует базу между компьютерами и Android в зашифрованном виде.
 
 <p align="center">
   <img src="docs/assets/theme-terracotta-ru-dark.png" alt="Интерфейс Kapsula на компьютере" width="100%" />
@@ -105,8 +105,8 @@
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/assets/hud-search-ru-dark.png" alt="Быстрая панель по Ctrl+Пробел" width="100%" />
-      <p><strong>Панель <code>Ctrl+Пробел</code> поверх всех окон</strong><br/>Мгновенный поиск заметок, ссылок, банковских карт и 2FA-кодов. Здесь же удобно надиктовать голос или отметить задачу, не переключая окна.</p>
+      <img src="docs/assets/hud-search-ru-dark.png" alt="Быстрая панель по Alt+Пробел" width="100%" />
+      <p><strong>Панель <code>Alt+Пробел</code> / <code>⌥+Пробел</code> поверх всех окон</strong><br/>Мгновенный поиск заметок, ссылок, банковских карт и 2FA-кодов. Здесь же удобно надиктовать голос или отметить задачу, не переключая окна.</p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/assets/note-studio-ru-dark.png" alt="Редактор и разбор ссылок" width="100%" />

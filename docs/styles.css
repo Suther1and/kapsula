@@ -485,6 +485,28 @@ h3 {
   color: var(--ink-3);
 }
 
+.meta-platforms-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--bg-pill);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.meta-platforms-link:hover,
+.meta-platforms-link:focus-visible {
+  background: var(--bg-pill-active);
+  border-color: var(--ink-2);
+  color: var(--ink-1);
+}
+
 .meta-file {
   font-size: 12px;
   color: var(--ink-2);
@@ -553,10 +575,23 @@ h3 {
   border-radius: 12px;
   border: 1px solid var(--hairline);
   box-shadow: var(--shot-shadow);
-  transition: opacity 150ms ease;
+  transition: opacity 150ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.shot-surface[data-zoomable="true"] {
+  cursor: zoom-in;
+}
+
+.shot-surface[data-zoomable="true"]:hover {
+  border-color: var(--hairline-strong);
+}
+
+.contrast-shot[data-zoomable="true"]:hover {
+  border-color: var(--contrast-ink-2);
 }
 
 .hero-stage-panel {
+  position: relative;
   aspect-ratio: 16 / 10;
   display: flex;
   align-items: center;
@@ -568,6 +603,28 @@ h3 {
   width: auto;
   max-width: 100%;
   object-fit: contain;
+}
+
+.hero-shot.is-hud {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.hero-shot.is-hud[data-zoomable="true"]:hover {
+  border-color: transparent;
+  transform: scale(1.005);
+}
+
+.themes-visual {
+  position: relative;
+}
+
+.swap-overlay {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  z-index: 2;
 }
 
 /* Band 2: Video Walkthrough + 3-Column Hairline Strip */
@@ -1096,6 +1153,89 @@ h3 {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Screenshot Lightbox */
+.lightbox[hidden] {
+  display: none;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(16px, 3vw, 40px);
+  background: rgba(7, 7, 10, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.lightbox.is-open {
+  opacity: 1;
+}
+
+.lightbox-close {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(17, 17, 20, 0.84);
+  color: #f4f2ed;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.lightbox-close:hover,
+.lightbox-close:focus-visible {
+  background: var(--accent-btn);
+  border-color: var(--accent-btn);
+  transform: scale(1.04);
+}
+
+.lightbox-figure {
+  margin: 0;
+  max-width: min(94vw, 1520px);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.lightbox-figure img {
+  max-width: min(94vw, 1520px);
+  max-height: calc(92vh - 44px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.65);
+  cursor: zoom-out;
+}
+
+.lightbox-figure figcaption {
+  font-size: 14px;
+  line-height: 1.4;
+  color: rgba(244, 242, 237, 0.85);
+  text-align: center;
+}
+
+@media (hover: none) {
+  .lightbox-close {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 /* Responsive */
