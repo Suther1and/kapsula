@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tooltip } from '@base-ui/react/tooltip';
+import { Tooltip } from '@animate-ui/react/primitives/base-ui/tooltip';
 
 interface TooltipHintProps {
   label?: string;
@@ -23,7 +23,11 @@ export const TooltipHint: React.FC<TooltipHintProps> = ({
       <Tooltip.Trigger render={children} />
       <Tooltip.Portal>
         <Tooltip.Positioner side={side} sideOffset={6} collisionPadding={10} className="z-[150]">
-          <Tooltip.Popup className="k-popup-motion rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-md">
+          <Tooltip.Popup
+            transition={{ type: 'spring', stiffness: 520, damping: 34, mass: 0.65 }}
+            exitTransition={{ duration: 0.1 }}
+            className="rounded-lg border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-md"
+          >
             {text}
           </Tooltip.Popup>
         </Tooltip.Positioner>

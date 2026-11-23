@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowSquareOut,
   ArrowsDownUp,
@@ -869,43 +869,46 @@ export const FeedView: React.FC<FeedViewProps> = ({
         <div className="px-4 pt-2.5 pb-2 space-y-2 border-b border-[var(--k-border-hairline)] shrink-0">
           <div className="flex items-center justify-between gap-2">
             {/* Animated Segmented Toggle */}
-            <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
-              {(
-                [
-                  { id: 'feed', label: t('feed.modeFeed'), testId: 'feed-mode-all' },
-                  { id: 'media', label: t('feed.modeMedia'), testId: 'feed-mode-media' },
-                ] as const
-              ).map((m) => {
-                const active = feedMode === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    data-testid={m.testId}
-                    onClick={() => {
-                      mobileBridge.haptic('light');
-                      setFeedMode(m.id);
-                    }}
-                    className={`relative px-3 py-1 rounded-[10px] text-[12.5px] font-medium transition-colors ${
-                      active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
-                    }`}
-                  >
-                    {active ? (
-                      <motion.span
-                        layoutId="k-feed-mode-pill"
-                        transition={
-                          prefersReduced
-                            ? { duration: 0.01 }
-                            : { type: 'spring', stiffness: 480, damping: 35 }
-                        }
-                        className="absolute inset-0 rounded-[10px] bg-[var(--k-bg-surface-1)] shadow-xs"
-                      />
-                    ) : null}
-                    <span className="relative z-10">{m.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <LayoutGroup id="k-feed-mode-toggle">
+              <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
+                {(
+                  [
+                    { id: 'feed', label: t('feed.modeFeed'), testId: 'feed-mode-all' },
+                    { id: 'media', label: t('feed.modeMedia'), testId: 'feed-mode-media' },
+                  ] as const
+                ).map((m) => {
+                  const active = feedMode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      data-testid={m.testId}
+                      onClick={() => {
+                        mobileBridge.haptic('light');
+                        setFeedMode(m.id);
+                      }}
+                      className={`relative px-3 py-1 rounded-[10px] text-[12.5px] font-medium transition-colors ${
+                        active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
+                      }`}
+                    >
+                      {active ? (
+                        <motion.span
+                          layoutId="k-feed-mode-pill"
+                          style={{ borderRadius: 10 }}
+                          transition={
+                            prefersReduced
+                              ? { duration: 0.01 }
+                              : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                          }
+                          className="pointer-events-none absolute inset-0 bg-[var(--k-bg-surface-1)] shadow-xs"
+                        />
+                      ) : null}
+                      <span className="relative z-10">{m.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </LayoutGroup>
 
             <div className="flex items-center gap-2 shrink-0">
               <span className="text-[12px] text-[var(--k-ink-muted)] k-tabular">

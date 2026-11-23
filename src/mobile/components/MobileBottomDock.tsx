@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   CalendarBlank,
   CheckSquare,
@@ -121,80 +121,93 @@ export const MobileBottomDock: React.FC<MobileBottomDockProps> = ({
 
           <div className="relative px-2 pb-2.5 pt-2 flex items-center justify-center gap-1.5">
             {/* Detached Floating Glass Capsule */}
-            <nav
-              data-testid="fold-bottom-nav"
-              aria-label={t('nav.bottomNavAria')}
-              style={{
-                background: 'var(--k-dock-bg)',
-                borderColor: 'var(--k-dock-border)',
-                boxShadow: 'var(--k-dock-shadow)',
-              }}
-              className={`pointer-events-auto h-[54px] p-1 rounded-[27px] border backdrop-blur-md flex items-center justify-between gap-0.5 ${
-                showCaptureOrb ? 'flex-1 min-w-0 max-w-[344px]' : 'w-full max-w-[360px]'
-              }`}
-            >
-              {MOBILE_NAV_TABS.map((tab) => {
-                const Icon = tab.icon;
-                const active = activeTab === tab.id;
-                const tabLabel = t(tab.labelKey);
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    data-testid={`nav-tab-${tab.id}`}
-                    aria-label={tabLabel}
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => {
-                      if (tab.id !== activeTab) mobileBridge.haptic('light');
-                      onSelectTab(tab.id);
-                    }}
-                    className={`k-tap relative h-[44px] rounded-[22px] flex items-center justify-center transition-colors outline-none ${
-                      active
-                        ? 'flex-1 min-w-0 px-2.5 text-[var(--k-accent)]'
-                        : 'w-[38px] shrink-0 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]'
-                    }`}
-                  >
-                    {active ? (
-                      <motion.span
-                        layoutId="k-dock-active-pill"
-                        transition={
-                          prefersReduced
-                            ? { duration: 0.01 }
-                            : { type: 'spring', stiffness: 540, damping: 38, mass: 0.7 }
-                        }
-                        className="absolute inset-0 rounded-[22px] bg-[var(--k-accent-soft)] border border-[color-mix(in_srgb,var(--k-accent)_32%,transparent)]"
-                      />
-                    ) : null}
-
-                    <span className="relative z-10 inline-flex items-center justify-center gap-1.5 min-w-0">
-                      <Icon
-                        weight={active ? 'fill' : 'regular'}
-                        className="w-[18px] h-[18px] shrink-0"
-                      />
+            <LayoutGroup id="k-mobile-dock">
+              <nav
+                data-testid="fold-bottom-nav"
+                aria-label={t('nav.bottomNavAria')}
+                style={{
+                  background: 'var(--k-dock-bg)',
+                  borderColor: 'var(--k-dock-border)',
+                  boxShadow: 'var(--k-dock-shadow)',
+                }}
+                className={`pointer-events-auto h-[54px] p-1 rounded-[27px] border backdrop-blur-md flex items-center justify-between gap-0.5 ${
+                  showCaptureOrb ? 'flex-1 min-w-0 max-w-[344px]' : 'w-full max-w-[360px]'
+                }`}
+              >
+                {MOBILE_NAV_TABS.map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeTab === tab.id;
+                  const tabLabel = t(tab.labelKey);
+                  return (
+                    <motion.button
+                      key={tab.id}
+                      layout
+                      type="button"
+                      data-testid={`nav-tab-${tab.id}`}
+                      aria-label={tabLabel}
+                      aria-current={active ? 'page' : undefined}
+                      transition={
+                        prefersReduced
+                          ? { duration: 0.01 }
+                          : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                      }
+                      onClick={() => {
+                        if (tab.id !== activeTab) mobileBridge.haptic('light');
+                        onSelectTab(tab.id);
+                      }}
+                      className={`group relative h-[44px] rounded-[22px] flex items-center justify-center transition-colors outline-none ${
+                        active
+                          ? 'flex-1 min-w-0 px-2.5 text-[var(--k-accent)]'
+                          : 'w-[38px] shrink-0 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)]'
+                      }`}
+                    >
                       {active ? (
-                        <span
-                          data-testid="dock-active-label"
-                          className="text-[11.5px] font-semibold leading-none tracking-[-0.01em] whitespace-nowrap"
-                        >
-                          {tabLabel}
-                        </span>
+                        <motion.span
+                          layoutId="k-dock-active-pill"
+                          style={{ borderRadius: 22 }}
+                          transition={
+                            prefersReduced
+                              ? { duration: 0.01 }
+                              : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                          }
+                          className="pointer-events-none absolute inset-0 bg-[var(--k-accent-soft)] border border-[color-mix(in_srgb,var(--k-accent)_32%,transparent)]"
+                        />
                       ) : null}
-                      {active && tab.id === 'tasks' && activeTasksCount > 0 ? (
-                        <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[9.5px] font-bold inline-flex items-center justify-center shrink-0">
+
+                      <span className="relative z-10 inline-flex items-center justify-center gap-1.5 min-w-0 transition-transform duration-100 group-active:scale-[0.95]">
+                        <Icon
+                          weight={active ? 'fill' : 'regular'}
+                          className="w-[18px] h-[18px] shrink-0"
+                        />
+                        {active ? (
+                          <motion.span
+                            key={`dock-label-${tab.id}`}
+                            data-testid="dock-active-label"
+                            initial={prefersReduced ? false : { opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ duration: 0.14 }}
+                            className="text-[11.5px] font-semibold leading-none tracking-[-0.01em] whitespace-nowrap truncate"
+                          >
+                            {tabLabel}
+                          </motion.span>
+                        ) : null}
+                        {active && tab.id === 'tasks' && activeTasksCount > 0 ? (
+                          <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[9.5px] font-bold inline-flex items-center justify-center shrink-0">
+                            {activeTasksCount > 99 ? '99+' : activeTasksCount}
+                          </span>
+                        ) : null}
+                      </span>
+
+                      {!active && tab.id === 'tasks' && activeTasksCount > 0 ? (
+                        <span className="pointer-events-none absolute z-20 top-1.5 right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[9px] font-bold flex items-center justify-center shadow-xs">
                           {activeTasksCount > 99 ? '99+' : activeTasksCount}
                         </span>
                       ) : null}
-                    </span>
-
-                    {!active && tab.id === 'tasks' && activeTasksCount > 0 ? (
-                      <span className="pointer-events-none absolute z-20 top-1.5 right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[9px] font-bold flex items-center justify-center shadow-xs">
-                        {activeTasksCount > 99 ? '99+' : activeTasksCount}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </nav>
+                    </motion.button>
+                  );
+                })}
+              </nav>
+            </LayoutGroup>
 
             {/* Paired Inline Quick-Capture Orb (aligned with dock baseline — ZERO content overlap!) */}
             <AnimatePresence initial={false}>
@@ -294,6 +307,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
 
         <div className="w-8 h-[1px] bg-[var(--k-border-hairline)] my-0.5" />
 
+        <LayoutGroup id="k-mobile-rail">
         <div className="flex flex-col items-center gap-1 w-full">
           {MOBILE_NAV_TABS.map((tab) => {
             const Icon = tab.icon;
@@ -308,7 +322,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
                   if (tab.id !== activeTab) mobileBridge.haptic('light');
                   onSelectTab(tab.id);
                 }}
-                className={`k-tap relative w-full py-2 rounded-2xl flex flex-col items-center justify-center gap-1 transition-colors ${
+                className={`group relative w-full py-2 rounded-2xl flex flex-col items-center justify-center gap-1 transition-colors ${
                   active
                     ? 'text-[var(--k-accent)]'
                     : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
@@ -317,17 +331,18 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
                 {active ? (
                   <motion.span
                     layoutId="k-rail-active-pill"
+                    style={{ borderRadius: 16 }}
                     transition={
                       prefersReduced
                         ? { duration: 0.01 }
-                        : { type: 'spring', stiffness: 480, damping: 34 }
+                        : { type: 'spring', stiffness: 540, damping: 36, mass: 0.65 }
                     }
-                    className="absolute inset-0 rounded-2xl bg-[var(--k-accent-soft)] border border-[color-mix(in_srgb,var(--k-accent)_32%,transparent)]"
+                    className="pointer-events-none absolute inset-0 bg-[var(--k-accent-soft)] border border-[color-mix(in_srgb,var(--k-accent)_32%,transparent)]"
                   />
                 ) : null}
                 <Icon
                   weight={active ? 'fill' : 'regular'}
-                  className="relative z-10 w-5 h-5"
+                  className="relative z-10 w-5 h-5 transition-transform duration-100 group-active:scale-[0.94]"
                 />
                 <span className="relative z-10 text-[10px] font-semibold leading-none">
                   {t(tab.labelKey)}
@@ -341,6 +356,7 @@ export const MobileNavRail: React.FC<MobileNavRailProps> = ({
             );
           })}
         </div>
+        </LayoutGroup>
       </div>
 
       <div className="flex flex-col items-center gap-2">

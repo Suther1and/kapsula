@@ -1,5 +1,5 @@
 import React from 'react';
-import { Popover } from '@base-ui/react/popover';
+import { Popover } from '@animate-ui/react/primitives/base-ui/popover';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
 interface PopoverSurfaceProps {
@@ -34,8 +34,11 @@ export const PopoverSurface: React.FC<PopoverSurfaceProps> = ({
           className="z-[130]"
         >
           <Popover.Popup
+            data-k-popup="true"
+            transition={{ type: 'spring', stiffness: 620, damping: 38, mass: 0.55 }}
+            exitTransition={{ duration: 0.09 }}
             style={scopedAccentStyle}
-            className={`k-popup-motion ${widthClass} rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-3.5 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none`}
+            className={`${widthClass} rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-3.5 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none`}
           >
             {children}
           </Popover.Popup>

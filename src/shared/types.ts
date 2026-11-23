@@ -101,6 +101,7 @@ export interface TaskBoardItemMeta {
   customOrder?: boolean;
   priority?: TaskPriority;
   dueAt?: number | null;
+  notes?: string;
   textHash?: string;
 }
 
@@ -123,6 +124,10 @@ export interface MediaMeta {
   contactEmail?: string;
   contactRole?: string;
   inNotesHub?: boolean;
+  isStandaloneTask?: boolean;
+  cachedVideoFile?: string;
+  youtubeVideoId?: string;
+  videoExtractStatus?: 'ready' | 'loading' | 'login_required' | 'unavailable';
   taskMeta?: Record<string, TaskBoardItemMeta>;
 }
 
@@ -288,6 +293,9 @@ export type BackgroundPresetId =
   | 'sand'
   | 'custom';
 
+export type GlassPreset = 'off' | 'subtle' | 'frosted' | 'liquid';
+export type NativeWindowMaterial = 'none' | 'mica' | 'acrylic';
+
 export interface AppearanceConfig {
   accentMode: 'preset' | 'custom';
   accentPreset: AccentPresetId;
@@ -298,6 +306,8 @@ export interface AppearanceConfig {
   bgTint: number;
   bgLightness: number;
   density: 'comfortable' | 'compact';
+  glassPreset?: GlassPreset;
+  glassNativeMaterial?: NativeWindowMaterial;
 }
 
 export interface SettingsState {
@@ -342,6 +352,13 @@ export interface SettingsState {
   emailInboundToken?: string;
   emailInboundWebhookUrl?: string;
   planTier?: 'free' | 'pro';
+  videoCacheLimitMb?: number;
+}
+
+export interface VideoCacheStats {
+  bytesUsed: number;
+  fileCount: number;
+  limitMb: number;
 }
 
 export interface CaptureInput {
@@ -543,6 +560,19 @@ export interface VaultTaskEntry {
   customOrder?: boolean;
   priority?: TaskPriority;
   dueAt?: number | null;
+  notes?: string;
+  isStandaloneTask?: boolean;
+  focusBoardId?: string | null;
+}
+
+export interface CreateTaskInput {
+  text: string;
+  orbit?: string | null;
+  focusBoardId?: string | null;
+  columnId?: string;
+  priority?: TaskPriority;
+  dueAt?: number | null;
+  notes?: string;
 }
 
 export type SynthesizeMode = 'spec' | 'tasks' | 'table';

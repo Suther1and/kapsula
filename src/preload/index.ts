@@ -19,6 +19,7 @@ import type {
   CaptureInput,
   ChatTurn,
   CloudAiQuotaStatus,
+  CreateTaskInput,
   ExportResult,
   FocusBoard,
   FocusBoardUpdateInput,
@@ -47,6 +48,7 @@ import type {
   VaultItem,
   VaultQuery,
   VaultTaskEntry,
+  VideoCacheStats,
   VoiceDictationInput,
   VoiceDictationResult,
 } from '@shared/types';
@@ -156,12 +158,16 @@ export interface KapsulaBridgeApi {
     columnId: string;
     boardOrder: number;
   }): Promise<VaultItem | null>;
+  createTask(input: CreateTaskInput): Promise<VaultItem | null>;
   updateTaskMeta(input: {
     itemId: string;
     taskKey: string;
     priority?: TaskPriority;
     dueAt?: number | null;
     columnId?: string;
+    orbit?: string | null;
+    focusBoardId?: string | null;
+    notes?: string | null;
   }): Promise<VaultItem | null>;
   updateVaultTaskText(input: {
     itemId: string;
@@ -195,6 +201,9 @@ export interface KapsulaBridgeApi {
   getClipperPairingInfo(): Promise<{ pairingCode: string; pairedCount: number }>;
   resetClipperPairing(): Promise<{ pairingCode: string; pairedCount: number }>;
   getStorageSummary(): Promise<{ itemCount: number; mediaFilesCount: number; totalBytes: number }>;
+  getVideoCacheStats(): Promise<VideoCacheStats>;
+  clearVideoCache(): Promise<VideoCacheStats>;
+  ensureLinkVideo(itemId: string): Promise<VaultItem | null>;
   openDataFolder(): Promise<void>;
   exportBackup(): Promise<{ canceled: boolean; itemCount: number; filePath: string | null }>;
   importEmlFiles(filePaths?: string[]): Promise<ImportResult>;
@@ -350,6 +359,7 @@ const api: KapsulaBridgeApi = {
   listTasks: () => ipcRenderer.invoke('vault:list-tasks'),
   toggleTask: (payload) => ipcRenderer.invoke('vault:toggle-task', payload),
   moveTaskOnBoard: (input) => ipcRenderer.invoke('tasks:move-on-board', input),
+  createTask: (input) => ipcRenderer.invoke('tasks:create', input),
   updateTaskMeta: (input) => ipcRenderer.invoke('tasks:update-meta', input),
   updateVaultTaskText: (input) => ipcRenderer.invoke('tasks:update-text', input),
   deleteVaultTask: (input) => ipcRenderer.invoke('tasks:delete', input),
@@ -379,6 +389,9 @@ const api: KapsulaBridgeApi = {
   getClipperPairingInfo: () => ipcRenderer.invoke('clipper:get-pairing-info'),
   resetClipperPairing: () => ipcRenderer.invoke('clipper:reset-pairing'),
   getStorageSummary: () => ipcRenderer.invoke('vault:storage-summary'),
+  getVideoCacheStats: () => ipcRenderer.invoke('media:video-cache-stats'),
+  clearVideoCache: () => ipcRenderer.invoke('media:clear-video-cache'),
+  ensureLinkVideo: (itemId) => ipcRenderer.invoke('media:ensure-link-video', itemId),
   openDataFolder: () => ipcRenderer.invoke('vault:open-data-dir'),
   exportBackup: () => ipcRenderer.invoke('vault:export-backup'),
   importEmlFiles: (filePaths) => ipcRenderer.invoke('integrations:import-eml', filePaths),

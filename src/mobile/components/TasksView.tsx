@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowRight,
   ArrowSquareOut,
@@ -30,7 +30,7 @@ import {
 import { toast } from 'sonner';
 import { SECTION_COLOR_PALETTE } from '@shared/constants';
 import { matchesBilingualHaystack } from '@shared/bilingual-search';
-import { isDoneColumn } from '@shared/task-helpers';
+import { isDoneColumn, sortColumnTasks } from '@shared/task-helpers';
 import type {
   OrbitDef,
   TaskBoardColumn,
@@ -267,6 +267,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const prefersReduced = useReducedMotion();
   const [viewMode, setViewMode] = useState<'list' | 'board'>(readInitialViewMode);
   const [filter, setFilter] = useState<'active' | 'all' | 'done'>('active');
+  const [sectionFilter, setSectionFilter] = useState<string>('all');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
   const [newTaskText, setNewTaskText] = useState('');
   const [quickDue, setQuickDue] = useState<'none' | 'today' | 'tomorrow'>('none');
   const [quickOrbit, setQuickOrbit] = useState('');
@@ -424,9 +426,20 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   const searchFilteredTasks = useMemo(() => {
     const q = searchQuery.trim();
-    if (!q) return effectiveTasks;
-    return effectiveTasks.filter((t) => matchesBilingualHaystack(`${t.text} ${t.itemTitle}`, q));
-  }, [effectiveTasks, searchQuery]);
+    return effectiveTasks.filter((tItem) => {
+      if (sectionFilter === '__none__' && tItem.orbit) return false;
+      if (sectionFilter !== 'all' && sectionFilter !== '__none__' && tItem.orbit !== sectionFilter) {
+        return false;
+      }
+      if (priorityFilter !== 'all' && (tItem.priority ?? 'none') !== priorityFilter) {
+        return false;
+      }
+      if (q && !matchesBilingualHaystack(`${tItem.text} ${tItem.itemTitle}`, q)) {
+        return false;
+      }
+      return true;
+    });
+  }, [effectiveTasks, searchQuery, sectionFilter, priorityFilter]);
 
   const filteredTasks = useMemo(() => {
     return searchFilteredTasks.filter((t) => {
@@ -455,8 +468,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
       map.get(colId)!.push(task);
     }
 
-    map.forEach((arr) => {
-      arr.sort((a, b) => (a.boardOrder ?? 0) - (b.boardOrder ?? 0) || b.updatedAt - a.updatedAt);
+    map.forEach((arr, colId) => {
+      map.set(colId, sortColumnTasks(arr));
     });
     return map;
   }, [searchFilteredTasks, columns]);
@@ -1281,45 +1294,48 @@ export const TasksView: React.FC<TasksViewProps> = ({
         <div className="px-4 pt-3 pb-2.5 space-y-2 border-b border-[var(--k-border-hairline)] shrink-0">
           <div className="flex items-center justify-between gap-1.5 flex-wrap">
             {/* Persisted List | Board Segmented Toggle */}
-            <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] shrink-0">
-              {(
-                [
-                  { id: 'list', label: t('tasks.modeList'), icon: ListBullets, testId: 'tasks-view-list' },
-                  { id: 'board', label: t('tasks.modeBoard'), icon: Columns, testId: 'tasks-view-board' },
-                ] as const
-              ).map((m) => {
-                const active = viewMode === m.id;
-                const Icon = m.icon;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    data-testid={m.testId}
-                    onClick={() => {
-                      mobileBridge.haptic('light');
-                      setPersistedViewMode(m.id);
-                    }}
-                    className={`relative inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[10px] text-[12px] font-semibold transition-colors ${
-                      active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
-                    }`}
-                  >
-                    {active ? (
-                      <motion.span
-                        layoutId="k-tasks-viewmode-pill"
-                        transition={
-                          prefersReduced
-                            ? { duration: 0.01 }
-                            : { type: 'spring', stiffness: 480, damping: 35 }
-                        }
-                        className="absolute inset-0 rounded-[10px] bg-[var(--k-bg-surface-1)] shadow-xs"
-                      />
-                    ) : null}
-                    <Icon className="w-3.5 h-3.5 relative z-10" />
-                    <span className="relative z-10">{m.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <LayoutGroup id="k-tasks-viewmode-toggle">
+              <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] shrink-0">
+                {(
+                  [
+                    { id: 'list', label: t('tasks.modeList'), icon: ListBullets, testId: 'tasks-view-list' },
+                    { id: 'board', label: t('tasks.modeBoard'), icon: Columns, testId: 'tasks-view-board' },
+                  ] as const
+                ).map((m) => {
+                  const active = viewMode === m.id;
+                  const Icon = m.icon;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      data-testid={m.testId}
+                      onClick={() => {
+                        mobileBridge.haptic('light');
+                        setPersistedViewMode(m.id);
+                      }}
+                      className={`relative inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[10px] text-[12px] font-semibold transition-colors ${
+                        active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
+                      }`}
+                    >
+                      {active ? (
+                        <motion.span
+                          layoutId="k-tasks-viewmode-pill"
+                          style={{ borderRadius: 10 }}
+                          transition={
+                            prefersReduced
+                              ? { duration: 0.01 }
+                              : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                          }
+                          className="pointer-events-none absolute inset-0 bg-[var(--k-bg-surface-1)] shadow-xs"
+                        />
+                      ) : null}
+                      <Icon className="w-3.5 h-3.5 relative z-10" />
+                      <span className="relative z-10">{m.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </LayoutGroup>
 
             {viewMode === 'board' ? (
               <div className="flex items-center gap-1.5 shrink-0">
@@ -1424,44 +1440,92 @@ export const TasksView: React.FC<TasksViewProps> = ({
               </div>
 
               <div className="flex items-center justify-between gap-2">
-                <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
-                  {(
-                    [
-                      { id: 'active', label: t('tasks.filterActiveCount', { count: activeCount }) },
-                      { id: 'all', label: t('tasks.filterAllCount', { count: tasks.length }) },
-                      { id: 'done', label: t('tasks.filterDoneCount', { count: doneCount }) },
-                    ] as const
-                  ).map((tab) => {
-                    const active = filter === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => {
-                          mobileBridge.haptic('light');
-                          setFilter(tab.id);
-                        }}
-                        className={`relative px-2.5 py-1 rounded-[10px] text-[12px] font-medium transition-colors ${
-                          active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
-                        }`}
-                      >
-                        {active ? (
-                          <motion.span
-                            layoutId="k-tasks-filter-pill"
-                            transition={
-                              prefersReduced
-                                ? { duration: 0.01 }
-                                : { type: 'spring', stiffness: 480, damping: 35 }
-                            }
-                            className="absolute inset-0 rounded-[10px] bg-[var(--k-bg-surface-1)] shadow-xs"
-                          />
-                        ) : null}
-                        <span className="relative z-10">{tab.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <LayoutGroup id="k-tasks-filter-toggle">
+                  <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
+                    {(
+                      [
+                        { id: 'active', label: t('tasks.filterActiveCount', { count: activeCount }) },
+                        { id: 'all', label: t('tasks.filterAllCount', { count: tasks.length }) },
+                        { id: 'done', label: t('tasks.filterDoneCount', { count: doneCount }) },
+                      ] as const
+                    ).map((tab) => {
+                      const active = filter === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            mobileBridge.haptic('light');
+                            setFilter(tab.id);
+                          }}
+                          className={`relative px-2.5 py-1 rounded-[10px] text-[12px] font-medium transition-colors ${
+                            active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
+                          }`}
+                        >
+                          {active ? (
+                            <motion.span
+                              layoutId="k-tasks-filter-pill"
+                              style={{ borderRadius: 10 }}
+                              transition={
+                                prefersReduced
+                                  ? { duration: 0.01 }
+                                  : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                              }
+                              className="pointer-events-none absolute inset-0 bg-[var(--k-bg-surface-1)] shadow-xs"
+                            />
+                          ) : null}
+                          <span className="relative z-10">{tab.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </LayoutGroup>
               </div>
+
+              {(orbits.length > 0 || priorityFilter !== 'all' || sectionFilter !== 'all') ? (
+                <div className="flex items-center gap-1.5 overflow-x-auto k-no-scrollbar pb-0.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSectionFilter('all')}
+                    className={`k-tap h-7 px-2.5 rounded-full text-[11.5px] font-medium shrink-0 border ${
+                      sectionFilter === 'all'
+                        ? 'bg-[var(--k-accent-soft)] border-[var(--k-accent)]/40 text-[var(--k-accent)]'
+                        : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
+                    }`}
+                  >
+                    {t('tasks.filterSectionAll')}
+                  </button>
+                  {orbits.map((orb) => (
+                    <button
+                      key={orb.id}
+                      type="button"
+                      onClick={() => setSectionFilter((prev) => (prev === orb.id ? 'all' : orb.id))}
+                      className={`k-tap h-7 px-2.5 rounded-full text-[11.5px] font-medium shrink-0 border inline-flex items-center gap-1.5 ${
+                        sectionFilter === orb.id
+                          ? 'bg-[var(--k-accent-soft)] border-[var(--k-accent)]/40 text-[var(--k-accent)]'
+                          : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: orb.color }} />
+                      <span>{orb.name}</span>
+                    </button>
+                  ))}
+                  {(['urgent', 'high', 'medium'] as const).map((prio) => (
+                    <button
+                      key={prio}
+                      type="button"
+                      onClick={() => setPriorityFilter((prev) => (prev === prio ? 'all' : prio))}
+                      className={`k-tap h-7 px-2.5 rounded-full text-[11.5px] font-medium shrink-0 border ${
+                        priorityFilter === prio
+                          ? 'bg-[var(--k-accent-soft)] border-[var(--k-accent)]/40 text-[var(--k-accent)]'
+                          : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
+                      }`}
+                    >
+                      {t(PRIORITY_META[prio].labelKey)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </>
           ) : (
             /* Board Column Chip Strip with live counts */

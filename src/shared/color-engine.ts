@@ -188,6 +188,8 @@ export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
   bgTint: 12,
   bgLightness: 45,
   density: 'comfortable',
+  glassPreset: 'off',
+  glassNativeMaterial: 'none',
 };
 
 const DARK_TO_LIGHT_BG_PAIR: Record<string, BackgroundPresetMeta['id']> = {
@@ -694,6 +696,46 @@ export function computeThemeTokens(
     '--k-accent-glow': hexToRgba(accentHex, accentGlowAlpha),
     '--k-secret-sheen': hexToRgba(accentHex, sheenAlpha),
   };
+
+  const glassPreset = config.glassPreset ?? 'off';
+  if (glassPreset !== 'off') {
+    const profile =
+      glassPreset === 'subtle'
+        ? {
+            blur: '12px',
+            sat: '125%',
+            surfA: mode === 'dark' ? 0.8 : 0.78,
+            railA: mode === 'dark' ? 0.74 : 0.72,
+            headA: mode === 'dark' ? 0.76 : 0.74,
+            specA: mode === 'dark' ? 0.08 : 0.65,
+          }
+        : glassPreset === 'frosted'
+          ? {
+              blur: '22px',
+              sat: '145%',
+              surfA: mode === 'dark' ? 0.68 : 0.66,
+              railA: mode === 'dark' ? 0.6 : 0.58,
+              headA: mode === 'dark' ? 0.62 : 0.6,
+              specA: mode === 'dark' ? 0.12 : 0.8,
+            }
+          : {
+              blur: '30px',
+              sat: '175%',
+              surfA: mode === 'dark' ? 0.54 : 0.52,
+              railA: mode === 'dark' ? 0.46 : 0.44,
+              headA: mode === 'dark' ? 0.48 : 0.46,
+              specA: mode === 'dark' ? 0.18 : 0.92,
+            };
+    cssVars['--k-glass-blur'] = profile.blur;
+    cssVars['--k-glass-sat'] = profile.sat;
+    cssVars['--k-glass-surface'] = hexToRgba(surfaces.surface1, profile.surfA);
+    cssVars['--k-glass-rail'] = hexToRgba(surfaces.rail, profile.railA);
+    cssVars['--k-glass-header'] = hexToRgba(surfaces.canvas, profile.headA);
+    cssVars['--k-glass-specular'] =
+      mode === 'dark'
+        ? `rgba(255, 255, 255, ${profile.specA})`
+        : `rgba(255, 255, 255, ${profile.specA})`;
+  }
 
   return {
     cssVars,

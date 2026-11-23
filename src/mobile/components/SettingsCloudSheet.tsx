@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Switch } from '@base-ui/react/switch';
-import { motion, useReducedMotion } from 'motion/react';
+import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   Archive,
   ArrowCircleUp,
@@ -682,50 +682,53 @@ export const SettingsCloudSheet: React.FC<SettingsCloudSheetProps> = ({
         className={keyboardOpen ? 'p-3 space-y-2.5' : 'p-4 space-y-4'}
       >
         {/* Animated Segmented Tabs */}
-        <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
-          {(
-            [
-              { id: 'cloud', label: t('settings.tabCloud') },
-              { id: 'appearance', label: t('settings.tabAppearance') },
-              {
-                id: 'structure',
-                label:
-                  trashedItems.length > 0
-                    ? t('settings.tabSectionsCount', { count: trashedItems.length })
-                    : t('settings.tabSections'),
-              },
-            ] as const
-          ).map((tabItem) => {
-            const active = section === tabItem.id;
-            return (
-              <button
-                key={tabItem.id}
-                type="button"
-                data-testid={`settings-tab-${tabItem.id}`}
-                onClick={() => {
-                  mobileBridge.haptic('light');
-                  setSection(tabItem.id);
-                }}
-                className={`relative ${keyboardOpen ? 'py-1.5' : 'py-2'} px-1.5 rounded-xl text-[12px] font-semibold transition-colors ${
-                  active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
-                }`}
-              >
-                {active ? (
-                  <motion.span
-                    layoutId="k-settings-section-pill"
-                    transition={
-                      prefersReduced
-                        ? { duration: 0.01 }
-                        : { type: 'spring', stiffness: 480, damping: 35 }
-                    }
-                    className="absolute inset-0 rounded-xl bg-[var(--k-bg-surface-1)] shadow-xs"
-                  />
-                ) : null}
-                <span className="relative z-10 truncate block">{tabItem.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <LayoutGroup id="k-mobile-settings-tabs">
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
+            {(
+              [
+                { id: 'cloud', label: t('settings.tabCloud') },
+                { id: 'appearance', label: t('settings.tabAppearance') },
+                {
+                  id: 'structure',
+                  label:
+                    trashedItems.length > 0
+                      ? t('settings.tabSectionsCount', { count: trashedItems.length })
+                      : t('settings.tabSections'),
+                },
+              ] as const
+            ).map((tabItem) => {
+              const active = section === tabItem.id;
+              return (
+                <button
+                  key={tabItem.id}
+                  type="button"
+                  data-testid={`settings-tab-${tabItem.id}`}
+                  onClick={() => {
+                    mobileBridge.haptic('light');
+                    setSection(tabItem.id);
+                  }}
+                  className={`relative ${keyboardOpen ? 'py-1.5' : 'py-2'} px-1.5 rounded-xl text-[12px] font-semibold transition-colors ${
+                    active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
+                  }`}
+                >
+                  {active ? (
+                    <motion.span
+                      layoutId="k-settings-section-pill"
+                      style={{ borderRadius: 12 }}
+                      transition={
+                        prefersReduced
+                          ? { duration: 0.01 }
+                          : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                      }
+                      className="pointer-events-none absolute inset-0 bg-[var(--k-bg-surface-1)] shadow-xs"
+                    />
+                  ) : null}
+                  <span className="relative z-10 truncate block">{tabItem.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </LayoutGroup>
 
         {/* ==================== CLOUD SYNC TAB ==================== */}
         {section === 'cloud' ? (

@@ -467,6 +467,7 @@ export function parseGenericHtmlPage(html: string, finalUrl: URL): Partial<Unfur
       bodyMarkdown: bodyParts.join('\n\n'),
       ogImageUrl: meta.ogImageUrl,
       galleryUrls: meta.galleryUrls,
+      videoUrl: meta.ogVideoUrl,
     };
   }
 
@@ -779,47 +780,59 @@ export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promi
         timeoutMs: 6500,
       });
       if (rdFetch && rdFetch.resp.ok) {
-        const rdJson = (await rdFetch.resp.json().catch(() => null)) as Array<{
-          data?: {
-            children?: Array<{
+            const rdJson = (await rdFetch.resp.json().catch(() => null)) as Array<{
               data?: {
-                title?: string;
-                selftext?: string;
-                subreddit_name_prefixed?: string;
-                author?: string;
-                url_overridden_by_dest?: string;
-                preview?: { images?: Array<{ source?: { url?: string } }> };
+                children?: Array<{
+                  data?: {
+                    title?: string;
+                    selftext?: string;
+                    subreddit_name_prefixed?: string;
+                    author?: string;
+                    url_overridden_by_dest?: string;
+                    preview?: {
+                      images?: Array<{ source?: { url?: string } }>;
+                      reddit_video_preview?: { fallback_url?: string; duration?: number };
+                    };
+                    secure_media?: { reddit_video?: { fallback_url?: string; duration?: number } };
+                    media?: { reddit_video?: { fallback_url?: string; duration?: number } };
+                  };
+                }>;
               };
-            }>;
-          };
-        }> | null;
-        const post = rdJson?.[0]?.data?.children?.[0]?.data;
-        if (post?.title) {
-          const cleanTitle = decodeHtmlEntities(post.title).trim();
-          const selfText = decodeHtmlEntities(post.selftext || '').trim().slice(0, 4000);
-          const author = [post.subreddit_name_prefixed, post.author ? `u/${post.author}` : '']
-            .filter(Boolean)
-            .join(' · ') || null;
-          const img = sanitizeSafeExternalUrl(post.preview?.images?.[0]?.source?.url);
-          const extDest =
-            post.url_overridden_by_dest && post.url_overridden_by_dest !== rawUrl
-              ? sanitizeSafeExternalUrl(post.url_overridden_by_dest)
-              : null;
-          return {
-            ...fallback,
-            platform: 'reddit',
-            pageKind: 'platform',
-            domain: 'reddit.com',
-            author,
-            title: truncateAtWordBoundary(cleanTitle, 120),
-            description: truncateAtWordBoundary(selfText || author || cleanTitle, 220),
-            bodyMarkdown: [selfText, extDest && !selfText.includes(extDest) ? extDest : '', rawUrl]
-              .filter(Boolean)
-              .join('\n\n'),
-            ogImageUrl: img,
-            galleryUrls: img ? [img] : [],
-          };
-        }
+            }> | null;
+            const post = rdJson?.[0]?.data?.children?.[0]?.data;
+            if (post?.title) {
+              const cleanTitle = decodeHtmlEntities(post.title).trim();
+              const selfText = decodeHtmlEntities(post.selftext || '').trim().slice(0, 4000);
+              const author = [post.subreddit_name_prefixed, post.author ? `u/${post.author}` : '']
+                .filter(Boolean)
+                .join(' · ') || null;
+              const img = sanitizeSafeExternalUrl(post.preview?.images?.[0]?.source?.url);
+              const rv =
+                post.secure_media?.reddit_video ??
+                post.media?.reddit_video ??
+                post.preview?.reddit_video_preview;
+              const redditVideoUrl = sanitizeSafeExternalUrl(rv?.fallback_url);
+              const extDest =
+                post.url_overridden_by_dest && post.url_overridden_by_dest !== rawUrl
+                  ? sanitizeSafeExternalUrl(post.url_overridden_by_dest)
+                  : null;
+              return {
+                ...fallback,
+                platform: 'reddit',
+                pageKind: 'platform',
+                domain: 'reddit.com',
+                author,
+                title: truncateAtWordBoundary(cleanTitle, 120),
+                description: truncateAtWordBoundary(selfText || author || cleanTitle, 220),
+                bodyMarkdown: [selfText, extDest && !selfText.includes(extDest) ? extDest : '', rawUrl]
+                  .filter(Boolean)
+                  .join('\n\n'),
+                ogImageUrl: img,
+                galleryUrls: img ? [img] : [],
+                videoUrl: redditVideoUrl,
+                videoDurationSec: typeof rv?.duration === 'number' ? Math.round(rv.duration) : null,
+              };
+            }
       }
     }
 

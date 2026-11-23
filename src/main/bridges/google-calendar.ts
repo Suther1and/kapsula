@@ -1,12 +1,16 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { shell } from 'electron';
+import {
+  fromGoogleRecurrenceRrule,
+  toGoogleRecurrenceRrule,
+} from '@shared/calendar-layout';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import {
   DEFAULT_SYNC_SUPABASE_PUBLISHABLE_KEY,
   DEFAULT_SYNC_SUPABASE_URL,
 } from '@shared/sync-contract';
-import type { AppLocale, CalendarEventInput, CalendarSyncStatus } from '@shared/types';
+import type { AppLocale, CalendarEvent, CalendarEventInput, CalendarSyncStatus } from '@shared/types';
 import type { VaultRepository } from '../db/repository';
 import { readUpToBytes, safeFetchWithRedirects } from '../pipeline/unfurler';
 import type { VaultCrypto } from '../security/vault-crypto';
@@ -132,6 +136,39 @@ function formatLocalIsoDate(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function buildGoogleEventPayload(ev: CalendarEvent, mode: 'create' | 'patch'): Record<string, unknown> {
+  const startDateStr = formatLocalIsoDate(ev.startAt);
+  const minEndMs = new Date(ev.startAt).setHours(0, 0, 0, 0) + 86_400_000;
+  const endDateStr = formatLocalIsoDate(Math.max(ev.endAt, minEndMs));
+  const recurrence = toGoogleRecurrenceRrule(ev.recurrence);
+
+  const payload: Record<string, unknown> = ev.allDay
+    ? {
+        summary: ev.title,
+        description: ev.notes || '',
+        start: { date: startDateStr },
+        end: { date: endDateStr },
+      }
+    : {
+        summary: ev.title,
+        description: ev.notes || '',
+        start: { dateTime: new Date(ev.startAt).toISOString() },
+        end: { dateTime: new Date(ev.endAt).toISOString() },
+      };
+
+  const trimmedLocation = ev.location?.trim() || '';
+  if (trimmedLocation || mode === 'patch') {
+    payload.location = trimmedLocation;
+  }
+  if (recurrence) {
+    payload.recurrence = recurrence;
+  } else if (mode === 'patch') {
+    payload.recurrence = [];
+  }
+
+  return payload;
 }
 
 export function exportEventsToIcal(events: Array<{
@@ -724,9 +761,33 @@ export class GoogleCalendarBridge {
     }
 
     // 2. Two-way Google Calendar API sync (if OAuth connected)
+    let latestSyncedAt = Date.now();
     const accessToken = await this.ensureValidAccessToken().catch(() => null);
     if (accessToken) {
       try {
+        const lastSyncAt = Number(this.repo.getSetting('gcal_last_sync_at') || '0');
+        const allBeforePull = this.repo.listCalendarEvents({ includeDeleted: true });
+        const localDeletedGoogle = allBeforePull
+          .filter(
+            (ev) =>
+              ev.externalSource === 'google_api' &&
+              Boolean(ev.externalId) &&
+              ev.deletedAt != null &&
+              ev.deletedAt > lastSyncAt
+          )
+          .slice(0, 20);
+        const localModifiedGoogle = allBeforePull
+          .filter(
+            (ev) =>
+              ev.externalSource === 'google_api' &&
+              Boolean(ev.externalId) &&
+              ev.deletedAt == null &&
+              lastSyncAt > 0 &&
+              ev.updatedAt > lastSyncAt
+          )
+          .slice(0, 20);
+
+        const pulledExternalIds = new Set<string>();
         let syncToken = this.repo.getSetting('gcal_sync_token') || '';
         const pullAll = async (useSyncToken: string): Promise<void> => {
           let pageToken = '';
@@ -762,6 +823,8 @@ export class GoogleCalendarBridge {
                 status?: string;
                 summary?: string;
                 description?: string;
+                location?: string;
+                recurrence?: string[];
                 etag?: string;
                 start?: { dateTime?: string; date?: string };
                 end?: { dateTime?: string; date?: string };
@@ -769,6 +832,7 @@ export class GoogleCalendarBridge {
             };
             for (const gEv of data.items ?? []) {
               if (!gEv.id) continue;
+              pulledExternalIds.add(gEv.id);
               if (gEv.status === 'cancelled') {
                 const existing = this.repo.findCalendarEventByExternalId('google_api', gEv.id);
                 if (existing) this.repo.deleteCalendarEvent(existing.id);
@@ -787,18 +851,22 @@ export class GoogleCalendarBridge {
                   : startMs + 3_600_000;
 
               const gcalLocale = this.repo.getLocale();
-              this.repo.upsertCalendarEvent({
+              const savedPull = this.repo.upsertCalendarEvent({
                 title: gEv.summary || (gcalLocale === 'en' ? 'Google Event' : 'Событие Google'),
                 notes: gEv.description || '',
+                location: gEv.location || '',
                 startAt: Number.isFinite(startMs) ? startMs : Date.now(),
                 endAt: Number.isFinite(endMs) ? endMs : startMs + 3_600_000,
                 allDay,
+                hasEndTime: !allDay,
+                recurrence: fromGoogleRecurrenceRrule(gEv.recurrence),
                 color: '#3B82F6',
                 kind: 'event',
                 externalSource: 'google_api',
                 externalId: gEv.id,
                 etag: gEv.etag ?? null,
               });
+              latestSyncedAt = Math.max(latestSyncedAt, savedPull.updatedAt);
               imported++;
             }
             pageToken = data.nextPageToken ?? '';
@@ -812,55 +880,106 @@ export class GoogleCalendarBridge {
 
         await pullAll(syncToken);
 
-        // Push local Kapsula events created without externalId yet
+        // Push remote deletions for locally soft-deleted google_api events
+        for (const ev of localDeletedGoogle) {
+          const extId = ev.externalId;
+          if (!extId) continue;
+          const delResp = await fetchImpl(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(extId)}`,
+            {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${accessToken}` },
+              signal: AbortSignal.timeout(8000),
+            }
+          );
+          if (delResp.ok || delResp.status === 404 || delResp.status === 410) {
+            latestSyncedAt = Math.max(latestSyncedAt, ev.deletedAt ?? ev.updatedAt);
+            pushed++;
+          }
+        }
+
+        // Patch locally modified google_api events when not overwritten in the same pull
+        for (const ev of localModifiedGoogle) {
+          const extId = ev.externalId;
+          if (!extId || pulledExternalIds.has(extId)) continue;
+          const patchResp = await fetchImpl(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(extId)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(buildGoogleEventPayload(ev, 'patch')),
+              signal: AbortSignal.timeout(8000),
+            }
+          );
+          if (patchResp.ok) {
+            const patched = (await patchResp.json()) as { etag?: string };
+            const updatedLocal = this.repo.upsertCalendarEvent({
+              id: ev.id,
+              title: ev.title,
+              notes: ev.notes,
+              location: ev.location,
+              startAt: ev.startAt,
+              endAt: ev.endAt,
+              allDay: ev.allDay,
+              hasEndTime: ev.hasEndTime,
+              color: ev.color,
+              kind: ev.kind,
+              recurrence: ev.recurrence ?? 'none',
+              isDone: ev.isDone,
+              linkedItemId: ev.linkedItemId,
+              checklist: ev.checklist,
+              attachments: ev.attachments,
+              externalSource: 'google_api',
+              externalId: extId,
+              etag: patched.etag ?? ev.etag,
+            });
+            latestSyncedAt = Math.max(latestSyncedAt, updatedLocal.updatedAt);
+            pushed++;
+          }
+        }
+
+        // Push newly created local Kapsula events without externalSource yet
         const localOnly = this.repo
           .listCalendarEvents()
           .filter((ev) => !ev.externalSource && ev.kind !== 'reminder')
           .slice(0, 20);
         for (const ev of localOnly) {
-          const startDateStr = formatLocalIsoDate(ev.startAt);
-          const minEndMs = new Date(ev.startAt).setHours(0, 0, 0, 0) + 86_400_000;
-          const endDateStr = formatLocalIsoDate(Math.max(ev.endAt, minEndMs));
-          const body = ev.allDay
-            ? {
-                summary: ev.title,
-                description: ev.notes,
-                start: { date: startDateStr },
-                end: { date: endDateStr },
-              }
-            : {
-                summary: ev.title,
-                description: ev.notes,
-                start: { dateTime: new Date(ev.startAt).toISOString() },
-                end: { dateTime: new Date(ev.endAt).toISOString() },
-              };
           const pushResp = await fetchImpl('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(buildGoogleEventPayload(ev, 'create')),
             signal: AbortSignal.timeout(8000),
           });
           if (pushResp.ok) {
             const createdRemote = (await pushResp.json()) as { id?: string; etag?: string };
             if (createdRemote.id) {
-              this.repo.upsertCalendarEvent({
+              const savedPush = this.repo.upsertCalendarEvent({
                 id: ev.id,
                 title: ev.title,
                 notes: ev.notes,
+                location: ev.location,
                 startAt: ev.startAt,
                 endAt: ev.endAt,
                 allDay: ev.allDay,
+                hasEndTime: ev.hasEndTime,
                 color: ev.color,
                 kind: ev.kind,
+                recurrence: ev.recurrence ?? 'none',
                 isDone: ev.isDone,
                 linkedItemId: ev.linkedItemId,
+                checklist: ev.checklist,
+                attachments: ev.attachments,
                 externalSource: 'google_api',
                 externalId: createdRemote.id,
                 etag: createdRemote.etag ?? null,
               });
+              latestSyncedAt = Math.max(latestSyncedAt, savedPush.updatedAt);
               pushed++;
             }
           }
@@ -873,7 +992,7 @@ export class GoogleCalendarBridge {
       }
     }
 
-    this.repo.setSetting('gcal_last_sync_at', String(Date.now()));
+    this.repo.setSetting('gcal_last_sync_at', String(Math.max(Date.now(), latestSyncedAt)));
     return { imported, pushed, status: this.getStatus() };
   }
 }

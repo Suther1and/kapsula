@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Pause, Play } from '@phosphor-icons/react';
 import { formatDurationMmSs } from '../../lib/format';
 import { useI18n } from '@shared/i18n/react';
@@ -21,12 +22,14 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
   compact = false,
 }) => {
   const { t } = useI18n();
+  const prefersReduced = useReducedMotion();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioActivated, setAudioActivated] = useState(false);
   const pendingAutoPlayRef = useRef(false);
   const pendingSeekRatioRef = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [duration, setDuration] = useState<number>(
     fallbackDurationSec && Number.isFinite(fallbackDurationSec) ? fallbackDurationSec : 0
   );
@@ -130,12 +133,20 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
     setCurrentTime(el.currentTime);
   };
 
+  const handleBarMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(0.999, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    setHoverIdx(Math.floor(ratio * bars.length));
+  };
+
   const cycleSpeed = (e: React.MouseEvent) => {
     e.stopPropagation();
     setSpeedIdx((prev) => (prev + 1) % SPEEDS.length);
   };
 
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  const hoverTimeSec =
+    hoverIdx !== null && duration > 0 ? ((hoverIdx + 0.5) / bars.length) * duration : null;
 
   return (
     <div
@@ -181,11 +192,31 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
         aria-label={playing ? t('ui.videoPause') : t('ui.audioPlay')}
         className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] shrink-0 cursor-pointer disabled:opacity-45"
       >
-        {playing ? (
-          <Pause weight="fill" className="w-3.5 h-3.5" />
-        ) : (
-          <Play weight="fill" className="w-3.5 h-3.5 translate-x-[0.5px]" />
-        )}
+        <AnimatePresence mode="wait" initial={false}>
+          {playing ? (
+            <motion.span
+              key="pause"
+              initial={prefersReduced ? { opacity: 0 } : { scale: 0.72, opacity: 0 }}
+              animate={prefersReduced ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+              exit={prefersReduced ? { opacity: 0 } : { scale: 0.72, opacity: 0 }}
+              transition={{ duration: 0.12 }}
+              className="inline-flex"
+            >
+              <Pause weight="fill" className="w-3.5 h-3.5" />
+            </motion.span>
+          ) : (
+            <motion.span
+              key="play"
+              initial={prefersReduced ? { opacity: 0 } : { scale: 0.72, opacity: 0 }}
+              animate={prefersReduced ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+              exit={prefersReduced ? { opacity: 0 } : { scale: 0.72, opacity: 0 }}
+              transition={{ duration: 0.12 }}
+              className="inline-flex"
+            >
+              <Play weight="fill" className="w-3.5 h-3.5 translate-x-[0.5px]" />
+            </motion.span>
+          )}
+        </AnimatePresence>
       </button>
 
       <div
@@ -196,27 +227,41 @@ export const WaveformAudioPlayer: React.FC<WaveformAudioPlayerProps> = ({
         aria-valuenow={Math.round(currentTime)}
         tabIndex={0}
         onClick={handleSeekBarClick}
+        onMouseMove={handleBarMove}
+        onMouseLeave={() => setHoverIdx(null)}
         className="flex-1 min-w-0 overflow-hidden flex items-center gap-[2px] h-7 cursor-pointer"
       >
         {bars.map((amp, idx) => {
           const filled = progress > 0 && idx / bars.length <= progress;
+          const dist = hoverIdx === null ? 99 : Math.abs(idx - hoverIdx);
+          const hoverBoost = !prefersReduced && dist <= 2 ? (dist === 0 ? 1.24 : dist === 1 ? 1.12 : 1.05) : 1;
+          const inHoverRange = hoverIdx !== null && idx <= hoverIdx && !filled;
           return (
             <span
               key={idx}
-              className={`flex-1 min-w-[2px] rounded-full transition-colors duration-100 ${
-                filled ? 'bg-[var(--k-accent)]' : 'bg-[var(--k-ink-muted)]/35'
+              className={`flex-1 min-w-[2px] rounded-full transition-[background-color,transform] duration-120 ease-[var(--k-ease-out)] ${
+                filled
+                  ? 'bg-[var(--k-accent)]'
+                  : inHoverRange
+                    ? 'bg-[var(--k-ink-secondary)]/55'
+                    : 'bg-[var(--k-ink-muted)]/35'
               }`}
-              style={{ height: `${Math.round(amp * 24)}px` }}
+              style={{
+                height: `${Math.round(amp * 22)}px`,
+                transform: hoverBoost > 1 ? `scaleY(${hoverBoost})` : undefined,
+              }}
             />
           );
         })}
       </div>
 
-      {/* Fixed-width numeric slot guarantees 0.0px layout shift on Play/Pause */}
+      {/* Fixed-width numeric slot guarantees 0.0px layout shift on Play/Pause or scrub hover */}
       <span className="k-mono text-[11px] text-[var(--k-ink-secondary)] w-[74px] text-right shrink-0 whitespace-nowrap">
-        {playing || currentTime > 0
-          ? `${formatDurationMmSs(currentTime)} / ${formatDurationMmSs(duration)}`
-          : formatDurationMmSs(duration)}
+        {hoverTimeSec !== null
+          ? `${formatDurationMmSs(hoverTimeSec)} / ${formatDurationMmSs(duration)}`
+          : playing || currentTime > 0
+            ? `${formatDurationMmSs(currentTime)} / ${formatDurationMmSs(duration)}`
+            : formatDurationMmSs(duration)}
       </span>
 
       {!compact ? (

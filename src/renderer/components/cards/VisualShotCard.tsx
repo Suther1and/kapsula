@@ -3,7 +3,7 @@ import { ArrowSquareOut, ArrowsOutSimple, ImageSquare } from '@phosphor-icons/re
 import type { VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
-import { getMediaUrl } from '../../lib/format';
+import { getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
 
@@ -25,8 +25,15 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = React.memo(({
     item.title || (isVideoRef ? t('dna.videoRef') : t('dna.image')),
     true
   );
-  const cleanSummary =
-    item.summary && item.summary !== item.title && !/^(?:Скриншот|Screenshot)\s/i.test(item.summary)
+  const rawBodyPreview = stripLeadingTitle(
+    cleanBrokenTextArtifacts(stripMarkdownPreview(item.body || ''), true),
+    cleanTitle
+  );
+  const cleanSummary = rawBodyPreview
+    ? rawBodyPreview
+    : item.summary &&
+        item.summary !== item.title &&
+        !/^(?:Скриншот|Screenshot)\s/i.test(item.summary)
       ? cleanBrokenTextArtifacts(item.summary, true)
       : '';
   const urlActions = (item.extractedActions ?? []).filter((a) => a.type === 'url').slice(0, 3);

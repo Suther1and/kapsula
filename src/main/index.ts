@@ -48,6 +48,11 @@ import { samplePaletteFromBgra } from './ocr/ocr-service';
 import { CapturePipeline, resolveSafeMediaFilePathAsync } from './pipeline/capture-pipeline';
 import { readClipboardSnapshot } from './pipeline/clipboard-helper';
 import { ReminderScheduler } from './pipeline/reminder-scheduler';
+import {
+  parseHttpByteRange,
+  sanitizeVideoCacheLimitMb,
+  VideoCacheManager,
+} from './pipeline/video-cache';
 import { VaultCrypto } from './security/vault-crypto';
 import { SyncEngine } from './sync/sync-engine';
 import { AppUpdaterController } from './updater';
@@ -127,9 +132,10 @@ if (!singleInstanceLock) {
     const mediaDir = path.join(dataDir, 'media');
     fs.mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
     const cachedRealMediaDir = (fs.realpathSync.native ?? fs.realpathSync)(mediaDir);
+    const videoCache = new VideoCacheManager(path.join(dataDir, 'video-cache'));
 
     const baseCsp =
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' kapsula-media: data: blob:; media-src 'self' kapsula-media: blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' kapsula-media: data: blob:; media-src 'self' kapsula-media: blob: data:; frame-src https://www.youtube-nocookie.com; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
     if (!process.env.VITE_DEV_SERVER_URL) {
       session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
         const isLocalResource =
@@ -147,15 +153,18 @@ if (!singleInstanceLock) {
       });
     }
 
-    // Serve local screenshots, audio recordings (with HTTP 206 Range seeking), and documents safely
+    // Serve local screenshots, audio/video attachments, and cached social clips (with HTTP 206 Range seeking)
     protocol.handle('kapsula-media', async (request) => {
       try {
         const u = new URL(request.url);
+        const isCacheHost = u.hostname === 'cache';
         const rawPart =
-          u.hostname === 'local'
+          isCacheHost || u.hostname === 'local'
             ? u.pathname.replace(/^\/+/, '')
             : u.hostname || u.pathname.replace(/^\/+/, '');
-        const resolved = await resolveSafeMediaFilePathAsync(mediaDir, rawPart, cachedRealMediaDir);
+        const resolved = isCacheHost
+          ? videoCache.resolveSafePath(rawPart)
+          : await resolveSafeMediaFilePathAsync(mediaDir, rawPart, cachedRealMediaDir);
         if (!resolved.ok) {
           return new Response(
             resolved.status === 400
@@ -167,37 +176,33 @@ if (!singleInstanceLock) {
           );
         }
         const { safeName, filePath: target, stat } = resolved;
+        if (isCacheHost) {
+          videoCache.touch(safeName);
+        }
 
         const ext = path.extname(safeName).toLowerCase();
         const mime =
-          ext === '.webm' && safeName.startsWith('vid_')
+          ext === '.webm' && (safeName.startsWith('vid_') || safeName.startsWith('vc_'))
             ? 'video/webm'
             : MEDIA_MIME_TYPES[ext] ?? 'application/octet-stream';
         const totalSize = stat.size;
         const rangeHeader = request.headers.get('range');
-        const isImmutableMediaName = /^(?:[a-f0-9]{16,}|(?:shot|thumb|img|vid|aud|doc|voice|noteimg|media|clip|tg|og|file|att|cam)_)/i.test(
+        const isImmutableMediaName = /^(?:[a-f0-9]{16,}|(?:shot|thumb|img|vid|vc|aud|doc|voice|noteimg|media|clip|tg|og|file|att|cam)_)/i.test(
           safeName
         );
         const cacheHeader = isImmutableMediaName
           ? 'private, max-age=31536000, immutable'
           : 'private, max-age=3600';
 
-        if (rangeHeader && totalSize > 0) {
-          const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
-          if (!match) {
-            return new Response('Range Not Satisfiable', {
-              status: 416,
-              headers: { 'Content-Range': `bytes */${totalSize}` },
-            });
-          }
-          const start = match[1] ? Number(match[1]) : 0;
-          const end = match[2] ? Math.min(totalSize - 1, Number(match[2])) : totalSize - 1;
-          if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= totalSize) {
-            return new Response('Range Not Satisfiable', {
-              status: 416,
-              headers: { 'Content-Range': `bytes */${totalSize}` },
-            });
-          }
+        const range = parseHttpByteRange(rangeHeader, totalSize);
+        if (range.status === 416) {
+          return new Response('Range Not Satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${totalSize}` },
+          });
+        }
+        if (range.status === 206) {
+          const { start, end } = range;
           const stream = fs.createReadStream(target, { start, end });
           return new Response(Readable.toWeb(stream) as unknown as BodyInit, {
             status: 206,
@@ -230,6 +235,7 @@ if (!singleInstanceLock) {
 
     repo = new VaultRepository(path.join(dataDir, 'kapsula-vault.sqlite'));
     repo.setDefaultOsLocale(app.getLocale());
+    videoCache.setLimitMb(sanitizeVideoCacheLimitMb(repo.getSetting('video_cache_limit_mb')));
     const getLocale = (): AppLocale => repo?.getLocale() ?? 'ru';
     let cryptoVault: VaultCrypto;
     try {
@@ -471,6 +477,7 @@ if (!singleInstanceLock) {
         emailInboundToken: repo!.getSetting('email_inbound_token') || undefined,
         emailInboundWebhookUrl: repo!.getSetting('email_inbound_webhook_url') || undefined,
         planTier: repo!.getSetting('plan_tier') === 'pro' ? 'pro' : 'free',
+        videoCacheLimitMb: videoCache.getLimitMb(),
       };
     };
 
@@ -565,6 +572,7 @@ if (!singleInstanceLock) {
       repo,
       cryptoVault,
       dataDir,
+      videoCache,
       getConfig: () => {
         const s = getSettingsState();
         return {
@@ -688,6 +696,8 @@ if (!singleInstanceLock) {
       const cur = getSettingsState();
       const tokens = computeThemeTokens(cur.theme, cur.appearance);
       windows?.setVaultBackgroundColor(tokens.canvasHex);
+      const glassOn = Boolean(cur.appearance?.glassPreset && cur.appearance.glassPreset !== 'off');
+      windows?.setVaultGlassMaterial(cur.appearance?.glassNativeMaterial ?? 'none', glassOn);
     };
 
     windows.createAll();

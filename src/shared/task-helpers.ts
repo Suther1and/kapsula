@@ -420,6 +420,7 @@ export function reconcileTaskMeta(
       ...(base?.customOrder ? { customOrder: true } : {}),
       priority: sanitizePriority(base?.priority),
       dueAt: typeof base?.dueAt === 'number' && Number.isFinite(base.dueAt) ? base.dueAt : null,
+      ...(typeof base?.notes === 'string' && base.notes.trim() ? { notes: base.notes } : {}),
       textHash: hash,
     };
 
@@ -566,4 +567,96 @@ export function computeColumnDropOrder(siblings: VaultTaskEntry[], insertIdx: nu
     return (prevOrder + afterOrder) / 2;
   }
   return prevOrder + 0.5;
+}
+
+export const TASK_PRIORITY_ORDER: TaskPriority[] = ['none', 'low', 'medium', 'high', 'urgent'];
+
+export const TASK_PRIORITY_META: Record<
+  TaskPriority,
+  {
+    labelKey:
+      | 'tasks.priority.none'
+      | 'tasks.priority.low'
+      | 'tasks.priority.medium'
+      | 'tasks.priority.high'
+      | 'tasks.priority.urgent';
+    dotColor: string;
+    pillCls: string;
+  }
+> = {
+  none: {
+    labelKey: 'tasks.priority.none',
+    dotColor: 'var(--k-ink-subtle)',
+    pillCls: 'text-[var(--k-ink-subtle)] bg-transparent',
+  },
+  low: {
+    labelKey: 'tasks.priority.low',
+    dotColor: '#6B7280',
+    pillCls: 'text-[#6B7280] bg-[#6B7280]/12 border-[#6B7280]/25',
+  },
+  medium: {
+    labelKey: 'tasks.priority.medium',
+    dotColor: '#3B82F6',
+    pillCls: 'text-[#3B82F6] bg-[#3B82F6]/12 border-[#3B82F6]/25',
+  },
+  high: {
+    labelKey: 'tasks.priority.high',
+    dotColor: '#F59E0B',
+    pillCls: 'text-[#D97706] bg-[#F59E0B]/14 border-[#F59E0B]/30',
+  },
+  urgent: {
+    labelKey: 'tasks.priority.urgent',
+    dotColor: '#EF4444',
+    pillCls: 'text-[#DC2626] bg-[#EF4444]/14 border-[#EF4444]/30',
+  },
+};
+
+export function formatTaskDateInputValue(dueAt?: number | null): string {
+  if (typeof dueAt !== 'number' || !Number.isFinite(dueAt) || dueAt <= 0) return '';
+  const d = new Date(dueAt);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function formatTaskTimeInputValue(dueAt?: number | null): string {
+  if (typeof dueAt !== 'number' || !Number.isFinite(dueAt) || dueAt <= 0) return '';
+  const d = new Date(dueAt);
+  if (d.getHours() === 23 && d.getMinutes() === 59) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+export function combineTaskDateAndTime(dateStr: string, timeStr: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((dateStr || '').trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  let hour = 23;
+  let minute = 59;
+  const tm = /^(\d{2}):(\d{2})$/.exec((timeStr || '').trim());
+  if (tm) {
+    hour = Number(tm[1]);
+    minute = Number(tm[2]);
+  }
+  const ts = new Date(year, month, day, hour, minute, 0, 0).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+
+export function computeTaskDueAtPreset(kind: 'today' | 'tomorrow' | 'week' | 'clear'): number | null {
+  if (kind === 'clear') return null;
+  const d = new Date();
+  if (kind === 'today') {
+    d.setHours(19, 0, 0, 0);
+    return d.getTime();
+  }
+  if (kind === 'tomorrow') {
+    d.setDate(d.getDate() + 1);
+    d.setHours(10, 0, 0, 0);
+    return d.getTime();
+  }
+  d.setDate(d.getDate() + 3);
+  d.setHours(12, 0, 0, 0);
+  return d.getTime();
 }

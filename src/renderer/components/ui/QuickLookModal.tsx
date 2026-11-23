@@ -130,19 +130,38 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(0, 8px, 0) scale(0.96)' }
+                : {
+                    opacity: 0,
+                    filter: 'blur(4px)',
+                    transform: 'perspective(850px) rotateX(-12deg) scale(0.89)',
+                  }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
-                : { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' }
+                : {
+                    opacity: 1,
+                    filter: 'blur(0px)',
+                    transform: 'perspective(850px) rotateX(0deg) scale(1)',
+                    transition: {
+                      type: 'spring',
+                      stiffness: 410,
+                      damping: 29,
+                      mass: 0.76,
+                      opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
+                    },
+                  }
             }
             exit={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(0, 6px, 0) scale(0.97)' }
+                : {
+                    opacity: 0,
+                    filter: 'blur(3px)',
+                    transform: 'perspective(850px) rotateX(-8deg) scale(0.93)',
+                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                  }
             }
-            transition={{ duration: 0.17, ease: [0.23, 1, 0.32, 1] }}
             className="relative z-10 w-full max-w-[780px] max-h-[84vh] rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden text-[var(--k-ink-primary)]"
           >
             {/* Clean Top Bar */}
@@ -233,6 +252,13 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   posterPath={item.thumbPath || item.imagePath}
                   heightClass="max-h-[420px]"
                   onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
+                />
+              ) : (item.mediaMeta?.cachedVideoFile || item.mediaMeta?.youtubeVideoId) ? (
+                <InlineReferenceVideo
+                  cachedVideoFile={item.mediaMeta?.cachedVideoFile}
+                  youtubeVideoId={item.mediaMeta?.youtubeVideoId}
+                  posterPath={item.thumbPath || item.imagePath}
+                  heightClass="max-h-[420px]"
                 />
               ) : imgUrl ? (
                 <div className="rounded-xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] flex items-center justify-center">

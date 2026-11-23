@@ -206,6 +206,25 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'draft'>(
     isDraftMode ? 'draft' : 'saved'
   );
+  const [persistingSlow, setPersistingSlow] = useState(false);
+  const slowPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSlowPersist = useCallback(() => {
+    if (slowPersistTimerRef.current) {
+      clearTimeout(slowPersistTimerRef.current);
+      slowPersistTimerRef.current = null;
+    }
+    setPersistingSlow(false);
+  }, []);
+  const armSlowPersist = useCallback(() => {
+    if (slowPersistTimerRef.current) return;
+    slowPersistTimerRef.current = setTimeout(() => {
+      slowPersistTimerRef.current = null;
+      setPersistingSlow(true);
+    }, 900);
+  }, []);
+  useEffect(() => () => {
+    if (slowPersistTimerRef.current) clearTimeout(slowPersistTimerRef.current);
+  }, []);
   const [tagDraft, setTagDraft] = useState('');
   const [showTagInput, setShowTagInput] = useState(false);
   const [activeTagIdx, setActiveTagIdx] = useState(-1);
@@ -394,10 +413,15 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       if (!materializedIdRef.current) {
         if (!rawTitle && !rawBody.trim() && !materializingPromiseRef.current) {
           setSaveState('draft');
+          clearSlowPersist();
           return;
         }
+        armSlowPersist();
         const realId = await ensureMaterializedId(false, gen);
-        if (!realId || gen !== sessionGenRef.current) return;
+        if (!realId || gen !== sessionGenRef.current) {
+          clearSlowPersist();
+          return;
+        }
         const snap = materializedSnapRef.current;
         const hasNewerEdits =
           !snap ||
@@ -411,13 +435,18 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         onDraftSavedRef.current(realId, savedRev);
         if (!dirtyRef.current && gen === sessionGenRef.current) {
           setSaveState('saved');
+          clearSlowPersist();
         }
         continue;
       }
 
       const id = materializedIdRef.current;
+      armSlowPersist();
       await onSaveRef.current(id, { title: rawTitle, body: rawBody });
-      if (gen !== sessionGenRef.current) return;
+      if (gen !== sessionGenRef.current) {
+        clearSlowPersist();
+        return;
+      }
       if (titleRef.current.trim() !== rawTitle || bodyRef.current !== rawBody) {
         dirtyRef.current = true;
         continue;
@@ -425,9 +454,11 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       onDraftSavedRef.current(id, savedRev);
       if (!dirtyRef.current && gen === sessionGenRef.current) {
         setSaveState('saved');
+        clearSlowPersist();
       }
     }
-  }, [ensureMaterializedId]);
+    clearSlowPersist();
+  }, [ensureMaterializedId, armSlowPersist, clearSlowPersist]);
 
   useEffect(() => {
     if (!flushRef) return;
@@ -1121,7 +1152,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             data-testid="note-editor-save-status"
             className="text-[11.5px] sm:text-[12px] text-[var(--k-ink-muted)] whitespace-nowrap shrink-0 inline-flex items-center gap-1"
           >
-            {saveState === 'saving' ? (
+            {saveState === 'saving' && persistingSlow ? (
               <span className="text-[var(--k-accent)] font-medium">{t('editor.saving')}</span>
             ) : saveState === 'draft' && !materializedIdRef.current ? (
               <span>{t('editor.draft')}</span>

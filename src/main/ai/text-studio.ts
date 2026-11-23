@@ -747,8 +747,8 @@ export async function transformNoteText(params: {
         combinedRules,
         'MANDATORY RULES:',
         '- Never invent facts, numbers, dates, or tasks that are not in the user text.',
+        '- Apply the selected modes genuinely and noticeably so the note becomes cleaner, better structured, and easier to scan.',
         '- Preserve every `![...](kapsula-media://...)` image, URL, fenced code block, command, `[[WikiLink]]`, phone number, name, and `[REDACTED_SECRET_0]` token verbatim.',
-        '- If the input already satisfies the selected modes cleanly, return `formattedText` unchanged rather than forcing artificial edits.',
         '- Write in crisp, natural English with zero boilerplate or meta commentary.',
         'Return strictly JSON without markdown fences:',
         '{"titleSuggestion":"short unquoted title","formattedText":"formatted Markdown","extractedTasks":["task 1"],"summary":"1 sentence TL;DR"}',
@@ -759,9 +759,9 @@ export async function transformNoteText(params: {
         combinedRules,
         'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:',
         '- Никогда не выдумывай новые факты, цифры, даты или задачи, которых нет у пользователя.',
+        '- Обязательно реально улучши оформление текста согласно выбранным режимам: разбей сплошной поток на читаемые абзацы/списки, исправь опечатки и пунктуацию, не возвращай неряшливый текст без правок.',
         '- Сохраняй дословно каждое изображение `![...](kapsula-media://...)`, URL-ссылки, код в тройных бэктиках, команды, `[[WikiLink]]`, телефоны, имена и служебные маркеры вида `[REDACTED_SECRET_0]`.',
         '- Используй живую русскую типографику: кавычки «ёлочки» (не в коде), длинное тире —, без канцелярита.',
-        '- Если текст уже аккуратный и ничего менять не нужно, верни `formattedText` без искусственных переписываний.',
         '- Никакого технического жаргона или комментариев от себя в тексте результата.',
         'Верни строго JSON без markdown-обёртки:',
         '{"titleSuggestion":"короткий заголовок без кавычек","formattedText":"готовый Markdown","extractedTasks":["задача 1"],"summary":"1 фраза о главном"}',
@@ -799,13 +799,25 @@ export async function transformNoteText(params: {
         : '';
 
     if (!rawFormatted) {
-      return { ...local, fallbackReason: 'cloud_error' };
+      return {
+        ...local,
+        formattedText: params.text,
+        changed: false,
+        usedCloud: false,
+        fallbackReason: 'cloud_error',
+      };
     }
 
     // If cloud dropped any masked secret placeholder, fall back locally so user data is never lost
     for (let i = 0; i < secretMask.secrets.length; i++) {
       if (!rawFormatted.includes(`[REDACTED_SECRET_${i}]`)) {
-        return { ...local, fallbackReason: 'cloud_error' };
+        return {
+          ...local,
+          formattedText: params.text,
+          changed: false,
+          usedCloud: false,
+          fallbackReason: 'cloud_error',
+        };
       }
     }
 
@@ -841,6 +853,12 @@ export async function transformNoteText(params: {
       fallbackReason: null,
     };
   } catch {
-    return { ...local, fallbackReason: 'cloud_error' };
+    return {
+      ...local,
+      formattedText: params.text,
+      changed: false,
+      usedCloud: false,
+      fallbackReason: 'cloud_error',
+    };
   }
 }

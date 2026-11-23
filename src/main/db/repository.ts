@@ -12,6 +12,7 @@ import {
   getOrganicSectionCatalog,
 } from '@shared/constants';
 import { detectLocale, normalizeLocale, translate } from '@shared/i18n';
+import { truncateAtWordBoundary } from '@shared/html-entities';
 import { isUntitledPlaceholderTitle } from '@shared/item-helpers';
 import {
   extractWikiLinkTitles,
@@ -35,6 +36,7 @@ import type {
   CanvasAnnotation,
   CaptureMode,
   ContentDna,
+  CreateTaskInput,
   ExtractedAction,
   FocusBoard,
   FocusBoardUpdateInput,
@@ -996,6 +998,24 @@ export class VaultRepository {
     const now = this.monotonicTimestamp(current.updated_at);
     const nextTitle = patch.title ?? current.title;
     const nextBody = patch.body ?? current.body;
+    let nextSummary = patch.summary ?? current.summary;
+    if (
+      current.dna === 'shot' &&
+      patch.body !== undefined &&
+      patch.summary === undefined &&
+      patch.aiStatus === undefined
+    ) {
+      const strippedShotBody = patch.body
+        .replace(/!\[[^\]]*\]\(kapsula-media:\/\/[^)\n]+\)/gi, '')
+        .replace(/!\[[^\]]*\]\([^)\n]+\)/g, '')
+        .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, '$2')
+        .replace(/\[\[([^\]\n]+)\]\]/g, '$1')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/[*_`~]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      nextSummary = strippedShotBody ? strippedShotBody.slice(0, 260) : '';
+    }
     const titleChanged =
       patch.title !== undefined &&
       patch.title !== current.title &&
@@ -1168,7 +1188,7 @@ export class VaultRepository {
           nextTitle,
           (nextTitle || '').trim().toLowerCase(),
           nextBody,
-          patch.summary ?? current.summary,
+          nextSummary,
           patch.url !== undefined ? patch.url : current.url,
           patch.domain !== undefined ? patch.domain : current.domain,
           patch.platform !== undefined ? patch.platform : current.platform,
@@ -3129,6 +3149,17 @@ export class VaultRepository {
       ...(parsed.density === 'compact' || parsed.density === 'comfortable'
         ? { density: parsed.density }
         : {}),
+      ...(parsed.glassPreset === 'off' ||
+      parsed.glassPreset === 'subtle' ||
+      parsed.glassPreset === 'frosted' ||
+      parsed.glassPreset === 'liquid'
+        ? { glassPreset: parsed.glassPreset }
+        : {}),
+      ...(parsed.glassNativeMaterial === 'none' ||
+      parsed.glassNativeMaterial === 'mica' ||
+      parsed.glassNativeMaterial === 'acrylic'
+        ? { glassNativeMaterial: parsed.glassNativeMaterial }
+        : {}),
     };
   }
 
@@ -3238,7 +3269,7 @@ export class VaultRepository {
 
     const rows = this.db
       .prepare(
-        `SELECT id, title, body, orbit, remind_at, media_meta_json, COALESCE(content_updated_at, updated_at) AS effective_ts
+        `SELECT id, title, body, orbit, focus_board_id, remind_at, media_meta_json, COALESCE(content_updated_at, updated_at) AS effective_ts
          FROM items
          WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret'
            AND (
@@ -3254,6 +3285,7 @@ export class VaultRepository {
       title: string;
       body: string;
       orbit: string | null;
+      focus_board_id: string | null;
       remind_at: number | null;
       media_meta_json: string | null;
       effective_ts: number;
@@ -3268,6 +3300,7 @@ export class VaultRepository {
       const parsed = this.collectItemTasksForReconcile(row.body || '', meta);
       if (parsed.length === 0) continue;
 
+      const isStandaloneTask = Boolean(meta?.isStandaloneTask);
       const reconciled = reconcileTaskMeta(parsed, meta?.taskMeta, columns);
       for (const entry of parsed) {
         const tm = reconciled[entry.taskKey];
@@ -3281,6 +3314,7 @@ export class VaultRepository {
           text: entry.text,
           done: entry.done,
           orbit: row.orbit,
+          focusBoardId: row.focus_board_id ?? null,
           remindAt: dueAt ?? row.remind_at,
           updatedAt: row.effective_ts,
           taskKey: entry.taskKey,
@@ -3289,6 +3323,8 @@ export class VaultRepository {
           ...(tm?.customOrder ? { customOrder: true } : {}),
           priority: tm?.priority ?? 'none',
           dueAt,
+          ...(tm?.notes ? { notes: tm.notes } : {}),
+          ...(isStandaloneTask ? { isStandaloneTask: true } : {}),
         });
       }
     }
@@ -3433,12 +3469,78 @@ export class VaultRepository {
     );
   }
 
+  public createStandaloneTask(input: CreateTaskInput): VaultItem | null {
+    const clean = (input.text || '').replace(/[\r\n]+/g, ' ').trim();
+    if (!clean) return null;
+
+    const columns = this.listTaskBoardColumns();
+    const fallbackOpenCol = columns.find((c) => !isDoneColumn(c.id, columns))?.id ?? 'inbox';
+    const validCol =
+      input.columnId && columns.some((c) => c.id === input.columnId)
+        ? input.columnId
+        : fallbackOpenCol;
+    const done = isDoneColumn(validCol, columns);
+
+    const existingTasks = this.listVaultTasks();
+    const colTasks = existingTasks.filter((t) => t.columnId === validCol);
+    const maxOrder = colTasks.reduce((m, t) => {
+      const ord = typeof t.boardOrder === 'number' && Number.isFinite(t.boardOrder) ? t.boardOrder : 0;
+      return ord > m ? ord : m;
+    }, 0);
+    const boardOrder = colTasks.length === 0 ? 1000 : maxOrder + 1000;
+
+    const priority: TaskPriority =
+      input.priority && VALID_TASK_PRIORITIES.has(input.priority) ? input.priority : 'none';
+    const dueAt = typeof input.dueAt === 'number' && Number.isFinite(input.dueAt) ? input.dueAt : null;
+    const notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : undefined;
+    const orbit = typeof input.orbit === 'string' ? input.orbit.trim() : '';
+    const focusBoardId =
+      typeof input.focusBoardId === 'string' && input.focusBoardId.trim()
+        ? input.focusBoardId.trim()
+        : null;
+    const body = `- [${done ? 'x' : ' '}] ${clean}`;
+    const title = truncateAtWordBoundary(clean, 72) || clean.slice(0, 72);
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(`task:${crypto.randomUUID()}:${body}`)
+      .digest('hex');
+
+    return this.createItem({
+      dna: 'note',
+      orbit,
+      focusBoardId,
+      modeCaptured: 'buffer',
+      title,
+      body,
+      mediaMeta: {
+        isStandaloneTask: true,
+        taskMeta: {
+          'md:0': {
+            columnId: validCol,
+            boardOrder,
+            priority,
+            dueAt,
+            ...(notes ? { notes } : {}),
+            textHash: normalizeTaskTextHash(clean),
+          },
+        },
+      },
+      source: 'vault_ui',
+      contentHash,
+      aiStatus: 'local',
+      remindAt: dueAt,
+    });
+  }
+
   public updateTaskMeta(input: {
     itemId: string;
     taskKey: string;
     priority?: TaskPriority;
     dueAt?: number | null;
     columnId?: string;
+    orbit?: string | null;
+    focusBoardId?: string | null;
+    notes?: string | null;
   }): VaultItem | null {
     const current = this.getItemById(input.itemId);
     if (!current || current.dna === 'secret') return null;
@@ -3500,30 +3602,50 @@ export class VaultRepository {
           ? input.dueAt
           : null
         : (prevEntry.dueAt ?? null);
+    const nextNotes =
+      input.notes !== undefined
+        ? typeof input.notes === 'string' && input.notes.trim()
+          ? input.notes.trim()
+          : undefined
+        : prevEntry.notes;
+
+    const nextEntry: TaskBoardItemMeta = {
+      columnId: nextColumnId,
+      ...(nextPrevColumnId ? { prevColumnId: nextPrevColumnId } : {}),
+      boardOrder: prevEntry.boardOrder,
+      ...(prevEntry.customOrder ? { customOrder: true } : {}),
+      priority: nextPriority,
+      dueAt: nextDueAt,
+      ...(nextNotes ? { notes: nextNotes } : {}),
+      textHash: targetBefore.textHash,
+    };
 
     const updatedMap: Record<string, TaskBoardItemMeta> = {
       ...beforeReconciled,
-      [input.taskKey]: {
-        ...prevEntry,
-        columnId: nextColumnId,
-        ...(nextPrevColumnId ? { prevColumnId: nextPrevColumnId } : {}),
-        priority: nextPriority,
-        dueAt: nextDueAt,
-        textHash: targetBefore.textHash,
-      },
+      [input.taskKey]: nextEntry,
     };
 
     const afterTasks = this.collectItemTasksForReconcile(nextBody, meta);
     meta.taskMeta = reconcileTaskMeta(afterTasks, updatedMap, columns);
 
-    return this.updateItem(
-      input.itemId,
-      {
-        ...(bodyChanged ? { body: nextBody } : {}),
-        mediaMeta: meta,
-      },
-      { preserveContentUpdatedAt: true }
-    );
+    const patch: UpdateItemPatch = {
+      ...(bodyChanged ? { body: nextBody } : {}),
+      mediaMeta: meta,
+    };
+    if (input.orbit !== undefined) {
+      patch.orbit = typeof input.orbit === 'string' ? input.orbit.trim() : '';
+    }
+    if (input.focusBoardId !== undefined) {
+      patch.focusBoardId =
+        typeof input.focusBoardId === 'string' && input.focusBoardId.trim()
+          ? input.focusBoardId.trim()
+          : null;
+    }
+    if (meta.isStandaloneTask && input.dueAt !== undefined) {
+      patch.remindAt = nextDueAt;
+    }
+
+    return this.updateItem(input.itemId, patch, { preserveContentUpdatedAt: true });
   }
 
   public updateVaultTaskText(input: {
@@ -3569,12 +3691,16 @@ export class VaultRepository {
       lines[target.lineIndex!] = `${match[1]}${nextText}`;
       const nextBody = lines.join('\n');
       const mdCount = beforeTasks.filter((t) => t.sourceType === 'markdown').length;
-      const isSingleTaskNote = mdCount === 1 && current.title.trim() === target.text.trim();
+      const isSingleTaskNote =
+        mdCount === 1 &&
+        (Boolean(meta.isStandaloneTask) ||
+          current.title.trim() === target.text.trim() ||
+          current.title.trim() === truncateAtWordBoundary(target.text.trim(), 72).trim());
       const afterTasks = this.collectItemTasksForReconcile(nextBody, meta);
       meta.taskMeta = reconcileTaskMeta(afterTasks, updatedMap, columns);
       return this.updateItem(input.itemId, {
         body: nextBody,
-        ...(isSingleTaskNote ? { title: nextText.slice(0, 80) } : {}),
+        ...(isSingleTaskNote ? { title: truncateAtWordBoundary(nextText, 72) || nextText.slice(0, 72) } : {}),
         mediaMeta: meta,
       });
     }
@@ -3617,13 +3743,18 @@ export class VaultRepository {
       const remainingBody = lines.join('\n').trim();
       const hasAttachments = Boolean(current.imagePath || current.mediaPath || current.url);
       const hasVoiceActions = Boolean(meta.actionItems && meta.actionItems.length > 0);
+      const isStandalone = Boolean(meta.isStandaloneTask);
+      const titleMatchesTask =
+        isUntitledPlaceholderTitle(current.title) ||
+        current.title.trim() === target.text.trim() ||
+        current.title.trim() === truncateAtWordBoundary(target.text.trim(), 72).trim();
       const hasPreservedMeta =
-        current.tags.length > 0 ||
-        Boolean(current.remindAt) ||
-        Boolean(current.annotations && current.annotations.length > 0) ||
-        Boolean(current.linksOut && current.linksOut.length > 0) ||
-        (!isUntitledPlaceholderTitle(current.title) &&
-          current.title.trim() !== target.text.trim());
+        !isStandalone &&
+        (current.tags.length > 0 ||
+          Boolean(current.remindAt) ||
+          Boolean(current.annotations && current.annotations.length > 0) ||
+          Boolean(current.linksOut && current.linksOut.length > 0) ||
+          !titleMatchesTask);
       const mdCount = beforeTasks.filter((t) => t.sourceType === 'markdown').length;
 
       if (!remainingBody && !hasAttachments && !hasVoiceActions && !hasPreservedMeta && mdCount === 1) {

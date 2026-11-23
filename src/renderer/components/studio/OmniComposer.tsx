@@ -4,12 +4,11 @@ import {
   ArrowCounterClockwise,
   ArrowUpRight,
   CalendarBlank,
-  Microphone,
+  FileText,
+  FilmStrip,
+  MusicNotes,
   NotePencil,
   Paperclip,
-  PaperPlaneTilt,
-  Plus,
-  Sparkle,
   X,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
@@ -24,6 +23,13 @@ import {
   readFileAsBytes,
 } from '../../lib/file-bytes';
 import { playTactileTick } from '../../lib/tactileSound';
+import { BorderTrail } from '../motion-primitives/border-trail';
+import { TextShimmer } from '../motion-primitives/text-shimmer';
+import { MicIcon } from '../icons/mic';
+import { PlusIcon } from '../icons/plus';
+import { SendIcon } from '../icons/send';
+import { SparklesIcon } from '../icons/sparkles';
+import { LiveIcon } from '../icons/LiveIcon';
 import { ReminderPopover } from '../ui/ReminderPopover';
 import { SectionPickerPopover } from '../ui/SectionPickerPopover';
 import { VoiceRecorderStudio } from '../ui/VoiceRecorderStudio';
@@ -42,6 +48,13 @@ interface PendingImageDraft {
   file: File;
   previewUrl: string;
   name: string;
+}
+
+interface PendingFileDraft {
+  id: string;
+  file: File;
+  name: string;
+  kind: 'video' | 'audio' | 'doc';
 }
 
 const GENERIC_CLIPBOARD_IMAGE_RE = /^image(?:\.[a-z0-9]+)?$/i;
@@ -97,11 +110,13 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
   const [childMenuOpen, setChildMenuOpen] = useState(false);
   const [orbitOverride, setOrbitOverride] = useState<string | null>(null);
   const [pendingImages, setPendingImages] = useState<PendingImageDraft[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFileDraft[]>([]);
   const [remindAt, setRemindAt] = useState<number | null>(null);
   const [dismissedEventText, setDismissedEventText] = useState<string | null>(null);
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [beautifying, setBeautifying] = useState(false);
-  const [originalBeforeBeautify, setOriginalBeforeBeautify] = useState<string | null>(null);
+  const [beautifyHistory, setBeautifyHistory] = useState<string[]>([]);
+  const [textOverflowing, setTextOverflowing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -132,6 +147,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     childMenuOpen ||
     text.trim().length > 0 ||
     pendingImages.length > 0 ||
+    pendingFiles.length > 0 ||
     recordingOpen ||
     remindAt !== null ||
     (orbitOverride !== null && orbitOverride !== (activeOrbitId || ''));
@@ -142,13 +158,18 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     if (el.value === '') {
       el.style.height = '28px';
       el.style.overflowY = 'hidden';
+      setTextOverflowing(false);
       return;
     }
     el.style.height = '28px';
     const scrollH = el.scrollHeight;
-    const nextH = Math.max(28, Math.min(240, scrollH));
+    // 10 crisp lines (22px * 10 + 6px vertical pad = 226px) so scrolled lines never slice in half
+    const maxH = 226;
+    const nextH = Math.max(28, Math.min(maxH, scrollH));
+    const overflows = scrollH > maxH;
     el.style.height = `${nextH}px`;
-    el.style.overflowY = scrollH > 240 ? 'auto' : 'hidden';
+    el.style.overflowY = overflows ? 'auto' : 'hidden';
+    setTextOverflowing(overflows);
   }, []);
 
   useLayoutEffect(() => {
@@ -204,12 +225,40 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     });
   }, []);
 
+  const appendPendingFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    const drafts: PendingFileDraft[] = files.map((file) => {
+      const kind: PendingFileDraft['kind'] =
+        file.type.startsWith('video/') || VIDEO_EXT_RE.test(file.name)
+          ? 'video'
+          : file.type.startsWith('audio/')
+            ? 'audio'
+            : 'doc';
+      return {
+        id:
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        name: file.name,
+        kind,
+      };
+    });
+    setPendingFiles((prev) => [...prev, ...drafts]);
+    setFocused(true);
+  }, []);
+
+  const removePendingFile = useCallback((id: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
   const submitCapture = async (openInStudio = false) => {
     if (submitting) return;
     const trimmed = text.trim();
     const hasImages = pendingImages.length > 0;
-    if (!trimmed && !hasImages && !openInStudio) return;
-    if (!trimmed && !hasImages && openInStudio) {
+    const hasFiles = pendingFiles.length > 0;
+    if (!trimmed && !hasImages && !hasFiles && !openInStudio) return;
+    if (!trimmed && !hasImages && !hasFiles && openInStudio) {
       playTactileTick(soundEnabled, 'soft');
       onOpenBlankDraft?.();
       return;
@@ -219,8 +268,76 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     try {
       const readErr = t('error.readFileFailed');
       const effectiveRemindAt = remindAt ?? activeParsedEvent?.startAt ?? null;
-      const isSingleUrl = !hasImages && /^https?:\/\/\S+$/i.test(trimmed);
+      const isSingleUrl = !hasImages && !hasFiles && /^https?:\/\/\S+$/i.test(trimmed);
       const isDismissed = dismissedEventText === trimmed;
+
+      // If non-image files are staged (and no pending images), capture them cleanly WITH the user's text
+      if (!hasImages && hasFiles) {
+        let attachedText = trimmed;
+        for (const staged of pendingFiles) {
+          const file = staged.file;
+          const safeName = GENERIC_CLIPBOARD_IMAGE_RE.test(file.name)
+            ? ''
+            : file.name.replace(/\.[^.]+$/, '');
+          const noteText = attachedText || undefined;
+          let created: VaultItem;
+
+          if (staged.kind === 'video') {
+            const videoBytes = await readFileAsBytes(file, MAX_UPLOAD_VIDEO_BYTES, readErr, locale);
+            created = await window.kapsula.capture({
+              videoBytes,
+              ...(noteText ? { text: noteText } : {}),
+              videoMime: file.type || 'video/mp4',
+              fileName: file.name,
+              title: safeName,
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+              remindAt: effectiveRemindAt,
+            });
+          } else if (staged.kind === 'audio') {
+            const audioBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
+            created = await window.kapsula.capture({
+              audioBytes,
+              audioMime: file.type,
+              fileName: file.name,
+              ...(noteText ? { text: noteText } : {}),
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+              remindAt: effectiveRemindAt,
+            });
+          } else {
+            const fileBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
+            created = await window.kapsula.capture({
+              fileBytes,
+              ...(noteText ? { text: noteText } : {}),
+              fileName: file.name,
+              fileMime: file.type || 'application/octet-stream',
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+              remindAt: effectiveRemindAt,
+            });
+          }
+          onCaptured(created, openInStudio && pendingFiles.length === 1);
+          attachedText = '';
+        }
+        setPendingFiles([]);
+        setText('');
+        setRemindAt(null);
+        setDismissedEventText(null);
+        setOrbitOverride(null);
+        setBeautifyHistory([]);
+        setFocused(false);
+        playTactileTick(soundEnabled, 'success');
+        toast.success(
+          pendingFiles.length === 1
+            ? t('composer.savedNamed', { name: pendingFiles[0]!.name })
+            : t('composer.savedWithImages')
+        );
+        return;
+      }
 
       let captureInput: CaptureInput;
       if (!hasImages) {
@@ -317,11 +434,55 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         URL.revokeObjectURL(img.previewUrl);
       }
       setPendingImages([]);
+      if (hasFiles) {
+        for (const staged of pendingFiles) {
+          const file = staged.file;
+          const safeName = GENERIC_CLIPBOARD_IMAGE_RE.test(file.name)
+            ? ''
+            : file.name.replace(/\.[^.]+$/, '');
+          if (staged.kind === 'video') {
+            const videoBytes = await readFileAsBytes(file, MAX_UPLOAD_VIDEO_BYTES, readErr, locale);
+            const c = await window.kapsula.capture({
+              videoBytes,
+              videoMime: file.type || 'video/mp4',
+              fileName: file.name,
+              title: safeName,
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+            });
+            onCaptured(c);
+          } else if (staged.kind === 'audio') {
+            const audioBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
+            const c = await window.kapsula.capture({
+              audioBytes,
+              audioMime: file.type,
+              fileName: file.name,
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+            });
+            onCaptured(c);
+          } else {
+            const fileBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
+            const c = await window.kapsula.capture({
+              fileBytes,
+              fileName: file.name,
+              fileMime: file.type || 'application/octet-stream',
+              source: 'vault_ui',
+              orbitOverride: selectedOrbit || undefined,
+              focusBoardId: activeFocusBoardId,
+            });
+            onCaptured(c);
+          }
+        }
+        setPendingFiles([]);
+      }
       setText('');
       setRemindAt(null);
       setDismissedEventText(null);
       setOrbitOverride(null);
-      setOriginalBeforeBeautify(null);
+      setBeautifyHistory([]);
       setFocused(false);
       playTactileTick(soundEnabled, 'success');
       onCaptured(created, openInStudio);
@@ -340,64 +501,8 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     if (imageFiles.length > 0) {
       appendPendingImages(imageFiles);
     }
-
-    const readErr = t('error.readFileFailed');
-    let attachedText = text.trim();
-    for (const file of otherFiles) {
-      try {
-        const safeName = GENERIC_CLIPBOARD_IMAGE_RE.test(file.name)
-          ? ''
-          : file.name.replace(/\.[^.]+$/, '');
-        const noteText = attachedText || undefined;
-
-        if (file.type.startsWith('video/') || VIDEO_EXT_RE.test(file.name)) {
-          const videoBytes = await readFileAsBytes(file, MAX_UPLOAD_VIDEO_BYTES, readErr, locale);
-          const created = await window.kapsula.capture({
-            videoBytes,
-            ...(noteText ? { text: noteText } : {}),
-            videoMime: file.type || 'video/mp4',
-            fileName: file.name,
-            title: safeName,
-            source: 'vault_ui',
-            orbitOverride: selectedOrbit || undefined,
-            focusBoardId: activeFocusBoardId,
-          });
-          onCaptured(created);
-        } else if (file.type.startsWith('audio/')) {
-          const audioBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
-          const created = await window.kapsula.capture({
-            audioBytes,
-            audioMime: file.type,
-            fileName: file.name,
-            ...(noteText ? { text: noteText } : {}),
-            source: 'vault_ui',
-            orbitOverride: selectedOrbit || undefined,
-            focusBoardId: activeFocusBoardId,
-          });
-          onCaptured(created);
-        } else {
-          const fileBytes = await readFileAsBytes(file, MAX_UPLOAD_IMAGE_OR_DOC_BYTES, readErr, locale);
-          const created = await window.kapsula.capture({
-            fileBytes,
-            ...(noteText ? { text: noteText } : {}),
-            fileName: file.name,
-            fileMime: file.type || 'application/octet-stream',
-            source: 'vault_ui',
-            orbitOverride: selectedOrbit || undefined,
-            focusBoardId: activeFocusBoardId,
-          });
-          onCaptured(created);
-        }
-        if (attachedText) {
-          attachedText = '';
-          setText('');
-          setOriginalBeforeBeautify(null);
-        }
-        playTactileTick(soundEnabled, 'success');
-        toast.success(t('composer.savedNamed', { name: safeName || file.name }));
-      } catch (err) {
-        toast.error(friendlyErrorMessage(err, t('error.uploadFileFailed', { name: file.name }), locale));
-      }
+    if (otherFiles.length > 0) {
+      appendPendingFiles(otherFiles);
     }
   };
 
@@ -424,7 +529,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         }
         return;
       }
-      setOriginalBeforeBeautify((prev) => prev ?? text);
+      setBeautifyHistory((prev) => [...prev, text]);
       setText(res.formattedText);
       playTactileTick(soundEnabled, 'success');
     } catch (err) {
@@ -434,7 +539,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
     }
   };
 
-  const canSave = Boolean(text.trim() || pendingImages.length > 0);
+  const canSave = Boolean(text.trim() || pendingImages.length > 0 || pendingFiles.length > 0);
 
   return (
     <div
@@ -443,7 +548,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
       onBlur={(e) => {
         const next = e.relatedTarget as HTMLElement | null;
         if (next && rootRef.current?.contains(next)) return;
-        if (next && next.closest('.k-popup-motion, [role="listbox"], [role="dialog"]')) return;
+        if (next && next.closest('[data-k-popup="true"], .k-popup-motion, [role="listbox"], [role="dialog"]')) return;
         if (!childMenuOpen) {
           setFocused(false);
         }
@@ -467,12 +572,38 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         }
       }}
       /* Constant px-3.5 py-2.5 prevents any 2-step padding snap during collapse */
-      className={`rounded-2xl border px-3.5 py-2.5 transition-[border-color,box-shadow,background-color] duration-180 ease-[var(--k-ease-out)] bg-[var(--k-bg-surface-1)] ${
+      className={`relative rounded-2xl border px-3.5 py-2.5 transition-[border-color,box-shadow,background-color] duration-200 ease-[var(--k-ease-out)] bg-[var(--k-bg-surface-1)] ${
         focused || dragHover
-          ? 'border-[var(--k-border-focus)] shadow-[0_0_0_3px_var(--k-accent-soft),var(--k-shadow-card)]'
+          ? 'border-[var(--k-border-strong)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--k-accent)_22%,transparent),var(--k-shadow-card-hover)]'
           : 'border-[var(--k-border-hairline)] shadow-[var(--k-shadow-card)] hover:border-[var(--k-border-strong)]'
       }`}
     >
+      <AnimatePresence>
+        {(focused || beautifying || dragHover) && !prefersReduced ? (
+          <motion.div
+            key={beautifying ? 'omni-beam-ai' : 'omni-beam-focus'}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
+            className="pointer-events-none absolute inset-0 rounded-[inherit]"
+          >
+            <BorderTrail
+              size={beautifying ? 210 : 250}
+              borderRadius={16}
+              thickness={40}
+              glow
+              dual={beautifying}
+              transition={{
+                repeat: Infinity,
+                duration: beautifying ? 2.5 : 7.4,
+                ease: 'linear',
+              }}
+              className={beautifying ? 'opacity-95' : 'opacity-85'}
+            />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
       <input
         ref={fileInputRef}
         type="file"
@@ -496,7 +627,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               : 'text-[var(--k-ink-muted)]'
           }`}
         >
-          <Plus weight="bold" className="w-4 h-4" />
+          <LiveIcon icon={PlusIcon} size={16} active={expanded} />
         </span>
 
         <textarea
@@ -507,9 +638,6 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           onFocus={() => setFocused(true)}
           onChange={(e) => {
             setText(e.target.value);
-            if (originalBeforeBeautify && e.target.value === originalBeforeBeautify) {
-              setOriginalBeforeBeautify(null);
-            }
           }}
           onPaste={(e) => {
             const pastedImages = extractClipboardImages(e.clipboardData);
@@ -534,14 +662,15 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               void submitCapture(false);
               return;
             }
-            if (e.key === 'Escape' && !text.trim() && pendingImages.length === 0 && !recordingOpen) {
+            if (e.key === 'Escape' && !text.trim() && pendingImages.length === 0 && pendingFiles.length === 0 && !recordingOpen) {
               setFocused(false);
               textareaRef.current?.blur();
             }
           }}
           placeholder={t('composer.placeholder')}
+          style={{ scrollPaddingBlock: '3px' }}
           className={`flex-1 min-w-0 resize-none bg-transparent border-none outline-none text-[13.5px] leading-[22px] py-[3px] min-h-[28px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] k-selectable ${
-            !expanded ? 'pr-[156px]' : 'pr-0'
+            !expanded ? 'pr-[156px]' : textOverflowing ? 'pr-1.5' : 'pr-0'
           }`}
         />
 
@@ -571,7 +700,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
             }}
             className="k-interactive w-7 h-7 rounded-lg inline-flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
           >
-            <Microphone className="w-4 h-4" />
+            <LiveIcon icon={MicIcon} size={16} />
           </button>
           <button
             type="button"
@@ -600,9 +729,9 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
         </div>
       </div>
 
-      {/* Pending Pasted / Attached Image Preview Strip */}
+      {/* Pending Pasted / Attached Image & File Preview Strip */}
       <AnimatePresence initial={false}>
-        {pendingImages.length > 0 ? (
+        {pendingImages.length > 0 || pendingFiles.length > 0 ? (
           <motion.div
             key="omni-pending-attachments-wrap"
             initial={prefersReduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
@@ -634,6 +763,31 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                     className="k-interactive absolute top-1 right-1 w-4.5 h-4.5 rounded-full bg-black/70 text-white hover:bg-[var(--k-danger)] inline-flex items-center justify-center shadow-sm cursor-pointer"
                   >
                     <X weight="bold" className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ))}
+              {pendingFiles.map((f) => (
+                <div
+                  key={f.id}
+                  className="inline-flex items-center gap-2 h-9 pl-2.5 pr-1.5 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-primary)] max-w-[230px]"
+                >
+                  {f.kind === 'video' ? (
+                    <FilmStrip weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                  ) : f.kind === 'audio' ? (
+                    <MusicNotes weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                  ) : (
+                    <FileText weight="duotone" className="w-4 h-4 text-[var(--k-amber)] shrink-0" />
+                  )}
+                  <span className="truncate font-medium">{f.name}</span>
+                  <button
+                    type="button"
+                    data-testid="omni-remove-file-btn"
+                    aria-label={t('composer.removeAttachment')}
+                    title={t('composer.removeAttachment')}
+                    onClick={() => removePendingFile(f.id)}
+                    className="k-interactive w-5 h-5 rounded-md text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-bg-surface-3)] inline-flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <X weight="bold" className="w-3 h-3" />
                   </button>
                 </div>
               ))}
@@ -781,7 +935,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                       : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
                   }`}
                 >
-                  <Microphone weight={recordingOpen ? 'fill' : 'regular'} className="w-3.5 h-3.5" />
+                  <LiveIcon icon={MicIcon} size={14} active={recordingOpen} />
                   <span>{t('workspace.filter.voice')}</span>
                 </button>
 
@@ -804,17 +958,26 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                       beautifying ? 'k-beautify-shimmer' : ''
                     }`}
                   >
-                    <Sparkle weight="fill" className="w-3.5 h-3.5" />
-                    <span>{beautifying ? t('composer.beautifying') : t('composer.beautify')}</span>
+                    <LiveIcon icon={SparklesIcon} size={14} active={beautifying} />
+                    {beautifying ? (
+                      <TextShimmer as="span" duration={1.1} className="[--base-color:var(--k-accent)] [--base-gradient-color:var(--k-ink-primary)]">
+                        {t('composer.beautifying')}
+                      </TextShimmer>
+                    ) : (
+                      <span>{t('composer.beautify')}</span>
+                    )}
                   </button>
                 ) : null}
 
-                {originalBeforeBeautify !== null ? (
+                {beautifyHistory.length > 0 ? (
                   <button
                     type="button"
                     onClick={() => {
-                      setText(originalBeforeBeautify);
-                      setOriginalBeforeBeautify(null);
+                      const prevText = beautifyHistory[beautifyHistory.length - 1];
+                      if (prevText !== undefined) {
+                        setText(prevText);
+                        setBeautifyHistory((prev) => prev.slice(0, -1));
+                      }
                     }}
                     className="k-interactive inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
                   >
@@ -861,7 +1024,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
                   onClick={() => void submitCapture(false)}
                   className="k-interactive k-focus-ring inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:hover:bg-[var(--k-bg-surface-3)] disabled:opacity-100 disabled:cursor-default"
                 >
-                  <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />
+                  <LiveIcon icon={SendIcon} size={14} />
                   <span>{t('common.save')}</span>
                 </button>
               </div>

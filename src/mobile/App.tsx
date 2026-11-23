@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { MotionConfig } from 'motion/react';
 import { ArrowCircleUp, Cloud, MagnifyingGlass, X } from '@phosphor-icons/react';
 import { Toaster, toast } from 'sonner';
 import type { AppLocale } from '@shared/i18n/core';
@@ -1326,9 +1327,19 @@ export const App: React.FC = () => {
   );
 
   const activeTasksCount = useMemo(() => tasks.filter((t) => !t.done).length, [tasks]);
+  const [showMobileSyncing, setShowMobileSyncing] = useState(false);
+
+  useEffect(() => {
+    if (syncStatus.state !== 'syncing') {
+      setShowMobileSyncing(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowMobileSyncing(true), 1200);
+    return () => window.clearTimeout(timer);
+  }, [syncStatus.state]);
 
   const syncDotColor =
-    syncStatus.state === 'synced'
+    syncStatus.state === 'synced' || (syncStatus.state === 'syncing' && !showMobileSyncing)
       ? 'var(--k-emerald)'
       : syncStatus.state === 'syncing'
         ? 'var(--k-accent)'
@@ -1417,6 +1428,7 @@ export const App: React.FC = () => {
 
   return (
     <MobileI18nProvider locale={locale} onLocaleChange={handleChangeLocale}>
+    <MotionConfig reducedMotion="user">
     <MobileMediaCacheContext.Provider value={mediaCacheCtx}>
     <div
       data-testid="kapsula-mobile-root"
@@ -1526,7 +1538,7 @@ export const App: React.FC = () => {
                   <Cloud className="w-4 h-4 text-[var(--k-ink-secondary)]" />
                   {fold.isExpanded ? (
                     <span>
-                      {syncStatus.state === 'synced'
+                      {syncStatus.state === 'synced' || (syncStatus.state === 'syncing' && !showMobileSyncing)
                         ? t('header.cloud')
                         : syncStatus.state === 'syncing'
                           ? t('header.syncing')
@@ -2134,6 +2146,7 @@ export const App: React.FC = () => {
       ) : null}
     </div>
     </MobileMediaCacheContext.Provider>
+    </MotionConfig>
     </MobileI18nProvider>
   );
 };

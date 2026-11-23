@@ -1,5 +1,5 @@
 import React from 'react';
-import { Dialog } from '@base-ui/react/dialog';
+import { Dialog } from '@animate-ui/react/primitives/base-ui/dialog';
 import { X } from '@phosphor-icons/react';
 import { useI18n } from '@shared/i18n/react';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
@@ -32,39 +32,44 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-[90] bg-[var(--k-bg-backdrop)] backdrop-blur-[6px] transition-opacity duration-160 ease-[var(--k-ease-out)] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup
-          style={scopedAccentStyle}
-          className={`fixed left-1/2 ${
-            topAligned
-              ? 'top-[10vh] translate-y-0 data-[starting-style]:translate-y-1.5 data-[ending-style]:translate-y-1'
-              : 'top-1/2 -translate-y-1/2 data-[starting-style]:translate-y-[calc(-50%+6px)] data-[ending-style]:translate-y-[calc(-50%+4px)]'
-          } z-[95] w-[calc(100vw-36px)] ${maxWidthClass} max-h-[calc(100vh-44px)] -translate-x-1/2 flex flex-col rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-sheet)] outline-none overflow-hidden transition-[opacity,transform,scale,translate] duration-[170ms] ease-[var(--k-ease-out)] data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.978] data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.986] ${className}`}
+        <Dialog.Backdrop className="fixed inset-0 z-[90] bg-[var(--k-bg-backdrop)] backdrop-blur-[6px]" />
+        <Dialog.Viewport
+          className={`fixed inset-0 z-[95] flex justify-center p-4 pointer-events-none ${
+            topAligned ? 'items-start pt-[10vh]' : 'items-center'
+          }`}
         >
-          {!hideHeader ? (
-            <div className="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-[var(--k-border-hairline)] shrink-0">
-              <div className="min-w-0">
-                {title ? (
-                  <Dialog.Title className="m-0 text-[16px] font-semibold tracking-[-0.01em] text-[var(--k-ink-primary)]">
-                    {title}
-                  </Dialog.Title>
-                ) : null}
-                {subtitle ? (
-                  <Dialog.Description className="mt-0.5 mb-0 text-[12.5px] text-[var(--k-ink-secondary)]">
-                    {subtitle}
-                  </Dialog.Description>
-                ) : null}
+          <Dialog.Popup
+            from="top"
+            transition={{ type: 'spring', stiffness: 420, damping: 32, mass: 0.78 }}
+            exitTransition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
+            style={scopedAccentStyle}
+            className={`pointer-events-auto w-[calc(100vw-36px)] ${maxWidthClass} max-h-[calc(100vh-44px)] flex flex-col rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-sheet)] outline-none overflow-hidden ${className}`}
+          >
+            {!hideHeader ? (
+              <div className="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-[var(--k-border-hairline)] shrink-0">
+                <div className="min-w-0">
+                  {title ? (
+                    <Dialog.Title className="m-0 text-[16px] font-semibold tracking-[-0.01em] text-[var(--k-ink-primary)]">
+                      {title}
+                    </Dialog.Title>
+                  ) : null}
+                  {subtitle ? (
+                    <Dialog.Description className="mt-0.5 mb-0 text-[12.5px] text-[var(--k-ink-secondary)]">
+                      {subtitle}
+                    </Dialog.Description>
+                  ) : null}
+                </div>
+                <Dialog.Close
+                  aria-label={t('common.close')}
+                  className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+                >
+                  <X weight="bold" className="w-4 h-4" />
+                </Dialog.Close>
               </div>
-              <Dialog.Close
-                aria-label={t('common.close')}
-                className="k-interactive k-focus-ring inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-              >
-                <X weight="bold" className="w-4 h-4" />
-              </Dialog.Close>
-            </div>
-          ) : null}
-          {children}
-        </Dialog.Popup>
+            ) : null}
+            {children}
+          </Dialog.Popup>
+        </Dialog.Viewport>
       </Dialog.Portal>
     </Dialog.Root>
   );

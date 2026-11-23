@@ -11,6 +11,7 @@ import React, {
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import NumberFlow from '@number-flow/react';
+import { Highlight, HighlightItem } from '@animate-ui/react/primitives/effects/highlight';
 import { toast } from 'sonner';
 import {
   Archive,
@@ -18,39 +19,27 @@ import {
   ArrowDown,
   ArrowsClockwise,
   ArrowUp,
-  CalendarBlank,
   Check,
-  CheckSquare,
-  CirclesFour,
   ClipboardText,
-  CloudCheck,
   CloudSlash,
   CloudWarning,
   EyeSlash,
   FunnelSimple,
   GridFour,
-  Image as ImageIcon,
   Info,
   ListBullets,
   LockKey,
-  LockSimpleOpen,
-  MagnifyingGlass,
   Minus,
-  Moon,
   NotePencil,
   PencilSimple,
   Plus,
   PushPin,
-  SidebarSimple,
-  SlidersHorizontal,
   Sparkle,
   Square,
   SquaresFour,
   Stack,
-  Sun,
   Swatches,
   Trash,
-  Tray,
   X,
 } from '@phosphor-icons/react';
 import type { SyncStatus } from '@shared/sync-contract';
@@ -58,6 +47,7 @@ import type {
   AppearanceConfig,
   AppUpdaterState,
   CalendarEvent,
+  CreateTaskInput,
   FocusBoard,
   OrbitDef,
   SettingsState,
@@ -86,6 +76,26 @@ import {
 import { ModalDialog } from '../components/ui/ModalDialog';
 import { OmniComposer } from '../components/studio/OmniComposer';
 import { MemoryCardRouter } from '../components/cards/MemoryCardRouter';
+import { GlowEffect } from '../components/motion-primitives/glow-effect';
+import { ArchiveIcon } from '../components/icons/archive';
+import { CalendarCheck2Icon } from '../components/icons/calendar-check-2';
+import { CalendarDaysIcon } from '../components/icons/calendar-days';
+import { CloudSyncIcon } from '../components/icons/cloud-sync';
+import { DeleteIcon } from '../components/icons/delete';
+import { FileTextIcon } from '../components/icons/file-text';
+import { GalleryThumbnailsIcon } from '../components/icons/gallery-thumbnails';
+import { LayersIcon } from '../components/icons/layers';
+import { LockKeyholeIcon } from '../components/icons/lock-keyhole';
+import { LockKeyholeOpenIcon } from '../components/icons/lock-keyhole-open';
+import { MoonIcon } from '../components/icons/moon';
+import { PanelLeftCloseIcon } from '../components/icons/panel-left-close';
+import { PanelLeftOpenIcon } from '../components/icons/panel-left-open';
+import { SearchIcon } from '../components/icons/search';
+import { SettingsIcon } from '../components/icons/settings';
+import { SlidersHorizontalIcon } from '../components/icons/sliders-horizontal';
+import { SparklesIcon } from '../components/icons/sparkles';
+import { SunIcon } from '../components/icons/sun';
+import { HoverIconProvider, LiveIcon } from '../components/icons/LiveIcon';
 import type { TasksViewMode } from '../components/studio/TasksHubView';
 import type { SettingsTab } from '../components/modals/SettingsModal';
 
@@ -200,7 +210,7 @@ type SortMode =
   | 'updated_desc'
   | 'title_asc'
   | 'media_first';
-type QuickDnaFilter = 'all' | 'link' | 'note' | 'voice';
+type QuickDnaFilter = 'all' | 'link' | 'note' | 'task' | 'voice';
 type SecretKindFilter = 'all' | 'bank_card' | 'password' | 'api_key' | 'note';
 
 interface SectionEditorState {
@@ -478,6 +488,83 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const [nav, setNav] = useState<NavView>({ type: 'flow' });
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const raw = Number(localStorage.getItem('kapsula.sidebar.width'));
+      if (Number.isFinite(raw) && raw >= 188 && raw <= 340) return Math.round(raw);
+    } catch {
+      // ignore
+    }
+    return 244;
+  });
+  const [sidebarRail, setSidebarRail] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kapsula.sidebar.rail') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [sidebarDragging, setSidebarDragging] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('kapsula.sidebar.width', String(sidebarWidth));
+    } catch {
+      // ignore
+    }
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('kapsula.sidebar.rail', sidebarRail ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [sidebarRail]);
+
+  const handleSidebarResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || !sidebarOpen) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startRail = sidebarRail;
+      const startEffectiveWidth = startRail ? 60 : sidebarWidth;
+      let curWidth = sidebarWidth;
+      let curRail = sidebarRail;
+      setSidebarDragging(true);
+
+      const onMove = (ev: PointerEvent) => {
+        const nextRaw = startEffectiveWidth + (ev.clientX - startX);
+        if (curRail) {
+          if (nextRaw > 112) {
+            curRail = false;
+            curWidth = Math.max(188, Math.min(340, Math.round(nextRaw)));
+            setSidebarRail(false);
+            setSidebarWidth(curWidth);
+          }
+        } else if (nextRaw < 164) {
+          curRail = true;
+          setSidebarRail(true);
+        } else {
+          curWidth = Math.max(188, Math.min(340, Math.round(nextRaw)));
+          setSidebarWidth(curWidth);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        setSidebarDragging(false);
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    [sidebarOpen, sidebarRail, sidebarWidth]
+  );
   const platform = window.kapsula?.platform ?? 'win32';
   const isMac = isMacPlatform(platform);
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -506,6 +593,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     nav.type !== 'archive' &&
     nav.type !== 'trash';
   const isInlineNotesMode = showFeedToolbar && filterDnaQuick === 'note';
+  const isInlineTasksMode = showFeedToolbar && filterDnaQuick === 'task';
+  const isInlineTasksModeRef = useRef(isInlineTasksMode);
+  isInlineTasksModeRef.current = isInlineTasksMode;
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -539,6 +629,28 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [showSyncSpinner, setShowSyncSpinner] = useState(false);
+  const syncShownAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (syncStatus?.state === 'syncing') {
+      const delayTimer = window.setTimeout(() => {
+        syncShownAtRef.current = Date.now();
+        setShowSyncSpinner(true);
+      }, 1200);
+      return () => window.clearTimeout(delayTimer);
+    }
+    if (!showSyncSpinner) return;
+    const elapsed = Date.now() - syncShownAtRef.current;
+    const remaining = Math.max(0, 450 - elapsed);
+    if (remaining === 0) {
+      setShowSyncSpinner(false);
+      return;
+    }
+    const hideTimer = window.setTimeout(() => setShowSyncSpinner(false), remaining);
+    return () => window.clearTimeout(hideTimer);
+  }, [syncStatus?.state, showSyncSpinner]);
+
   const [updaterState, setUpdaterState] = useState<AppUpdaterState | null>(null);
   const [synthesizeOpen, setSynthesizeOpen] = useState(false);
   const [synthesizeSeedIds, setSynthesizeSeedIds] = useState<string[] | null>(null);
@@ -568,6 +680,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [hiddenNavSections, setHiddenNavSections] = useState<HideableNavSection[]>(readHiddenNavSections);
   const [primaryNavOrder, setPrimaryNavOrder] = useState<PrimaryNavSection[]>(readPrimaryNavOrder);
   const [customizeSidebarOpen, setCustomizeSidebarOpen] = useState(false);
+  const [assistantBtnHovered, setAssistantBtnHovered] = useState(false);
+  const [settingsBtnHovered, setSettingsBtnHovered] = useState(false);
+  const [customizeBtnHovered, setCustomizeBtnHovered] = useState(false);
+  const [syncBtnHovered, setSyncBtnHovered] = useState(false);
+  const [themeBtnHovered, setThemeBtnHovered] = useState(false);
 
   const hiddenNavSet = useMemo(() => new Set<HideableNavSection>(hiddenNavSections), [hiddenNavSections]);
   const visiblePrimaryNavSections = useMemo(
@@ -742,7 +859,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (studioOpen) {
         closeStudioCleanly();
       }
-      setFilterDnaQuick((prev) => (prev === 'note' ? 'all' : prev));
+      setFilterDnaQuick((prev) => (prev === 'note' || prev === 'task' ? 'all' : prev));
       setNav(nextNav);
     },
     [studioOpen, closeStudioCleanly]
@@ -923,6 +1040,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     };
     const itemHasTasksOrLoaded = (item: VaultItem) =>
       navRef.current.type === 'tasks' ||
+      isInlineTasksModeRef.current ||
       /\[[ xX]\]/.test(item.body || '') ||
       Boolean(item.mediaMeta?.actionItems?.length) ||
       tasksRef.current.some((t) => t.itemId === item.id);
@@ -1335,6 +1453,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const scopedDedicatedNotesCount = useMemo(
     () => inlineNotesItems.filter(isDedicatedNote).length,
     [inlineNotesItems]
+  );
+
+  const scopedTasks = useMemo(() => {
+    if (nav.type === 'orbit') {
+      return tasks.filter((tk) => tk.orbit === nav.orbitId);
+    }
+    if (nav.type === 'board') {
+      return tasks.filter((tk) => tk.focusBoardId === nav.boardId);
+    }
+    return tasks;
+  }, [tasks, nav]);
+
+  const scopedOpenTasksCount = useMemo(
+    () => scopedTasks.filter((tk) => !tk.done).length,
+    [scopedTasks]
   );
 
   // Filtered & sorted items
@@ -2262,7 +2395,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             badge: counts.unsorted,
             active: filterUnsortedOnly,
             onClick: () => {
-              if (filterDnaQuick === 'note') setFilterDnaQuick('all');
+              if (filterDnaQuick === 'note' || filterDnaQuick === 'task') setFilterDnaQuick('all');
               setFilterUnsortedOnly((v) => !v);
             },
           },
@@ -2294,6 +2427,28 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       },
     },
     {
+      id: 'task',
+      testId: 'quick-filter-task',
+      label: t('workspace.filter.tasks'),
+      badge: scopedOpenTasksCount > 0 ? scopedOpenTasksCount : undefined,
+      active: filterDnaQuick === 'task',
+      onClick: () => {
+        if (filterDnaQuick === 'task') {
+          setFilterDnaQuick('all');
+        } else {
+          setFilterDnaQuick('task');
+          setFilterPinnedOnly(false);
+          setFilterUnsortedOnly(false);
+          setFilterMediaOnly(false);
+          setSelectedIds([]);
+          void window.kapsula
+            .listTasks()
+            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+            .catch(() => {});
+        }
+      },
+    },
+    {
       id: 'voice',
       testId: 'quick-filter-voice',
       label: t('workspace.filter.voice'),
@@ -2306,31 +2461,47 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       label: t('workspace.filter.pinned'),
       active: filterPinnedOnly,
       onClick: () => {
-        if (filterDnaQuick === 'note') setFilterDnaQuick('all');
+        if (filterDnaQuick === 'note' || filterDnaQuick === 'task') setFilterDnaQuick('all');
         setFilterPinnedOnly((v) => !v);
       },
     },
   ];
 
-  const renderQuickFilterChips = () =>
-    feedQuickFilterChips.map((chip) => (
-      <button
-        key={chip.id}
-        type="button"
-        data-testid={chip.testId}
-        onClick={chip.onClick}
-        className={`k-interactive relative h-7 px-2.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 ${
-          chip.active
-            ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
-            : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]/80 border border-transparent'
-        }`}
-      >
-        <span>{chip.label}</span>
-        {chip.badge !== undefined ? (
-          <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
-        ) : null}
-      </button>
-    ));
+  const renderQuickFilterChips = () => (
+    <Highlight
+      mode="parent"
+      controlledItems
+      hover
+      exitDelay={0}
+      className="rounded-full bg-[var(--k-bg-surface-2)]"
+      containerClassName="inline-flex flex-wrap items-center gap-1"
+      transition={
+        prefersReduced
+          ? { duration: 0 }
+          : { type: 'spring', stiffness: 760, damping: 44, mass: 0.42 }
+      }
+    >
+      {feedQuickFilterChips.map((chip) => (
+        <HighlightItem key={chip.id} value={chip.id} disabled={chip.active}>
+          <button
+            type="button"
+            data-testid={chip.testId}
+            onClick={chip.onClick}
+            className={`k-interactive relative z-10 h-7 px-2.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 ${
+              chip.active
+                ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
+                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] border border-transparent'
+            }`}
+          >
+            <span>{chip.label}</span>
+            {chip.badge !== undefined ? (
+              <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
+            ) : null}
+          </button>
+        </HighlightItem>
+      ))}
+    </Highlight>
+  );
 
   const renderNotesHubView = ({
     viewKey,
@@ -2434,74 +2605,88 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     [handleOpenBlankDraft, isMac, platform, settings.hudShortcut, t, locale],
   );
 
+  const glassEnabled = (appearanceConfig.glassPreset ?? 'off') !== 'off';
+
   return (
     <div
       data-testid="studio-workspace"
-      className="h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
+      className="relative h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
     >
-      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: glides width smoothly in lockstep with workspace) */}
+      {glassEnabled ? <div aria-hidden="true" className="k-glass-mesh" /> : null}
+      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: drag-resizable down to 60px Icon-Rail or full collapse) */}
       <motion.aside
         ref={sidebarElRef}
         key="workspace-sidebar"
         data-testid="workspace-sidebar"
+        data-sidebar-rail={sidebarRail ? 'true' : 'false'}
         aria-hidden={!sidebarOpen}
         initial={false}
         animate={
           sidebarOpen
-            ? { width: 244, opacity: 1 }
+            ? { width: sidebarRail ? 60 : sidebarWidth, opacity: 1 }
             : { width: 0, opacity: 0 }
         }
         transition={
-          prefersReduced
-            ? { duration: 0.08 }
-            : { duration: 0.22, ease: [0.32, 0.72, 0, 1] }
+          sidebarDragging
+            ? { duration: 0 }
+            : prefersReduced
+              ? { duration: 0.08 }
+              : { duration: 0.22, ease: [0.32, 0.72, 0, 1] }
         }
         style={{ pointerEvents: sidebarOpen ? 'auto' : 'none' }}
-        className={`shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
+        className={`relative z-[2] shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
           sidebarOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
         }`}
       >
-        <div className="w-[244px] h-full flex flex-col">
+        <div className="w-full min-w-0 h-full flex flex-col relative">
           {/* Sidebar Integrated Top Brand Bar (draggable; reserves macOS traffic-light safe zone) */}
           <div
-            className={`h-[46px] shrink-0 flex items-center justify-between k-drag-region transition-[padding] duration-150 ${
-              showTrafficLights ? 'pl-[82px] pr-3' : 'px-3'
+            className={`h-[46px] shrink-0 flex items-center ${
+              sidebarRail ? 'justify-center px-1.5' : 'justify-between'
+            } k-drag-region transition-[padding] duration-150 ${
+              !sidebarRail ? (showTrafficLights ? 'pl-[82px] pr-3' : 'px-3') : ''
             }`}
           >
-            <button
-              type="button"
-              onClick={() => navigateTo({ type: 'flow' })}
-              className="k-no-drag flex items-center gap-2 min-w-0 rounded-lg px-1 py-1 hover:bg-[var(--k-bg-surface-2)]/70 transition-colors cursor-pointer"
-            >
-              <KapsulaEmblem size={19} className="shrink-0 text-[var(--k-ink-primary)]" />
-              <span className="k-display font-semibold text-[13.5px] tracking-[-0.02em] text-[var(--k-ink-primary)]">
-                Kapsula
-              </span>
-            </button>
-
-            <TooltipHint label={t('nav.collapseSidebar')}>
+            {!(sidebarRail && showTrafficLights) ? (
               <button
                 type="button"
-                data-testid="toggle-sidebar-btn"
-                onClick={() => setSidebarOpen(false)}
-                className="k-no-drag k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                aria-label={t('nav.collapseSidebar')}
+                onClick={() => navigateTo({ type: 'flow' })}
+                className="k-no-drag flex items-center gap-2 min-w-0 rounded-lg px-1 py-1 hover:bg-[var(--k-bg-surface-2)]/70 transition-colors cursor-pointer"
               >
-                <SidebarSimple size={16} />
+                <KapsulaEmblem size={19} className="shrink-0 text-[var(--k-ink-primary)]" />
+                {!sidebarRail ? (
+                  <span className="k-display font-semibold text-[13.5px] tracking-[-0.02em] text-[var(--k-ink-primary)]">
+                    Kapsula
+                  </span>
+                ) : null}
               </button>
-            </TooltipHint>
+            ) : null}
+
+            {!sidebarRail ? (
+              <TooltipHint label={t('nav.collapseSidebar')}>
+                <button
+                  type="button"
+                  data-testid="toggle-sidebar-btn"
+                  onClick={() => setSidebarOpen(false)}
+                  className="k-no-drag k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+                  aria-label={t('nav.collapseSidebar')}
+                >
+                  <LiveIcon icon={PanelLeftCloseIcon} size={16} />
+                </button>
+              </TooltipHint>
+            ) : null}
           </div>
 
-          <div className="flex-1 min-h-0 flex flex-col px-2.5 pb-2.5 pt-1 gap-3">
+          <div className={`flex-1 min-h-0 flex flex-col ${sidebarRail ? 'px-1.5' : 'px-2.5'} pb-2.5 pt-1 gap-3`}>
             {/* Core views pinned cleanly above scrollable sections */}
-            <div className="space-y-0.5 shrink-0" data-testid="sidebar-primary-nav-list">
+            <div className="shrink-0 flex flex-col gap-1" data-testid="sidebar-primary-nav-list">
               {visiblePrimaryNavSections.map((sec, visIdx) => {
                 const navMeta = (() => {
                   switch (sec) {
                     case 'flow':
                       return {
                         navView: { type: 'flow' } as NavView,
-                        icon: <Tray size={16} />,
+                        icon: <LiveIcon icon={LayersIcon} size={16} />,
                         label: t('nav.allItems'),
                         count: counts.total,
                         testId: 'nav-flow',
@@ -2509,7 +2694,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     case 'notes':
                       return {
                         navView: { type: 'notes' } as NavView,
-                        icon: <NotePencil size={16} />,
+                        icon: <LiveIcon icon={FileTextIcon} size={16} />,
                         label: t('nav.notes'),
                         count: counts.notes,
                         testId: 'nav-notes',
@@ -2517,7 +2702,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     case 'media':
                       return {
                         navView: { type: 'media' } as NavView,
-                        icon: <ImageIcon size={16} />,
+                        icon: <LiveIcon icon={GalleryThumbnailsIcon} size={16} />,
                         label: t('nav.media'),
                         count: counts.media,
                         testId: 'nav-media',
@@ -2525,7 +2710,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     case 'tasks':
                       return {
                         navView: { type: 'tasks' } as NavView,
-                        icon: <CheckSquare size={16} />,
+                        icon: <LiveIcon icon={CalendarCheck2Icon} size={16} />,
                         label: t('nav.tasks'),
                         count: counts.openTasks,
                         testId: 'nav-tasks',
@@ -2533,7 +2718,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     case 'calendar':
                       return {
                         navView: { type: 'calendar' } as NavView,
-                        icon: <CalendarBlank size={16} />,
+                        icon: <LiveIcon icon={CalendarDaysIcon} size={16} />,
                         label: t('nav.calendar'),
                         count: counts.todayCalendar,
                         testId: 'nav-calendar',
@@ -2541,7 +2726,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     case 'secrets':
                       return {
                         navView: { type: 'secrets' } as NavView,
-                        icon: vaultLocked ? <LockKey size={16} /> : <LockSimpleOpen size={16} />,
+                        icon: (
+                          <LiveIcon
+                            icon={vaultLocked ? LockKeyholeIcon : LockKeyholeOpenIcon}
+                            size={16}
+                          />
+                        ),
                         label: t('nav.vault'),
                         count: counts.secrets,
                         testId: 'nav-secrets',
@@ -2586,87 +2776,91 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     : null;
                 const isCardDropOver = sec === 'notes' && cardDropTargetId === 'nav-notes';
 
+                const active = isSameNav(nav, navMeta.navView);
                 return (
                   <ContextMenuSurface key={sec} entries={navMenu}>
-                    <SidebarNavButton
-                      active={isSameNav(nav, navMeta.navView)}
-                      icon={navMeta.icon}
-                      label={navMeta.label}
-                      count={navMeta.count}
-                      testId={navMeta.testId}
-                      draggable
-                      isDragging={dragPrimaryNavId === sec}
-                      isCardDropOver={isCardDropOver}
-                      dropPosition={dropPosition}
-                      onClick={() => navigateTo(navMeta.navView)}
-                      onDragStart={(e) => {
-                        setDragPrimaryNavId(sec);
-                        setPrimaryNavDropTarget(null);
-                        e.dataTransfer.setData('text/kapsula-sidebar-nav', sec);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragOver={(e) => {
-                        const isCardDrag =
-                          !dragPrimaryNavId &&
-                          !dragOrbitId &&
-                          !dragBoardId &&
-                          hasDragType(e, 'text/kapsula-item-id');
-                        if (sec === 'notes' && isCardDrag) {
-                          if (!hasDragType(e, 'text/kapsula-item-non-note')) {
+                    <div className="relative z-[1]">
+                      <SidebarNavButton
+                        active={active}
+                          compactRail={sidebarRail}
+                          icon={navMeta.icon}
+                          label={navMeta.label}
+                          count={navMeta.count}
+                          testId={navMeta.testId}
+                          draggable
+                          isDragging={dragPrimaryNavId === sec}
+                          isCardDropOver={isCardDropOver}
+                          dropPosition={dropPosition}
+                          onClick={() => navigateTo(navMeta.navView)}
+                          onDragStart={(e) => {
+                            setDragPrimaryNavId(sec);
+                            setPrimaryNavDropTarget(null);
+                            e.dataTransfer.setData('text/kapsula-sidebar-nav', sec);
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragOver={(e) => {
+                            const isCardDrag =
+                              !dragPrimaryNavId &&
+                              !dragOrbitId &&
+                              !dragBoardId &&
+                              hasDragType(e, 'text/kapsula-item-id');
+                            if (sec === 'notes' && isCardDrag) {
+                              if (!hasDragType(e, 'text/kapsula-item-non-note')) {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                                setCardDropTargetId('nav-notes');
+                                setPrimaryNavDropTarget(null);
+                              }
+                              return;
+                            }
+                            const isNavDrag =
+                              Boolean(dragPrimaryNavId) || hasDragType(e, 'text/kapsula-sidebar-nav');
+                            if (!isNavDrag || isCardDrag) return;
                             e.preventDefault();
                             e.dataTransfer.dropEffect = 'move';
-                            setCardDropTargetId('nav-notes');
-                            setPrimaryNavDropTarget(null);
-                          }
-                          return;
-                        }
-                        const isNavDrag =
-                          Boolean(dragPrimaryNavId) || hasDragType(e, 'text/kapsula-sidebar-nav');
-                        if (!isNavDrag || isCardDrag) return;
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        if (dragPrimaryNavId === sec) {
-                          setPrimaryNavDropTarget(null);
-                          return;
-                        }
-                        const position = computeDropPosition(e);
-                        setPrimaryNavDropTarget((prev) =>
-                          prev?.id === sec && prev.position === position
-                            ? prev
-                            : { id: sec, position }
-                        );
-                        setCardDropTargetId(null);
-                      }}
-                      onDragLeave={(e) => {
-                        const nextTarget = e.relatedTarget as Node | null;
-                        if (nextTarget && e.currentTarget.contains(nextTarget)) return;
-                        setPrimaryNavDropTarget((prev) => (prev?.id === sec ? null : prev));
-                        if (sec === 'notes') {
-                          setCardDropTargetId((prev) => (prev === 'nav-notes' ? null : prev));
-                        }
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
-                        if (sec === 'notes' && droppedItemId && !dragPrimaryNavId) {
-                          clearSidebarDragStates();
-                          void handleDropItemOnNotes(droppedItemId);
-                          return;
-                        }
-                        const fromId = (dragPrimaryNavId ||
-                          e.dataTransfer.getData('text/kapsula-sidebar-nav')) as
-                          | PrimaryNavSection
-                          | '';
-                        const pos =
-                          primaryNavDropTarget?.id === sec
-                            ? primaryNavDropTarget.position
-                            : computeDropPosition(e);
-                        clearSidebarDragStates();
-                        if (!fromId || fromId === sec) return;
-                        handleReorderPrimaryNav(fromId, sec, pos);
-                      }}
-                      onDragEnd={clearSidebarDragStates}
-                    />
+                            if (dragPrimaryNavId === sec) {
+                              setPrimaryNavDropTarget(null);
+                              return;
+                            }
+                            const position = computeDropPosition(e);
+                            setPrimaryNavDropTarget((prev) =>
+                              prev?.id === sec && prev.position === position
+                                ? prev
+                                : { id: sec, position }
+                            );
+                            setCardDropTargetId(null);
+                          }}
+                          onDragLeave={(e) => {
+                            const nextTarget = e.relatedTarget as Node | null;
+                            if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                            setPrimaryNavDropTarget((prev) => (prev?.id === sec ? null : prev));
+                            if (sec === 'notes') {
+                              setCardDropTargetId((prev) => (prev === 'nav-notes' ? null : prev));
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
+                            if (sec === 'notes' && droppedItemId && !dragPrimaryNavId) {
+                              clearSidebarDragStates();
+                              void handleDropItemOnNotes(droppedItemId);
+                              return;
+                            }
+                            const fromId = (dragPrimaryNavId ||
+                              e.dataTransfer.getData('text/kapsula-sidebar-nav')) as
+                              | PrimaryNavSection
+                              | '';
+                            const pos =
+                              primaryNavDropTarget?.id === sec
+                                ? primaryNavDropTarget.position
+                                : computeDropPosition(e);
+                            clearSidebarDragStates();
+                            if (!fromId || fromId === sec) return;
+                            handleReorderPrimaryNav(fromId, sec, pos);
+                          }}
+                          onDragEnd={clearSidebarDragStates}
+                        />
+                    </div>
                   </ContextMenuSurface>
                 );
               })}
@@ -2676,33 +2870,39 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <div className="flex-1 min-h-0 overflow-y-auto k-scroll-hidden space-y-4">
               {/* Sections (Orbits) */}
               <div className="space-y-1">
-                <div className="flex items-center justify-between px-2 py-1">
-                  <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                    {t('nav.sections')}
-                  </span>
-                  <TooltipHint label={t('nav.newSection')}>
-                    <button
-                      type="button"
-                      data-testid="add-orbit-btn"
-                      onClick={() =>
-                        setSectionEditor({
-                          kind: 'orbit',
-                          mode: 'create',
-                          name: '',
-                          description: '',
-                          color: SECTION_COLOR_PALETTE[0]!,
-                          icon: 'Folder',
-                        })
-                      }
-                      className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                      aria-label={t('nav.createSection')}
-                    >
-                      <Plus size={13} weight="bold" />
-                    </button>
-                  </TooltipHint>
-                </div>
+                {!sidebarRail ? (
+                  <div className="flex items-center justify-between px-2 py-1">
+                    <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+                      {t('nav.sections')}
+                    </span>
+                    <TooltipHint label={t('nav.newSection')}>
+                      <button
+                        type="button"
+                        data-testid="add-orbit-btn"
+                        onClick={() =>
+                          setSectionEditor({
+                            kind: 'orbit',
+                            mode: 'create',
+                            name: '',
+                            description: '',
+                            color: SECTION_COLOR_PALETTE[0]!,
+                            icon: 'Folder',
+                          })
+                        }
+                        className="k-interactive -mr-[4px] w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        aria-label={t('nav.createSection')}
+                      >
+                        <Plus size={13} weight="bold" />
+                      </button>
+                    </TooltipHint>
+                  </div>
+                ) : (
+                  <div className="my-1 mx-2 h-px bg-[var(--k-border-hairline)]/70" />
+                )}
 
-                <div className="space-y-0.5" data-testid="sidebar-orbits-list">
+                <div data-testid="sidebar-orbits-list">
+                  {orbits.length > 0 ? (
+                    <div className="flex flex-col gap-1">
                   {orbits.map((orbit, idx) => {
                     const active = nav.type === 'orbit' && nav.orbitId === orbit.id;
                     const dropPosition =
@@ -2841,12 +3041,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           }}
                           onDragEnd={clearSidebarDragStates}
                           onClick={() => navigateTo({ type: 'orbit', orbitId: orbit.id })}
-                          className={`k-interactive group relative flex items-center h-8 px-2 rounded-[8px] cursor-pointer ${
+                          title={sidebarRail ? orbit.name : undefined}
+                          className={`k-interactive group relative z-[1] flex items-center h-8 ${
+                            sidebarRail ? 'justify-center px-0' : 'px-2'
+                          } rounded-[8px] cursor-pointer ${
                             active
                               ? 'text-[var(--k-ink-primary)] font-medium'
                               : isCardDropOver
                                 ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-                                : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
                           } ${dragOrbitId === orbit.id ? 'opacity-45' : ''}`}
                         >
                           {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
@@ -2859,52 +3062,61 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
                               aria-hidden="true"
-                              style={workspaceAccentStyle}
+                              style={{ ...workspaceAccentStyle, borderRadius: 8 }}
                               className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
-                          <span className="relative z-10 shrink-0 w-4 h-4 mr-2 flex items-center justify-center">
+                          <span
+                            className={`relative z-10 shrink-0 w-4 h-4 ${
+                              sidebarRail ? 'mr-0' : 'mr-2'
+                            } flex items-center justify-center`}
+                          >
                             <SectionIcon
                               name={orbit.icon || 'Folder'}
                               color={orbit.color}
                               className="w-[15px] h-[15px]"
                             />
                           </span>
-                          <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
-                            {orbit.name}
-                          </span>
+                          {!sidebarRail ? (
+                            <>
+                              <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
+                                {orbit.name}
+                              </span>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSectionEditor({
-                                kind: 'orbit',
-                                mode: 'edit',
-                                id: orbit.id,
-                                name: orbit.name,
-                                description: orbit.description ?? '',
-                                color: orbit.color,
-                                icon: orbit.icon || 'Folder',
-                              });
-                            }}
-                            className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                            aria-label={t('nav.configureSection')}
-                          >
-                            <PencilSimple size={12} />
-                          </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSectionEditor({
+                                    kind: 'orbit',
+                                    mode: 'edit',
+                                    id: orbit.id,
+                                    name: orbit.name,
+                                    description: orbit.description ?? '',
+                                    color: orbit.color,
+                                    icon: orbit.icon || 'Folder',
+                                  });
+                                }}
+                                className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
+                                aria-label={t('nav.configureSection')}
+                              >
+                                <PencilSimple size={12} />
+                              </button>
 
-                          <span
-                            data-testid={`orbit-count-${orbit.id}`}
-                            className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
-                          >
-                            <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
-                          </span>
+                              <span
+                                data-testid={`orbit-count-${orbit.id}`}
+                                className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
+                              >
+                                <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
+                              </span>
+                            </>
+                          ) : null}
                         </div>
                       </ContextMenuSurface>
                     );
                   })}
-                  {orbits.length === 0 ? (
+                    </div>
+                  ) : !sidebarRail ? (
                     <div className="px-2 py-2 text-[11.5px] text-[var(--k-ink-muted)]">
                       {t('nav.noSectionsHint')}
                     </div>
@@ -2926,6 +3138,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     },
                   ]}
                 >
+                  {!sidebarRail ? (
                   <div className="flex items-center justify-between px-2 py-1">
                     <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                       {t('nav.boards')}
@@ -2944,16 +3157,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             icon: 'BookmarkSimple',
                           })
                         }
-                        className="k-interactive w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        className="k-interactive -mr-[4px] w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                         aria-label={t('nav.createBoard')}
                       >
                         <Plus size={13} weight="bold" />
                       </button>
                     </TooltipHint>
                   </div>
+                  ) : (
+                    <div className="my-1 mx-2 h-px bg-[var(--k-border-hairline)]/70" />
+                  )}
                 </ContextMenuSurface>
 
-                <div className="space-y-0.5" data-testid="sidebar-boards-list">
+                <div data-testid="sidebar-boards-list">
+                  {boards.length > 0 ? (
+                    <div className="flex flex-col gap-1">
                   {boards.map((board, idx) => {
                     const active = nav.type === 'board' && nav.boardId === board.id;
                     const dropPosition =
@@ -3095,12 +3313,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             setBoardViewOverride(null);
                             navigateTo({ type: 'board', boardId: board.id });
                           }}
-                          className={`k-interactive group relative flex items-center h-8 px-2 rounded-[8px] cursor-pointer ${
+                          title={sidebarRail ? board.name : undefined}
+                          className={`k-interactive group relative z-[1] flex items-center h-8 ${
+                            sidebarRail ? 'justify-center px-0' : 'px-2'
+                          } rounded-[8px] cursor-pointer ${
                             active
                               ? 'text-[var(--k-ink-primary)] font-medium'
                               : isCardDropOver
                                 ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-                                : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
                           } ${dragBoardId === board.id ? 'opacity-45' : ''}`}
                         >
                           {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
@@ -3113,50 +3334,59 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
                               aria-hidden="true"
-                              style={workspaceAccentStyle}
+                              style={{ ...workspaceAccentStyle, borderRadius: 8 }}
                               className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
-                          <span className="relative z-10 shrink-0 w-4 h-4 mr-2 flex items-center justify-center">
+                          <span
+                            className={`relative z-10 shrink-0 w-4 h-4 ${
+                              sidebarRail ? 'mr-0' : 'mr-2'
+                            } flex items-center justify-center`}
+                          >
                             <Swatches
                               size={14}
                               weight={active ? 'fill' : 'duotone'}
                               style={{ color: board.color || SECTION_COLOR_PALETTE[2]! }}
                             />
                           </span>
-                          <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
-                            {board.name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSectionEditor({
-                                kind: 'board',
-                                mode: 'edit',
-                                id: board.id,
-                                name: board.name,
-                                description: board.description ?? '',
-                                color: board.color || SECTION_COLOR_PALETTE[2]!,
-                                icon: board.icon || 'BookmarkSimple',
-                              });
-                            }}
-                            className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                            aria-label={t('nav.configureBoard')}
-                          >
-                            <PencilSimple size={12} />
-                          </button>
-                          <span
-                            data-testid={`board-count-${board.id}`}
-                            className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
-                          >
-                            <NumberFlow value={counts.boards[board.id] ?? 0} />
-                          </span>
+                          {!sidebarRail ? (
+                            <>
+                              <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
+                                {board.name}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSectionEditor({
+                                    kind: 'board',
+                                    mode: 'edit',
+                                    id: board.id,
+                                    name: board.name,
+                                    description: board.description ?? '',
+                                    color: board.color || SECTION_COLOR_PALETTE[2]!,
+                                    icon: board.icon || 'BookmarkSimple',
+                                  });
+                                }}
+                                className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
+                                aria-label={t('nav.configureBoard')}
+                              >
+                                <PencilSimple size={12} />
+                              </button>
+                              <span
+                                data-testid={`board-count-${board.id}`}
+                                className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
+                              >
+                                <NumberFlow value={counts.boards[board.id] ?? 0} />
+                              </span>
+                            </>
+                          ) : null}
                         </div>
                       </ContextMenuSurface>
                     );
                   })}
-                  {boards.length === 0 ? (
+                    </div>
+                  ) : !sidebarRail ? (
                     <div className="px-2 py-1.5 text-[11.5px] text-[var(--k-ink-muted)]">
                       {t('nav.noBoards')}
                     </div>
@@ -3167,29 +3397,36 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             </div>
 
             {/* Secondary Utilities: Archive + Trash pinned neatly near footer */}
-            <div className="shrink-0 pt-1.5 border-t border-[var(--k-border-hairline)]/80 space-y-0.5">
+            <div className="shrink-0 pt-1.5 border-t border-[var(--k-border-hairline)]/80 flex flex-col gap-1">
               {counts.archived > 0 || isSameNav(nav, { type: 'archive' }) ? (
-                <SidebarNavButton
-                  active={isSameNav(nav, { type: 'archive' })}
-                  icon={<Archive size={16} />}
-                  label={t('nav.archive')}
-                  count={counts.archived}
-                  testId="nav-archive"
-                  onClick={() => navigateTo({ type: 'archive' })}
-                />
+                <div className="relative z-[1]">
+                  <SidebarNavButton
+                    active={isSameNav(nav, { type: 'archive' })}
+                    compactRail={sidebarRail}
+                    icon={<LiveIcon icon={ArchiveIcon} size={16} />}
+                    label={t('nav.archive')}
+                    count={counts.archived}
+                    testId="nav-archive"
+                    onClick={() => navigateTo({ type: 'archive' })}
+                  />
+                </div>
               ) : null}
-              <SidebarNavButton
-                active={isSameNav(nav, { type: 'trash' })}
-                icon={<Trash size={16} />}
-                label={t('nav.trash')}
-                count={counts.trashed}
-                testId="nav-trash"
-                onClick={() => navigateTo({ type: 'trash' })}
-              />
+              <div className="relative z-[1]">
+                <SidebarNavButton
+                  active={isSameNav(nav, { type: 'trash' })}
+                  compactRail={sidebarRail}
+                  icon={<LiveIcon icon={DeleteIcon} size={16} />}
+                  label={t('nav.trash')}
+                  count={counts.trashed}
+                  testId="nav-trash"
+                  onClick={() => navigateTo({ type: 'trash' })}
+                />
+              </div>
             </div>
 
             {/* Non-intrusive cloud update pill above sidebar footer */}
-            {updaterState &&
+            {!sidebarRail &&
+            updaterState &&
             (updaterState.status === 'available' || updaterState.status === 'downloaded') &&
             updaterState.latestVersion &&
             updaterState.dismissedVersion !== updaterState.latestVersion ? (
@@ -3232,20 +3469,35 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ) : null}
 
             {/* Compact Sidebar Footer: Settings + Customize + Sync + Lock + Theme */}
-            <div className="shrink-0 pt-2 border-t border-[var(--k-border-hairline)] flex items-center gap-1">
-              <button
-                type="button"
-                data-testid="open-settings-btn"
-                onClick={() => {
-                  setSettingsInitialTab('appearance');
-                  setSettingsOpen(true);
-                }}
-                className="k-interactive flex-1 flex items-center gap-2 px-2.5 h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer min-w-0"
-              >
-                <CirclesFour size={15} className="shrink-0" />
-                <span className="truncate">{t('workspace.sidebar.settings')}</span>
-              </button>
+            <div
+              className={`shrink-0 pt-2 border-t border-[var(--k-border-hairline)] flex ${
+                sidebarRail ? 'flex-col items-center gap-1' : 'items-center gap-1'
+              }`}
+            >
+              <TooltipHint label={sidebarRail ? t('workspace.sidebar.settings') : ''}>
+                <HoverIconProvider hovered={settingsBtnHovered}>
+                  <button
+                    type="button"
+                    data-testid="open-settings-btn"
+                    onMouseEnter={() => setSettingsBtnHovered(true)}
+                    onMouseLeave={() => setSettingsBtnHovered(false)}
+                    onClick={() => {
+                      setSettingsInitialTab('appearance');
+                      setSettingsOpen(true);
+                    }}
+                    className={`k-interactive flex items-center ${
+                      sidebarRail ? 'w-8 justify-center px-0' : 'flex-1 gap-2 px-2.5 min-w-0'
+                    } h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer`}
+                  >
+                    <LiveIcon icon={SettingsIcon} size={15} />
+                    {!sidebarRail ? (
+                      <span className="truncate">{t('workspace.sidebar.settings')}</span>
+                    ) : null}
+                  </button>
+                </HoverIconProvider>
+              </TooltipHint>
 
+              {!sidebarRail ? (
               <PopoverSurface
                 open={customizeSidebarOpen}
                 onOpenChange={setCustomizeSidebarOpen}
@@ -3258,13 +3510,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     data-testid="customize-sidebar-btn"
                     title={t('nav.customizeSidebar')}
                     aria-label={t('nav.customizeSidebar')}
+                    onMouseEnter={() => setCustomizeBtnHovered(true)}
+                    onMouseLeave={() => setCustomizeBtnHovered(false)}
                     className={`k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center cursor-pointer shrink-0 ${
                       hiddenNavSections.length > 0 || !isDefaultPrimaryNavOrder
                         ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]/70'
                         : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
                     }`}
                   >
-                    <SlidersHorizontal size={15} />
+                    <LiveIcon icon={SlidersHorizontalIcon} size={15} active={customizeBtnHovered} />
                   </button>
                 }
               >
@@ -3327,14 +3581,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   </div>
                 </div>
               </PopoverSurface>
+              ) : null}
 
               <TooltipHint
                 label={
                   !syncStatus || syncStatus.state === 'signed_out'
                     ? t('workspace.sidebar.syncDisconnected')
-                    : syncStatus.state === 'syncing'
+                    : syncStatus.state === 'syncing' && showSyncSpinner
                       ? t('workspace.sidebar.syncSyncing')
-                      : syncStatus.state === 'synced'
+                      : syncStatus.state === 'synced' || syncStatus.state === 'syncing'
                         ? t('workspace.sidebar.syncSynced')
                         : syncStatus.state === 'offline'
                           ? t('workspace.sidebar.syncOffline')
@@ -3349,6 +3604,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 <button
                   type="button"
                   data-testid="sync-status-btn"
+                  onMouseEnter={() => setSyncBtnHovered(true)}
+                  onMouseLeave={() => setSyncBtnHovered(false)}
                   onClick={() => {
                     setSettingsInitialTab('sync');
                     setSettingsOpen(true);
@@ -3356,16 +3613,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   className="k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
                   aria-label={t('workspace.sidebar.syncAria')}
                 >
-                  {syncStatus?.state === 'syncing' ? (
+                  {syncStatus?.state === 'syncing' && showSyncSpinner ? (
                     <ArrowsClockwise size={15} className="animate-spin text-[var(--k-accent)]" />
                   ) : syncStatus?.state === 'offline' ? (
                     <CloudSlash size={15} className="text-[var(--k-amber)]" />
                   ) : syncStatus?.state === 'error' ? (
                     <CloudWarning size={15} className="text-[var(--k-danger)]" />
-                  ) : syncStatus?.state === 'synced' ? (
-                    <CloudCheck size={15} className="text-[var(--k-emerald)]" />
+                  ) : syncStatus?.state === 'synced' || syncStatus?.state === 'syncing' ? (
+                    <LiveIcon icon={CloudSyncIcon} size={15} active={syncBtnHovered} className="text-[var(--k-emerald)]" />
                   ) : (
-                    <CloudCheck size={15} className="opacity-70" />
+                    <LiveIcon icon={CloudSyncIcon} size={15} active={syncBtnHovered} className="opacity-75" />
                   )}
                   {syncStatus &&
                   (syncStatus.state === 'needs_passphrase_setup' ||
@@ -3393,9 +3650,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     aria-label={vaultLocked ? t('workspace.sidebar.unlockVault') : t('workspace.sidebar.lockVault')}
                   >
                     {vaultLocked ? (
-                      <LockKey size={15} className="text-[var(--k-accent)]" />
+                      <LiveIcon icon={LockKeyholeIcon} size={15} className="text-[var(--k-accent)]" />
                     ) : (
-                      <LockSimpleOpen size={15} className="text-[var(--k-emerald)]" />
+                      <LiveIcon icon={LockKeyholeOpenIcon} size={15} className="text-[var(--k-emerald)]" />
                     )}
                   </button>
                 </TooltipHint>
@@ -3405,6 +3662,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 <button
                   type="button"
                   data-testid="theme-toggle-btn"
+                  onMouseEnter={() => setThemeBtnHovered(true)}
+                  onMouseLeave={() => setThemeBtnHovered(false)}
                   onClick={handleToggleTheme}
                   className="k-interactive w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
                   aria-label={t('workspace.sidebar.toggleThemeAria')}
@@ -3430,7 +3689,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         }
                         transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
                       >
-                        <Moon size={15} />
+                        <LiveIcon icon={MoonIcon} size={15} active={themeBtnHovered} />
                       </motion.span>
                     ) : (
                       <motion.span
@@ -3452,7 +3711,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         }
                         transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
                       >
-                        <Sun size={15} />
+                        <LiveIcon icon={SunIcon} size={15} active={themeBtnHovered} />
                       </motion.span>
                     )}
                   </AnimatePresence>
@@ -3461,21 +3720,43 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             </div>
           </div>
         </div>
+        {sidebarOpen ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('nav.resizeSidebarAria')}
+            data-testid="sidebar-resize-handle"
+            onPointerDown={handleSidebarResizePointerDown}
+            onDoubleClick={() => {
+              setSidebarRail(false);
+              setSidebarWidth(244);
+            }}
+            className="k-no-drag group/resizer absolute top-0 right-0 w-[6px] h-full cursor-col-resize z-20 flex items-center justify-end"
+          >
+            <div
+              className={`w-[2px] h-full transition-colors duration-120 ${
+                sidebarDragging
+                  ? 'bg-[var(--k-accent)]'
+                  : 'bg-transparent group-hover/resizer:bg-[var(--k-accent)]/55'
+              }`}
+            />
+          </div>
+        ) : null}
       </motion.aside>
 
       {/* Right Main Column: Seamless Slim Chrome + Smoothly Reflowing Workspace */}
-      <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden relative">
+      <div className="relative z-[1] flex-1 min-w-0 h-full flex flex-col overflow-hidden">
         {/* Lightweight Integrated Top Canvas Bar (46px, transparent glass over canvas, zero duplicate icons/titles) */}
         <header className="h-[46px] shrink-0 grid grid-cols-[minmax(112px,1fr)_minmax(220px,400px)_minmax(max-content,1fr)] items-center px-3.5 gap-3 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)] k-drag-region">
           {/* Left: Expand sidebar (smoothly revealed when collapsed) + Clean Breadcrumb Title */}
           <div
             data-testid="header-left-group"
             className={`min-w-0 flex items-center gap-2 justify-self-start transition-[padding] duration-150 ${
-              showTrafficLights && !sidebarOpen ? 'pl-[68px]' : ''
+              showTrafficLights ? (!sidebarOpen ? 'pl-[68px]' : sidebarRail ? 'pl-[20px]' : '') : ''
             }`}
           >
             <AnimatePresence initial={false}>
-              {!sidebarOpen ? (
+              {!sidebarOpen || sidebarRail ? (
                 <motion.div
                   key="expand-sidebar-slot"
                   initial={prefersReduced ? { opacity: 0 } : { opacity: 0, width: 0 }}
@@ -3488,11 +3769,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <button
                       type="button"
                       data-testid="toggle-sidebar-btn"
-                      onClick={() => setSidebarOpen(true)}
+                      onClick={() => {
+                        if (sidebarRail) {
+                          setSidebarRail(false);
+                        } else {
+                          setSidebarOpen(true);
+                        }
+                      }}
                       className="k-interactive w-7.5 h-7.5 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
                       aria-label={t('nav.showSidebar')}
                     >
-                      <SidebarSimple size={16} />
+                      <LiveIcon icon={PanelLeftOpenIcon} size={16} />
                     </button>
                   </TooltipHint>
                 </motion.div>
@@ -3520,7 +3807,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   : 'bg-[var(--k-bg-surface-1)]/70 border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)]'
               }`}
             >
-              <MagnifyingGlass size={14} className="text-[var(--k-ink-muted)] shrink-0" />
+              <LiveIcon
+                icon={SearchIcon}
+                size={14}
+                active={searchFocused}
+                className="text-[var(--k-ink-muted)] shrink-0"
+              />
               <input
                 ref={searchInputRef}
                 data-testid="global-search-input"
@@ -3605,19 +3897,38 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               </button>
             </TooltipHint>
 
-            <button
-              type="button"
-              data-testid="assistant-open-btn"
-              onClick={() => setAssistantOpen((v) => !v)}
-              className={`k-interactive h-7.5 px-2.5 rounded-[8px] flex items-center gap-1.5 text-[12px] font-medium border cursor-pointer ${
-                assistantOpen
-                  ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] border-[var(--k-accent)]'
-                  : 'bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] border-[var(--k-border-hairline)]'
-              }`}
-            >
-              <Sparkle size={13.5} weight="fill" className={assistantOpen ? '' : 'text-[var(--k-accent)]'} />
-              <span>{t('workspace.assistantButton')}</span>
-            </button>
+            <div className="relative shrink-0">
+              {(assistantBtnHovered || assistantOpen) && !prefersReduced ? (
+                <GlowEffect
+                  colors={['#d95826', '#7c3aed', '#3b82f6', '#d95826']}
+                  mode="rotate"
+                  blur="soft"
+                  duration={4}
+                  scale={1.04}
+                  className="rounded-[9px] opacity-40"
+                />
+              ) : null}
+              <button
+                type="button"
+                data-testid="assistant-open-btn"
+                onMouseEnter={() => setAssistantBtnHovered(true)}
+                onMouseLeave={() => setAssistantBtnHovered(false)}
+                onClick={() => setAssistantOpen((v) => !v)}
+                className={`relative z-10 k-interactive h-7.5 px-2.5 rounded-[8px] flex items-center gap-1.5 text-[12px] font-medium border cursor-pointer ${
+                  assistantOpen
+                    ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] border-[var(--k-accent)]'
+                    : 'bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] border-[var(--k-border-hairline)]'
+                }`}
+              >
+                <LiveIcon
+                  icon={SparklesIcon}
+                  size={14}
+                  active={assistantBtnHovered || assistantOpen}
+                  className={assistantOpen ? '' : 'text-[var(--k-accent)]'}
+                />
+                <span>{t('workspace.assistantButton')}</span>
+              </button>
+            </div>
 
             {!isMac ? (
               <>
@@ -3745,21 +4056,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
                         .catch(() => {});
                     }}
+                    onCreateTask={async (input: CreateTaskInput) => {
+                      await window.kapsula.createTask(input);
+                      void window.kapsula
+                        .listTasks()
+                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                        .catch(() => {});
+                    }}
                     onAddQuickTask={async (text, columnId) => {
-                      const created = await window.kapsula.capture({
-                        text: `- [ ] ${text}`,
-                        title: truncateAtWordBoundary(text, 72),
-                        source: 'vault_ui',
+                      await window.kapsula.createTask({
+                        text,
+                        columnId,
                       });
-                      if (created && columnId && columnId !== 'inbox') {
-                        await window.kapsula.moveTaskOnBoard({
-                          itemId: created.id,
-                          taskKey: 'md:0',
-                          columnId,
-                          boardOrder: Date.now(),
-                        });
-                      }
-                      void window.kapsula.listTasks().then(setTasks).catch(() => {});
+                      void window.kapsula
+                        .listTasks()
+                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                        .catch(() => {});
                     }}
                   />
                 </Suspense>
@@ -3785,6 +4097,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     onOpenIntegrations={() => {
                       setSettingsInitialTab('integrations');
                       setSettingsOpen(true);
+                    }}
+                    onTasksChanged={() => {
+                      void window.kapsula
+                        .listTasks()
+                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                        .catch(() => {});
                     }}
                   />
                 </Suspense>
@@ -3826,6 +4144,80 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     })}
                   </Suspense>
                 </motion.div>
+              </div>
+            ) : isInlineTasksMode ? (
+              <div className="h-full min-h-0 flex flex-col overflow-hidden">
+                <div
+                  style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)' }}
+                  className="shrink-0 py-2.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)]"
+                >
+                  <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
+                    {renderQuickFilterChips()}
+                  </div>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <motion.div
+                    key={
+                      nav.type === 'orbit'
+                        ? `inline-tasks-orbit-${nav.orbitId}`
+                        : nav.type === 'board'
+                          ? `inline-tasks-board-${nav.boardId}`
+                          : 'inline-tasks-flow'
+                    }
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
+                    style={{
+                      paddingLeft: 'var(--k-page-px)',
+                      paddingRight: 'var(--k-page-px)',
+                      paddingTop: 'var(--k-page-py)',
+                      paddingBottom: 'var(--k-page-py)',
+                    }}
+                    className={`${tasksViewMode === 'board' ? 'max-w-[1520px]' : 'max-w-[1100px]'} mx-auto transition-[max-width] duration-180`}
+                  >
+                    <Suspense fallback={null}>
+                      <TasksHubView
+                        tasks={tasks}
+                        orbits={orbits}
+                        scopedOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
+                        scopedBoardId={nav.type === 'board' ? nav.boardId : null}
+                        viewMode={tasksViewMode}
+                        onViewModeChange={setTasksViewMode}
+                        onToggleTask={handleToggleVaultTask}
+                        onOpenItem={handleOpenItemById}
+                        onTasksChanged={() => {
+                          void window.kapsula
+                            .listTasks()
+                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                            .catch(() => {});
+                        }}
+                        onCreateTask={async (input: CreateTaskInput) => {
+                          await window.kapsula.createTask({
+                            ...input,
+                            orbit: nav.type === 'orbit' ? nav.orbitId : input.orbit,
+                            focusBoardId: nav.type === 'board' ? nav.boardId : input.focusBoardId,
+                          });
+                          void window.kapsula
+                            .listTasks()
+                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                            .catch(() => {});
+                        }}
+                        onAddQuickTask={async (text, columnId) => {
+                          await window.kapsula.createTask({
+                            text,
+                            columnId,
+                            orbit: nav.type === 'orbit' ? nav.orbitId : '',
+                            focusBoardId: nav.type === 'board' ? nav.boardId : null,
+                          });
+                          void window.kapsula
+                            .listTasks()
+                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                            .catch(() => {});
+                        }}
+                      />
+                    </Suspense>
+                  </motion.div>
+                </div>
               </div>
             ) : (
               <div
@@ -4647,15 +5039,26 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, 6px, 0) scale(0.978)' }
+                      : {
+                          opacity: 0,
+                          filter: 'blur(4px)',
+                          transform: 'perspective(900px) rotateX(-13deg) scale(0.88)',
+                        }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1 }
                       : {
                           opacity: 1,
-                          transform: 'translate3d(0, 0, 0) scale(1)',
-                          transition: { duration: 0.175, ease: [0.23, 1, 0.32, 1] },
+                          filter: 'blur(0px)',
+                          transform: 'perspective(900px) rotateX(0deg) scale(1)',
+                          transition: {
+                            type: 'spring',
+                            stiffness: 400,
+                            damping: 28,
+                            mass: 0.78,
+                            opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
+                          },
                         }
                   }
                   exit={
@@ -4663,8 +5066,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       ? { opacity: 0 }
                       : {
                           opacity: 0,
-                          transform: 'translate3d(0, 3px, 0) scale(0.986)',
-                          transition: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
+                          filter: 'blur(3px)',
+                          transform: 'perspective(900px) rotateX(-8deg) scale(0.93)',
+                          transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
                         }
                   }
                   onClick={(e) => e.stopPropagation()}
@@ -4741,20 +5145,39 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               initial={
                 prefersReduced
                   ? { opacity: 0 }
-                  : { opacity: 0, transform: 'translate3d(40px, 0, 0)' }
+                  : {
+                      opacity: 0,
+                      filter: 'blur(3px)',
+                      transform: 'perspective(950px) translate3d(54px, 0, 0) rotateY(7deg) scale(0.96)',
+                    }
               }
               animate={
                 prefersReduced
                   ? { opacity: 1 }
-                  : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }
+                  : {
+                      opacity: 1,
+                      filter: 'blur(0px)',
+                      transform: 'perspective(950px) translate3d(0px, 0, 0) rotateY(0deg) scale(1)',
+                      transition: {
+                        type: 'spring',
+                        stiffness: 400,
+                        damping: 29,
+                        mass: 0.78,
+                        opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
+                      },
+                    }
               }
               exit={
                 prefersReduced
                   ? { opacity: 0 }
-                  : { opacity: 0, transform: 'translate3d(36px, 0, 0)' }
+                  : {
+                      opacity: 0,
+                      filter: 'blur(2px)',
+                      transform: 'perspective(950px) translate3d(40px, 0, 0) rotateY(5deg) scale(0.97)',
+                      transition: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
+                    }
               }
-              transition={{ duration: 0.16, ease: [0.32, 0.72, 0, 1] }}
-              style={{ width: '560px', maxWidth: '92vw' }}
+              style={{ width: '560px', maxWidth: '92vw', transformOrigin: 'right center' }}
               className="relative z-10 h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden"
             >
               <Suspense fallback={null}>
@@ -5161,6 +5584,7 @@ const SidebarDropLine: React.FC<{ position: DropPosition }> = ({ position }) => 
 
 interface SidebarNavButtonProps {
   active: boolean;
+  compactRail?: boolean;
   icon: React.ReactNode;
   label: string;
   count: number;
@@ -5179,6 +5603,7 @@ interface SidebarNavButtonProps {
 
 const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
   active,
+  compactRail = false,
   icon,
   label,
   count,
@@ -5195,56 +5620,73 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
   onDragEnd,
 }) => {
   const prefersReduced = useReducedMotion();
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      draggable={draggable}
-      data-testid={testId}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          e.stopPropagation();
-          onClick();
-        }
-      }}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
-      className={`k-interactive relative w-full flex items-center h-8 px-2 rounded-[8px] cursor-pointer ${
-        active
-          ? 'text-[var(--k-ink-primary)] font-medium'
-          : isCardDropOver
-            ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-            : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
-      } ${isDragging ? 'opacity-45' : ''}`}
-    >
-      {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
-      {active ? (
-        <motion.span
-          layoutId="sidebar-active-pill"
-          transition={
-            prefersReduced
-              ? { duration: 0 }
-              : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
+  const [hovered, setHovered] = useState(false);
+  const buttonNode = (
+    <HoverIconProvider hovered={hovered}>
+      <div
+        role="button"
+        tabIndex={0}
+        draggable={draggable}
+        data-testid={testId}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick();
           }
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
-        />
-      ) : null}
-      <span className="relative z-10 shrink-0 mr-2 flex items-center text-[var(--k-accent)]/85">
-        {icon}
-      </span>
-      <span className="relative z-10 flex-1 min-w-0 text-left truncate text-[13px]">{label}</span>
-      <span
-        data-count={count}
-        className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
+        }}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onDragEnd={onDragEnd}
+        className={`group k-interactive relative z-[1] w-full flex items-center h-8 ${
+          compactRail ? 'justify-center px-0' : 'px-2'
+        } rounded-[8px] cursor-pointer ${
+          active
+            ? 'text-[var(--k-ink-primary)] font-medium'
+            : isCardDropOver
+              ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
+              : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
+        } ${isDragging ? 'opacity-45' : ''}`}
       >
-        <NumberFlow value={count} />
-      </span>
-    </div>
+        {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
+        {active ? (
+          <motion.span
+            layoutId="sidebar-active-pill"
+            transition={
+              prefersReduced
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
+            }
+            aria-hidden="true"
+            style={{ borderRadius: 8 }}
+            className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
+          />
+        ) : null}
+        <span
+          className={`relative z-10 shrink-0 ${
+            compactRail ? 'mr-0' : 'mr-2'
+          } flex items-center text-[var(--k-accent)]/85`}
+        >
+          {icon}
+        </span>
+        {!compactRail ? (
+          <>
+            <span className="relative z-10 flex-1 min-w-0 text-left truncate text-[13px]">{label}</span>
+            <span
+              data-count={count}
+              className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
+            >
+              <NumberFlow value={count} />
+            </span>
+          </>
+        ) : null}
+      </div>
+    </HoverIconProvider>
   );
+  return compactRail ? <TooltipHint label={label}>{buttonNode}</TooltipHint> : buttonNode;
 };

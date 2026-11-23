@@ -473,10 +473,42 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
           <motion.div
             key="calendar-event-sheet-panel"
             data-testid="calendar-event-sheet"
-            initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(44px, 0, 0)' }}
-            animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-            exit={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(38px, 0, 0)' }}
-            transition={{ duration: 0.18, ease: [0.32, 0.72, 0, 1] }}
+            initial={
+              prefersReduced
+                ? { opacity: 0 }
+                : {
+                    opacity: 0,
+                    filter: 'blur(3px)',
+                    transform: 'perspective(950px) translate3d(54px, 0, 0) rotateY(7deg) scale(0.96)',
+                  }
+            }
+            animate={
+              prefersReduced
+                ? { opacity: 1 }
+                : {
+                    opacity: 1,
+                    filter: 'blur(0px)',
+                    transform: 'perspective(950px) translate3d(0px, 0, 0) rotateY(0deg) scale(1)',
+                    transition: {
+                      type: 'spring',
+                      stiffness: 400,
+                      damping: 29,
+                      mass: 0.78,
+                      opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
+                    },
+                  }
+            }
+            exit={
+              prefersReduced
+                ? { opacity: 0 }
+                : {
+                    opacity: 0,
+                    filter: 'blur(2px)',
+                    transform: 'perspective(950px) translate3d(40px, 0, 0) rotateY(5deg) scale(0.97)',
+                    transition: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
+                  }
+            }
+            style={{ transformOrigin: 'right center' }}
             className="relative z-10 w-full max-w-[490px] h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden text-[var(--k-ink-primary)]"
           >
             {/* Clean Top Bar */}

@@ -40,7 +40,13 @@ import { processDocumentIntelligence, saveDocumentAsset } from './document-pipel
 import { formatEmailAsNoteMarkdown, parseEmlBuffer } from './email-parser';
 import { generateThumbnailAndAnalyze } from './thumbnail-service';
 import { normalizeMetaText, sanitizeIngestedText } from './html-cleaner';
-import { downloadOgImage, downloadVideoAsset, sanitizeSafeExternalUrl, unfurlUrl } from './unfurler';
+import { downloadOgImage, sanitizeSafeExternalUrl, unfurlUrl } from './unfurler';
+import { VideoCacheManager } from './video-cache';
+import {
+  detectSocialVideoPlatform,
+  extractYouTubeVideoId,
+  resolveAndCacheSocialVideo,
+} from './video-extractor';
 
 type MediaMetaWithTranscriptError = MediaMeta & { transcriptError?: string };
 
@@ -243,6 +249,7 @@ export type PrepareVisionImageFn = (
 
 export class CapturePipeline {
   private readonly mediaDir: string;
+  private readonly videoCache: VideoCacheManager;
   private readonly inFlight = new Set<Promise<void>>();
   private activeBgWorkers = 0;
   private readonly bgWaitQueue: Array<() => void> = [];
@@ -253,6 +260,7 @@ export class CapturePipeline {
       repo: VaultRepository;
       cryptoVault: VaultCrypto;
       dataDir: string;
+      videoCache?: VideoCacheManager;
       getConfig: () => PipelineRuntimeConfig;
       samplePalette?: SamplePaletteFn;
       prepareVisionImage?: PrepareVisionImageFn;
@@ -267,6 +275,44 @@ export class CapturePipeline {
   ) {
     this.mediaDir = path.join(deps.dataDir, 'media');
     fs.mkdirSync(this.mediaDir, { recursive: true, mode: 0o700 });
+    this.videoCache =
+      deps.videoCache ?? new VideoCacheManager(path.join(deps.dataDir, 'video-cache'));
+  }
+
+  public getVideoCache(): VideoCacheManager {
+    return this.videoCache;
+  }
+
+  public async ensureLinkVideo(itemId: string): Promise<VaultItem | null> {
+    const current = this.deps.repo.getItemById(itemId);
+    if (!current || !current.url || current.dna !== 'link') return current ?? null;
+    if (current.mediaMeta?.cachedVideoFile) {
+      const check = this.videoCache.resolveSafePath(current.mediaMeta.cachedVideoFile);
+      if (check.ok) {
+        this.videoCache.touch(current.mediaMeta.cachedVideoFile);
+        return current;
+      }
+    }
+    const res = await resolveAndCacheSocialVideo({
+      url: current.url,
+      stem: current.contentHash.slice(0, 20),
+      knownVideoUrl: current.mediaMeta?.videoUrl ?? null,
+      videoCache: this.videoCache,
+      enableBrowserFallback: true,
+    });
+    const nextMeta: MediaMeta = {
+      ...(current.mediaMeta ?? {}),
+      ...(res.cachedVideoFile ? { cachedVideoFile: res.cachedVideoFile } : {}),
+      ...(res.youtubeVideoId ? { youtubeVideoId: res.youtubeVideoId } : {}),
+      ...(res.videoUrl ? { videoUrl: res.videoUrl } : {}),
+      videoExtractStatus: res.status,
+    };
+    const updated = this.deps.repo.updateItem(itemId, {
+      mediaMeta: nextMeta,
+      mediaDurationSec: res.durationSec ?? current.mediaDurationSec,
+    });
+    if (updated) this.deps.onItemUpserted?.(updated);
+    return updated;
   }
 
   public getMediaDir(): string {
@@ -1884,17 +1930,51 @@ export class CapturePipeline {
         }
       }
 
-      // Download embeddable post video (e.g. Telegram t.me `.mp4`) for inline playback
-      if (og.videoUrl && !mediaPath) {
-        const dlVid = await downloadVideoAsset(
-          og.videoUrl,
-          this.mediaDir,
-          current.contentHash.slice(0, 20)
-        );
-        if (dlVid) {
-          mediaPath = dlVid.filename;
-          mediaType = dlVid.mime;
-          mediaDurationSec = og.videoDurationSec ?? mediaDurationSec;
+      // Social video links (Instagram Reels, TikTok, Reddit, Telegram, YouTube) use the local bounded LRU cache
+    }
+
+    // B2. Decoupled local social video caching & YouTube embed resolution (runs even when text/meta already unfurled)
+    if (current.dna === 'link' && current.url && config.enableUrlUnfurl) {
+      const ytId = mediaMeta?.youtubeVideoId ?? extractYouTubeVideoId(current.url);
+      if (ytId) {
+        mediaMeta = {
+          ...(mediaMeta ?? {}),
+          youtubeVideoId: ytId,
+          videoExtractStatus: 'ready',
+        };
+      } else if (!mediaPath) {
+        const hasValidCached =
+          Boolean(mediaMeta?.cachedVideoFile) &&
+          this.videoCache.resolveSafePath(mediaMeta!.cachedVideoFile!).ok;
+        const vidPlatform = detectSocialVideoPlatform(current.url);
+        const shouldAttemptVideo =
+          Boolean(mediaMeta?.videoUrl) ||
+          vidPlatform === 'instagram' ||
+          vidPlatform === 'tiktok' ||
+          vidPlatform === 'reddit' ||
+          vidPlatform === 'telegram' ||
+          vidPlatform === 'x';
+        if (
+          !hasValidCached &&
+          shouldAttemptVideo &&
+          (bypassCache || !mediaMeta?.videoExtractStatus)
+        ) {
+          const vidRes = await resolveAndCacheSocialVideo({
+            url: current.url,
+            stem: current.contentHash.slice(0, 20),
+            knownVideoUrl: mediaMeta?.videoUrl ?? null,
+            videoCache: this.videoCache,
+            enableBrowserFallback: true,
+          });
+          mediaMeta = {
+            ...(mediaMeta ?? {}),
+            ...(vidRes.cachedVideoFile ? { cachedVideoFile: vidRes.cachedVideoFile } : {}),
+            ...(vidRes.videoUrl ? { videoUrl: vidRes.videoUrl } : {}),
+            videoExtractStatus: vidRes.status,
+          };
+          if (vidRes.durationSec && !mediaDurationSec) {
+            mediaDurationSec = vidRes.durationSec;
+          }
         }
       }
     }

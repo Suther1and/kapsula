@@ -102,6 +102,11 @@ export function getMediaUrl(filename?: string | null): string | null {
   return `kapsula-media://local/${encodeURIComponent(filename)}`;
 }
 
+export function getCachedVideoUrl(filename?: string | null): string | null {
+  if (!filename) return null;
+  return `kapsula-media://cache/${encodeURIComponent(filename)}`;
+}
+
 export function extractFirstCodeBlock(body: string): { lang: string; code: string } | null {
   const m = /```([a-z0-9_-]*)\n([\s\S]*?)```/i.exec(body || '');
   if (!m) return null;

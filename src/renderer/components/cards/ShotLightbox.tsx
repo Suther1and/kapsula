@@ -270,10 +270,41 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
           <div className="flex-1 min-h-0 w-full flex items-center justify-center px-6 pb-6">
           {src ? (
             <motion.div
-              initial={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.96)', opacity: 0 }}
-              animate={prefersReduced ? { opacity: 1 } : { transform: 'scale(1)', opacity: 1 }}
-              exit={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.97)', opacity: 0 }}
-              transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+              initial={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : {
+                      opacity: 0,
+                      filter: 'blur(4px)',
+                      transform: 'perspective(900px) rotateX(-11deg) scale(0.89)',
+                    }
+              }
+              animate={
+                prefersReduced
+                  ? { opacity: 1 }
+                  : {
+                      opacity: 1,
+                      filter: 'blur(0px)',
+                      transform: 'perspective(900px) rotateX(0deg) scale(1)',
+                      transition: {
+                        type: 'spring',
+                        stiffness: 400,
+                        damping: 28,
+                        mass: 0.78,
+                        opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
+                      },
+                    }
+              }
+              exit={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : {
+                      opacity: 0,
+                      filter: 'blur(3px)',
+                      transform: 'perspective(900px) rotateX(-7deg) scale(0.93)',
+                      transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                    }
+              }
               onClick={(e) => {
                 e.stopPropagation();
                 if (!annotateMode) return;

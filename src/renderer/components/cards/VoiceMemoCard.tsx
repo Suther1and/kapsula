@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CircleNotch, Microphone, Sparkle } from '@phosphor-icons/react';
+import { CircleNotch } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { filterDistinctKeyPoints } from '@shared/item-helpers';
 import type { VaultItem } from '@shared/types';
@@ -10,6 +10,11 @@ import {
   stripMarkdownPreview,
   transcribeItemWithWavFallback,
 } from '../../lib/format';
+import { BorderTrail } from '../motion-primitives/border-trail';
+import { TextShimmer } from '../motion-primitives/text-shimmer';
+import { MicIcon } from '../icons/mic';
+import { SparklesIcon } from '../icons/sparkles';
+import { LiveIcon } from '../icons/LiveIcon';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
 import { WaveformAudioPlayer } from '../ui/WaveformAudioPlayer';
 
@@ -72,7 +77,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
       <div className="flex flex-col gap-2 min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <Microphone weight="duotone" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+            <LiveIcon icon={MicIcon} size={15} className="text-[var(--k-accent)] shrink-0" />
             <span className="text-[13.5px] font-semibold truncate">
               {item.title || t('dna.voiceMemo')}
             </span>
@@ -83,16 +88,29 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
               data-testid="voice-card-transcribe-btn"
               disabled={transcribing}
               onClick={(e) => void handleTranscribe(e)}
-              className={`k-interactive shrink-0 inline-flex items-center gap-1 h-6.5 px-2.5 rounded-full border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[11px] font-medium text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] cursor-pointer disabled:opacity-65 ${
+              className={`relative k-interactive shrink-0 inline-flex items-center gap-1 h-6.5 px-2.5 rounded-full border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[11px] font-medium text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] cursor-pointer disabled:opacity-75 ${
                 transcribing ? 'k-beautify-shimmer' : ''
               }`}
             >
               {transcribing ? (
+                <BorderTrail
+                  size={44}
+                  transition={{ repeat: Infinity, duration: 2, ease: 'linear' }}
+                  className="bg-[radial-gradient(circle_at_center,var(--k-accent),transparent_70%)]"
+                />
+              ) : null}
+              {transcribing ? (
                 <CircleNotch weight="bold" className="w-3 h-3 animate-spin shrink-0" />
               ) : (
-                <Sparkle weight="fill" className="w-3 h-3 shrink-0" />
+                <LiveIcon icon={SparklesIcon} size={13} />
               )}
-              <span>{transcribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
+              {transcribing ? (
+                <TextShimmer as="span" duration={1.1} className="[--base-color:var(--k-accent)] [--base-gradient-color:var(--k-ink-primary)]">
+                  {t('cards.transcribing')}
+                </TextShimmer>
+              ) : (
+                <span>{t('cards.transcribeBtn')}</span>
+              )}
             </button>
           ) : null}
         </div>
@@ -113,7 +131,7 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center justify-center w-6.5 h-6.5 rounded-lg bg-[var(--k-accent-soft)] text-[var(--k-accent)] shrink-0">
-          <Microphone weight="duotone" className="w-3.5 h-3.5" />
+          <LiveIcon icon={MicIcon} size={14} />
         </span>
         <div className="text-[14px] font-semibold text-[var(--k-ink-primary)] leading-snug truncate">
           {item.title || t('dna.voiceMemo')}
@@ -137,16 +155,32 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
             data-testid="voice-card-transcribe-btn"
             disabled={transcribing}
             onClick={(e) => void handleTranscribe(e)}
-            className={`k-interactive inline-flex items-center gap-1.5 h-7.5 px-3 rounded-full border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[12px] font-medium text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] cursor-pointer disabled:opacity-65 ${
+            className={`relative k-interactive inline-flex items-center gap-1.5 h-7.5 px-3 rounded-full border border-[var(--k-accent)]/35 bg-[var(--k-accent-soft)] text-[12px] font-medium text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] cursor-pointer disabled:opacity-75 ${
               transcribing ? 'k-beautify-shimmer' : ''
             }`}
           >
             {transcribing ? (
+              <BorderTrail
+                size={84}
+                borderRadius={999}
+                thickness={18}
+                glow
+                transition={{ repeat: Infinity, duration: 2.1, ease: 'linear' }}
+                className="opacity-90"
+              />
+            ) : null}
+            {transcribing ? (
               <CircleNotch weight="bold" className="w-3.5 h-3.5 animate-spin shrink-0" />
             ) : (
-              <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
+              <LiveIcon icon={SparklesIcon} size={14} />
             )}
-            <span>{transcribing ? t('cards.transcribing') : t('cards.transcribeBtn')}</span>
+            {transcribing ? (
+              <TextShimmer as="span" duration={1.1} className="[--base-color:var(--k-accent)] [--base-gradient-color:var(--k-ink-primary)]">
+                {t('cards.transcribing')}
+              </TextShimmer>
+            ) : (
+              <span>{t('cards.transcribeBtn')}</span>
+            )}
           </button>
         </div>
       ) : null}

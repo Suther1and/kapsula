@@ -559,7 +559,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .k-bubble-menu {
+  :root[data-reduced-motion="true"] .k-bubble-menu {
     animation: none;
   }
 }

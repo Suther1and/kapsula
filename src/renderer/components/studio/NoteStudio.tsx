@@ -334,6 +334,25 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [draftBoardId, setDraftBoardId] = useState<string | null>(item.focusBoardId ?? null);
   const [draftRemindAt, setDraftRemindAt] = useState<number | null>(item.remindAt ?? null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [persistingSlow, setPersistingSlow] = useState(false);
+  const slowPersistTimerRef = useRef<number | null>(null);
+  const clearSlowPersist = useCallback(() => {
+    if (slowPersistTimerRef.current) {
+      window.clearTimeout(slowPersistTimerRef.current);
+      slowPersistTimerRef.current = null;
+    }
+    setPersistingSlow(false);
+  }, []);
+  const armSlowPersist = useCallback(() => {
+    if (slowPersistTimerRef.current) return;
+    slowPersistTimerRef.current = window.setTimeout(() => {
+      slowPersistTimerRef.current = null;
+      setPersistingSlow(true);
+    }, 900);
+  }, []);
+  useEffect(() => () => {
+    if (slowPersistTimerRef.current) window.clearTimeout(slowPersistTimerRef.current);
+  }, []);
   const [beautifying, setBeautifying] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [extractingVoiceTasks, setExtractingVoiceTasks] = useState(false);
@@ -373,6 +392,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     title: string;
     body: string;
   } | null>(null);
+  const beautifyUndoStackRef = useRef<Array<{ title: string; body: string }>>([]);
   const [inlineLightboxItem, setInlineLightboxItem] = useState<VaultItem | null>(null);
   const [relatedState, setRelatedState] = useState<{
     related: Array<{ item: VaultItem; reason: string; score: number }>;
@@ -854,6 +874,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         });
         inflightCreateRef.current = createPromise;
         inFlightSaveCountRef.current += 1;
+        armSlowPersist();
         let saveFailed = false;
         try {
           let created = await createPromise;
@@ -910,6 +931,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           }
           if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
             setSaveState('saved');
+            clearSlowPersist();
+          } else if (saveFailed) {
+            clearSlowPersist();
           }
         }
         return;
@@ -924,7 +948,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         persistedDraftIdRef.current ||
         (itemRef.current.id !== '__draft__' ? itemRef.current.id : null);
       if (!finalId) {
-        if (inFlightSaveCountRef.current === 0) setSaveState('saved');
+        if (inFlightSaveCountRef.current === 0) {
+          setSaveState('saved');
+          clearSlowPersist();
+        }
         return;
       }
       const latestSeq = editSeqRef.current;
@@ -941,6 +968,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
 
       inFlightSaveCountRef.current += 1;
+      armSlowPersist();
       let saveFailed = false;
       const updatePromise = window.kapsula.updateItem(finalId, patch);
       const guard = updatePromise.then(
@@ -982,10 +1010,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
         if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
           setSaveState('saved');
+          clearSlowPersist();
+        } else if (saveFailed) {
+          clearSlowPersist();
         }
       }
     },
-    [computeReconciledLinksOut]
+    [computeReconciledLinksOut, armSlowPersist, clearSlowPersist]
   );
 
   // Flush changes when switching item (preserve follow-up timer when draft promotes to its persisted ID)
@@ -1037,6 +1068,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setWikiQuery(null);
       setQuickRevertRevId(null);
       setQuickRevertSnapshot(null);
+      beautifyUndoStackRef.current = [];
       setHistoryOpen(false);
       setInlineLightboxItem(null);
       setBubbleLinkEditing(false);
@@ -1359,6 +1391,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       if (updated) onItemUpdated(updated);
 
       const revs = await refreshRevisions();
+      beautifyUndoStackRef.current = [...beautifyUndoStackRef.current, { title: prevTitle, body: prevBody }];
       setQuickRevertSnapshot({ title: prevTitle, body: prevBody });
       setQuickRevertRevId(
         res.preRevisionId ??
@@ -1460,11 +1493,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const handleQuickRevert = async (revisionId?: string) => {
     const effectiveId = persistedDraftIdRef.current || item.id;
     const isQuickHeaderRevert = !revisionId;
+    const stackTop =
+      isQuickHeaderRevert && beautifyUndoStackRef.current.length > 0
+        ? beautifyUndoStackRef.current[beautifyUndoStackRef.current.length - 1]
+        : null;
+    const snap = stackTop ?? quickRevertSnapshot;
     const targetRevId =
       revisionId ||
+      (snap ? '__snapshot__' : undefined) ||
       quickRevertRevId ||
-      revisions[0]?.id ||
-      (quickRevertSnapshot ? '__snapshot__' : undefined);
+      revisions[0]?.id;
     if (!targetRevId || !editor) return;
 
     if (saveTimerRef.current) {
@@ -1474,7 +1512,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
     setRestoringRevId(targetRevId);
     try {
-      const snap = quickRevertSnapshot;
       const currentBodyBefore = bodyMarkdownRef.current;
       let reverted: VaultItem | null = null;
 
@@ -1519,8 +1556,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       titleRef.current = reverted.title || '';
       dirtyRef.current = false;
       setSaveState('saved');
-      setQuickRevertRevId(null);
-      setQuickRevertSnapshot(null);
+      clearSlowPersist();
+      if (isQuickHeaderRevert && beautifyUndoStackRef.current.length > 0) {
+        const nextStack = beautifyUndoStackRef.current.slice(0, -1);
+        beautifyUndoStackRef.current = nextStack;
+        const nextTop = nextStack[nextStack.length - 1] ?? null;
+        setQuickRevertSnapshot(nextTop);
+        setQuickRevertRevId(nextTop ? '__snapshot__' : null);
+      } else {
+        beautifyUndoStackRef.current = [];
+        setQuickRevertRevId(null);
+        setQuickRevertSnapshot(null);
+      }
       setHistoryOpen(false);
       onItemUpdated(reverted);
       await refreshRevisions();
@@ -1892,16 +1939,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             data-testid="note-studio-orbit-breadcrumb"
           />
 
-          {/* Subtle Relative Date & Save Status */}
+          {/* Subtle Relative Date & Save Status (calm: only shows Saving if persistence takes > 900ms) */}
           <span
             className={`text-[11.5px] k-tabular truncate hidden @[480px]:inline ${
               saveState === 'error' ? 'text-[var(--k-danger)]' : 'text-[var(--k-ink-muted)]/85'
             }`}
           >
-            {saveState === 'saving'
-              ? t('note.studio.statusSaving')
-              : saveState === 'error'
-                ? t('note.studio.statusError')
+            {saveState === 'error'
+              ? t('note.studio.statusError')
+              : saveState === 'saving' && persistingSlow
+                ? t('note.studio.statusSaving')
                 : !isDraft
                   ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
                   : t('note.studio.statusNew')}
@@ -2321,9 +2368,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               heightClass="max-h-[320px]"
               onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
             />
+          ) : (item.mediaMeta?.cachedVideoFile || item.mediaMeta?.youtubeVideoId) ? (
+            <InlineReferenceVideo
+              cachedVideoFile={item.mediaMeta?.cachedVideoFile}
+              youtubeVideoId={item.mediaMeta?.youtubeVideoId}
+              posterPath={item.thumbPath || item.imagePath}
+              heightClass="max-h-[320px]"
+            />
           ) : null}
 
-          {imageUrl && !isVideoMedia ? (
+          {imageUrl && !isVideoMedia && !item.mediaMeta?.cachedVideoFile && !item.mediaMeta?.youtubeVideoId ? (
             <div className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] overflow-hidden">
               <div className="relative max-h-[300px] overflow-hidden flex items-center justify-center bg-[var(--k-bg-surface-2)]">
                 <img

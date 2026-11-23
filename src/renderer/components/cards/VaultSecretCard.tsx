@@ -1,15 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   Check,
   Copy,
   CreditCard,
-  Eye,
-  EyeSlash,
   Key,
   Lock,
   LockOpen,
-  ShieldCheck,
-  Trash,
   User,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
@@ -17,8 +14,15 @@ import type { SecretCopyField, SecretPayload, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { formatCardPanGroups } from '../../lib/format';
 import { useTotpSnapshot } from '../../lib/totp-ticker';
+import { Spotlight } from '../motion-primitives/spotlight';
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { SecretMorphField } from '../ui/SecretMorphField';
+import { DeleteIcon } from '../icons/delete';
+import { EyeIcon } from '../icons/eye';
+import { EyeOffIcon } from '../icons/eye-off';
+import { LockKeyholeIcon } from '../icons/lock-keyhole';
+import { ShieldCheckIcon } from '../icons/shield-check';
+import { LiveIcon } from '../icons/LiveIcon';
 
 interface VaultSecretCardProps {
   item: VaultItem;
@@ -103,6 +107,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
   onUnlockRequest,
 }) => {
   const { t } = useI18n();
+  const prefersReduced = useReducedMotion();
   const [revealed, setRevealed] = useState(false);
   const [payload, setPayload] = useState<SecretPayload | null>(null);
   const [loadingReveal, setLoadingReveal] = useState(false);
@@ -220,7 +225,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
       return (
         <div className="mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[var(--k-bg-surface-2)]/85 border border-[var(--k-border-hairline)] px-2.5 py-1.5 text-[11.5px] text-[var(--k-ink-secondary)]">
           <span className="inline-flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-[var(--k-amber)]" />
+            <LiveIcon icon={ShieldCheckIcon} size={14} className="text-[var(--k-amber)]" />
             <span>{t('vault.totpProtected')}</span>
           </span>
           <span className="k-mono tracking-wider text-[var(--k-ink-muted)]">••• •••</span>
@@ -246,11 +251,22 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
           </span>
           <span
             data-testid={`secret-totp-code-${item.id}`}
-            className={`k-mono text-[14.5px] font-semibold tracking-[0.12em] ${
+            className={`k-mono relative inline-block overflow-hidden align-middle text-[14.5px] font-semibold tracking-[0.12em] select-text ${
               urgent ? 'text-[var(--k-amber)]' : 'text-[var(--k-ink-primary)]'
             }`}
           >
-            {formatTotpDisplay(totpSnap.code)}
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.span
+                key={totpSnap.code}
+                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, y: 8, filter: 'blur(2px)' }}
+                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -8, filter: 'blur(2px)' }}
+                transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
+                className="inline-block"
+              >
+                {formatTotpDisplay(totpSnap.code)}
+              </motion.span>
+            </AnimatePresence>
           </span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -368,10 +384,9 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
         }}
         className="group relative k-card-lift rounded-2xl border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] p-4 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-card)] hover:shadow-[var(--k-shadow-card-hover)] overflow-clip cursor-pointer"
       >
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -right-10 -top-10 w-36 h-36 rounded-full blur-2xl opacity-75"
-          style={{ background: 'var(--k-accent-soft)' }}
+        <Spotlight
+          size={190}
+          className="from-[var(--k-accent)]/20 via-[var(--k-accent)]/6 to-transparent opacity-60"
         />
 
         {/* Header Row */}
@@ -401,11 +416,11 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
                 className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
               >
                 {vaultLocked ? (
-                  <Lock className="w-3.5 h-3.5 text-[var(--k-amber)]" />
+                  <LiveIcon icon={LockKeyholeIcon} size={14} className="text-[var(--k-amber)]" />
                 ) : effectiveRevealed ? (
-                  <EyeSlash className="w-3.5 h-3.5" />
+                  <LiveIcon icon={EyeOffIcon} size={14} />
                 ) : (
-                  <Eye className="w-3.5 h-3.5" />
+                  <LiveIcon icon={EyeIcon} size={14} />
                 )}
               </button>
             ) : null}
@@ -419,7 +434,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
               aria-label={t('vault.deleteCardAria')}
               className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer shrink-0"
             >
-              <Trash className="w-3.5 h-3.5" />
+              <LiveIcon icon={DeleteIcon} size={14} />
             </button>
           </div>
         </div>
@@ -430,6 +445,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
             revealed={effectiveRevealed}
             maskedText={maskedPan}
             revealedText={revealedPan}
+            instantHide={vaultLocked}
             className="text-[15px] tracking-[0.06em] font-medium text-[var(--k-ink-primary)] w-full"
           />
         </div>
@@ -456,6 +472,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
                 revealed={effectiveRevealed}
                 maskedText="•••"
                 revealedText={effectiveRevealed ? payload?.cvv || '•••' : '•••'}
+                instantHide={vaultLocked}
                 className="text-[var(--k-ink-primary)]"
               />
             </span>
@@ -597,10 +614,9 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
       }}
       className="group relative k-card-lift rounded-2xl border border-[var(--k-border-hairline)] hover:border-[var(--k-border-strong)] px-3.5 py-3 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-card)] hover:shadow-[var(--k-shadow-card-hover)] overflow-clip cursor-pointer"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-10 -top-10 w-32 h-32 rounded-full blur-2xl opacity-60"
-        style={{ background: 'var(--k-accent-soft)' }}
+      <Spotlight
+        size={170}
+        className="from-[var(--k-accent)]/18 via-[var(--k-accent)]/6 to-transparent opacity-60"
       />
 
       <div className="relative flex items-start justify-between gap-2 mb-2">
@@ -631,11 +647,11 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
               className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
             >
               {vaultLocked ? (
-                <Lock className="w-3.5 h-3.5 text-[var(--k-amber)]" />
+                <LiveIcon icon={LockKeyholeIcon} size={14} className="text-[var(--k-amber)]" />
               ) : effectiveRevealed ? (
-                <EyeSlash className="w-3.5 h-3.5" />
+                <LiveIcon icon={EyeOffIcon} size={14} />
               ) : (
-                <Eye className="w-3.5 h-3.5" />
+                <LiveIcon icon={EyeIcon} size={14} />
               )}
             </button>
           ) : null}
@@ -649,7 +665,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
             aria-label={t('common.delete')}
             className="k-interactive k-focus-ring inline-flex items-center justify-center w-7 h-7 rounded-lg text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer shrink-0"
           >
-            <Trash className="w-3.5 h-3.5" />
+            <LiveIcon icon={DeleteIcon} size={14} />
           </button>
         </div>
       </div>
@@ -659,6 +675,7 @@ export const VaultSecretCard: React.FC<VaultSecretCardProps> = React.memo(({
           revealed={effectiveRevealed}
           maskedText={maskedBody}
           revealedText={revealedInlineSecret}
+          instantHide={vaultLocked}
           className="text-[12.5px] leading-[18px] text-[var(--k-ink-primary)] w-full truncate block"
         />
       </div>

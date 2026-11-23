@@ -447,6 +447,8 @@ export const MOBILE_DICT_RU = {
   'tasks.deleteColAria': 'Удалить колонку',
   'tasks.fallbackTitle': 'Задача',
   'tasks.orbitTitle': 'Раздел для задачи',
+  'tasks.filterSectionAll': 'Все разделы',
+  'tasks.filterPriorityAll': 'Все приоритеты',
 
   // Calendar View
   'calendar.recurrenceOnce': 'Один раз',
@@ -1400,6 +1402,8 @@ export const MOBILE_DICT_EN: Record<MobileDictKey, string> = {
   'tasks.deleteColAria': 'Delete column',
   'tasks.fallbackTitle': 'Task',
   'tasks.orbitTitle': 'Task section',
+  'tasks.filterSectionAll': 'All sections',
+  'tasks.filterPriorityAll': 'All priorities',
 
   // Calendar View
   'calendar.recurrenceOnce': 'Once',

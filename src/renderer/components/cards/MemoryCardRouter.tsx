@@ -353,9 +353,10 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
   }
   if (item.platform) redundantTags.add(item.platform.toLowerCase());
   if (orbit?.name) redundantTags.add(orbit.name.toLowerCase());
-  const visibleTags = item.tags
-    .filter((tag) => tag && !redundantTags.has(tag.toLowerCase()))
-    .slice(0, 2);
+  const filteredTags = item.tags.filter((tag) => tag && !redundantTags.has(tag.toLowerCase()));
+  const maxInlineTags = orbit && item.remindAt ? 0 : orbit || item.remindAt ? 1 : 2;
+  const visibleTags = filteredTags.slice(0, maxInlineTags);
+  const overflowTags = filteredTags.slice(maxInlineTags);
 
   return (
     <ContextMenuSurface entries={buildContextMenuEntries}>
@@ -469,7 +470,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
             ) : null}
 
             {item.remindAt ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-amber-soft)] text-[11px] font-medium text-[var(--k-amber)]">
+              <span className="inline-flex shrink-0 max-w-[130px] items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--k-amber-soft)] text-[11px] font-medium text-[var(--k-amber)]">
                 <Bell weight="fill" className="w-2.5 h-2.5 shrink-0" />
                 <span className="truncate">{formatReminderStamp(item.remindAt, locale)}</span>
               </span>
@@ -479,12 +480,23 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
               <span
                 key={tag}
                 data-testid={`card-tag-${tag}`}
-                className="inline-flex items-center gap-0.5 h-[20px] px-2 rounded-full border border-[var(--k-border-hairline)] bg-transparent text-[11px] text-[var(--k-ink-muted)] truncate max-w-[100px]"
+                title={`#${tag}`}
+                className="inline-flex shrink-0 items-center gap-0.5 h-[20px] px-2 rounded-full border border-[var(--k-border-hairline)] bg-transparent text-[11px] text-[var(--k-ink-muted)] max-w-[116px]"
               >
-                <span className="opacity-65">#</span>
+                <span className="opacity-65 shrink-0">#</span>
                 <span className="truncate">{tag}</span>
               </span>
             ))}
+
+            {overflowTags.length > 0 ? (
+              <span
+                data-testid="card-tags-overflow"
+                title={overflowTags.map((tg) => `#${tg}`).join(', ')}
+                className="inline-flex shrink-0 items-center h-[20px] px-1.5 rounded-full border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[10.5px] font-medium k-tabular text-[var(--k-ink-muted)]"
+              >
+                +{overflowTags.length}
+              </span>
+            ) : null}
 
             {!orbit && onMoveToOrbit && orbits.length > 0 ? (
               <div onClick={(e) => e.stopPropagation()} className="inline-flex shrink-0">

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   Camera,
   FolderSimple,
@@ -294,59 +294,62 @@ export const QuickCaptureSheet: React.FC<QuickCaptureSheetProps> = ({
       >
         <div data-testid="quick-capture-sheet" className="p-3.5 space-y-3">
           {/* 5-column flagship mode selector: ALL 5 modes fit on 360px Fold with zero clipping */}
-          <div className="grid grid-cols-5 gap-1.5">
-            {captureTabs.map((item) => {
-              const Icon = item.icon;
-              const active = tab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  data-testid={`capture-tab-${item.id}`}
-                  onClick={() => handleSelectTab(item.id)}
-                  className={`k-tap relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-2xl border text-[11px] font-semibold min-w-0 transition-colors ${
-                    active
-                      ? 'border-[var(--k-border-focus)] text-[var(--k-accent)]'
-                      : 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
-                  }`}
-                >
-                  {active ? (
-                    <motion.span
-                      layoutId="k-capture-mode-pill"
-                      transition={
-                        prefersReduced
-                          ? { duration: 0.01 }
-                          : { type: 'spring', stiffness: 480, damping: 35 }
-                      }
-                      className="absolute inset-0 rounded-2xl bg-[var(--k-accent-soft)]"
+          <LayoutGroup id="k-quick-capture-tabs">
+            <div className="grid grid-cols-5 gap-1.5">
+              {captureTabs.map((item) => {
+                const Icon = item.icon;
+                const active = tab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    data-testid={`capture-tab-${item.id}`}
+                    onClick={() => handleSelectTab(item.id)}
+                    className={`group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-2xl border text-[11px] font-semibold min-w-0 transition-colors ${
+                      active
+                        ? 'border-[var(--k-border-focus)] text-[var(--k-accent)]'
+                        : 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
+                    }`}
+                  >
+                    {active ? (
+                      <motion.span
+                        layoutId="k-capture-mode-pill"
+                        style={{ borderRadius: 16 }}
+                        transition={
+                          prefersReduced
+                            ? { duration: 0.01 }
+                            : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                        }
+                        className="pointer-events-none absolute inset-0 bg-[var(--k-accent-soft)]"
+                      />
+                    ) : null}
+                    <Icon
+                      weight={active ? 'duotone' : 'regular'}
+                      className="relative z-10 w-[18px] h-[18px] shrink-0 transition-transform duration-100 group-active:scale-[0.94]"
                     />
-                  ) : null}
-                  <Icon
-                    weight={active ? 'duotone' : 'regular'}
-                    className="relative z-10 w-[18px] h-[18px] shrink-0"
-                  />
-                  <span className="relative z-10 whitespace-nowrap leading-none">{item.label}</span>
-                </button>
-              );
-            })}
+                    <span className="relative z-10 whitespace-nowrap leading-none">{item.label}</span>
+                  </button>
+                );
+              })}
 
-            <button
-              type="button"
-              data-testid="capture-tab-secret"
-              onClick={() => {
-                mobileBridge.haptic('light');
-                onClose();
-                onOpenVaultAdd();
-              }}
-              className="k-tap flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-2xl border bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] text-[11px] font-semibold min-w-0"
-            >
-              <ShieldCheck
-                weight="duotone"
-                className="w-[18px] h-[18px] text-[var(--k-emerald)] shrink-0"
-              />
-              <span className="whitespace-nowrap leading-none">{t('nav.vault')}</span>
-            </button>
-          </div>
+              <button
+                type="button"
+                data-testid="capture-tab-secret"
+                onClick={() => {
+                  mobileBridge.haptic('light');
+                  onClose();
+                  onOpenVaultAdd();
+                }}
+                className="k-tap flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-2xl border bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] text-[11px] font-semibold min-w-0"
+              >
+                <ShieldCheck
+                  weight="duotone"
+                  className="w-[18px] h-[18px] text-[var(--k-emerald)] shrink-0"
+                />
+                <span className="whitespace-nowrap leading-none">{t('nav.vault')}</span>
+              </button>
+            </div>
+          </LayoutGroup>
 
           {/* Branded Picker Chips for Section & Canvas (NO ugly native <select>!) */}
           <div className="grid grid-cols-2 gap-2">

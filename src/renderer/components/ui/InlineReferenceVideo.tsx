@@ -7,11 +7,13 @@ import {
   SpeakerHigh,
   SpeakerSlash,
 } from '@phosphor-icons/react';
-import { formatDurationMmSs, getMediaUrl } from '../../lib/format';
+import { formatDurationMmSs, getCachedVideoUrl, getMediaUrl } from '../../lib/format';
 import { useI18n } from '@shared/i18n/react';
 
 interface InlineReferenceVideoProps {
-  mediaPath: string;
+  mediaPath?: string | null;
+  cachedVideoFile?: string | null;
+  youtubeVideoId?: string | null;
   posterPath?: string | null;
   heightClass?: string;
   onOpenFull?: () => void;
@@ -21,6 +23,8 @@ const SPEEDS = [0.5, 1, 1.5] as const;
 
 export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
   mediaPath,
+  cachedVideoFile,
+  youtubeVideoId,
   posterPath,
   heightClass = 'max-h-[210px]',
   onOpenFull,
@@ -29,6 +33,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingPlayRef = useRef(false);
   const [videoActivated, setVideoActivated] = useState(false);
+  const [ytActive, setYtActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [loop, setLoop] = useState(true);
@@ -36,17 +41,18 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const src = getMediaUrl(mediaPath);
+  const src = cachedVideoFile ? getCachedVideoUrl(cachedVideoFile) : getMediaUrl(mediaPath);
   const poster = posterPath ? (getMediaUrl(posterPath) ?? undefined) : undefined;
   const speed = SPEEDS[speedIdx] ?? 1;
 
   useEffect(() => {
     setVideoActivated(false);
+    setYtActive(false);
     pendingPlayRef.current = false;
     setPlaying(false);
     setProgress(0);
     setDuration(0);
-  }, [mediaPath]);
+  }, [mediaPath, cachedVideoFile, youtubeVideoId]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -82,6 +88,48 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
       setPlaying(false);
     }
   };
+
+  if (youtubeVideoId) {
+    return (
+      <div
+        className="relative rounded-xl overflow-hidden bg-black border border-[var(--k-border-hairline)] aspect-video"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {ytActive ? (
+          <iframe
+            data-testid="youtube-nocookie-iframe"
+            src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(youtubeVideoId)}?autoplay=1&rel=0`}
+            title="YouTube video"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            className="w-full h-full border-0 block"
+          />
+        ) : (
+          <button
+            type="button"
+            data-testid="youtube-play-trigger"
+            onClick={(e) => {
+              e.stopPropagation();
+              setYtActive(true);
+            }}
+            className="group/yt relative w-full h-full flex items-center justify-center cursor-pointer"
+          >
+            {poster ? (
+              <img
+                src={poster}
+                alt=""
+                loading="lazy"
+                className="w-full h-full object-cover block opacity-90 group-hover/yt:opacity-100 transition-opacity"
+              />
+            ) : null}
+            <span className="k-interactive absolute w-11 h-11 rounded-full bg-black/75 border border-white/25 text-white flex items-center justify-center backdrop-blur-sm group-hover/yt:scale-105">
+              <Play weight="fill" className="w-4.5 h-4.5 ml-0.5" />
+            </span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   if (!src) return null;
 

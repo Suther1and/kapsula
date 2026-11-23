@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Command } from 'cmdk';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import {
+  Highlight as AnimateHighlight,
+  HighlightItem,
+} from '@animate-ui/react/primitives/effects/highlight';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
@@ -82,6 +86,8 @@ import { SegmentedControl } from '../components/ui/SegmentedControl';
 import { SectionPickerPopover } from '../components/ui/SectionPickerPopover';
 import { VoiceRecorderStudio } from '../components/ui/VoiceRecorderStudio';
 import { WaveformAudioPlayer } from '../components/ui/WaveformAudioPlayer';
+import { SearchIcon } from '../components/icons/search';
+import { LiveIcon } from '../components/icons/LiveIcon';
 
 type HudTab = 'search' | 'capture' | 'vault' | 'today' | 'important';
 
@@ -367,6 +373,25 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   const [editorTitle, setEditorTitle] = useState('');
   const [editorLiveBody, setEditorLiveBody] = useState('');
   const [editorSaveState, setEditorSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [hudPersistingSlow, setHudPersistingSlow] = useState(false);
+  const hudSlowTimerRef = useRef<number | null>(null);
+  const clearHudSlowPersist = useCallback(() => {
+    if (hudSlowTimerRef.current) {
+      window.clearTimeout(hudSlowTimerRef.current);
+      hudSlowTimerRef.current = null;
+    }
+    setHudPersistingSlow(false);
+  }, []);
+  const armHudSlowPersist = useCallback(() => {
+    if (hudSlowTimerRef.current) return;
+    hudSlowTimerRef.current = window.setTimeout(() => {
+      hudSlowTimerRef.current = null;
+      setHudPersistingSlow(true);
+    }, 900);
+  }, []);
+  useEffect(() => () => {
+    if (hudSlowTimerRef.current) window.clearTimeout(hudSlowTimerRef.current);
+  }, []);
   const [hudTranscribingId, setHudTranscribingId] = useState<string | null>(null);
   const [hudInsertingImage, setHudInsertingImage] = useState(false);
   const [hudPickingImage, setHudPickingImage] = useState(false);
@@ -461,6 +486,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       fallbackNoteTitleRef.current;
 
     let saveFailed = false;
+    armHudSlowPersist();
     try {
       const updated = await window.kapsula.updateItem(targetId, {
         title: nextTitle || fallbackTitle,
@@ -501,9 +527,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       }
       if (!saveFailed && !dirtyItemIdRef.current) {
         setEditorSaveState('saved');
+        clearHudSlowPersist();
+      } else if (saveFailed) {
+        clearHudSlowPersist();
       }
     }
-  }, [patchLocalItem]);
+  }, [patchLocalItem, armHudSlowPersist, clearHudSlowPersist]);
 
   const flushHudEditorSaveRef = useRef(flushHudEditorSave);
   flushHudEditorSaveRef.current = flushHudEditorSave;
@@ -1513,7 +1542,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                     className="flex-1 min-h-0 flex flex-col overflow-hidden"
                   >
                     <div className="flex items-center gap-2 px-3.5 h-11 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] shrink-0">
-                      <MagnifyingGlass className="w-4 h-4 text-[var(--k-ink-muted)] shrink-0" />
+                      <LiveIcon
+                        icon={SearchIcon}
+                        size={16}
+                        active={search.length > 0}
+                        className="text-[var(--k-ink-muted)] shrink-0"
+                      />
                       <Command.Input
                         ref={searchInputRef}
                         data-testid="hud-search-input"
@@ -1539,75 +1573,97 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                           heading={search.trim() ? t('hud.foundCount', { count: items.length }) : t('hud.recentItems')}
                           className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[var(--k-ink-muted)]"
                         >
-                          {items.slice(0, 35).map((item) => {
-                            const rowIcon =
-                              item.dna === 'secret' ? (
-                                <ShieldCheck
-                                  weight="fill"
-                                  className="w-3.5 h-3.5 text-[var(--k-emerald)] shrink-0"
-                                />
-                              ) : item.dna === 'link' ? (
-                                <GlobeSimple
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0"
-                                />
-                              ) : item.dna === 'shot' ? (
-                                <ImageSquare
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-info)] shrink-0"
-                                />
-                              ) : item.dna === 'voice' ? (
-                                <Microphone
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0"
-                                />
-                              ) : item.dna === 'snippet' ? (
-                                <Code
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-violet)] shrink-0"
-                                />
-                              ) : item.dna === 'doc' ? (
-                                <FileText
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-amber)] shrink-0"
-                                />
-                              ) : (
-                                <NotePencil
-                                  weight="duotone"
-                                  className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0"
-                                />
+                          <AnimateHighlight
+                            mode="parent"
+                            controlledItems
+                            value={selectedValue.toLowerCase() || null}
+                            onValueChange={(val) => {
+                              if (val && val !== selectedValue.toLowerCase()) {
+                                void flushHudEditorSave();
+                                setSelectedValue(val);
+                              }
+                            }}
+                            hover
+                            exitDelay={0}
+                            className="rounded-xl bg-[var(--k-accent-soft)]"
+                            containerClassName="flex flex-col gap-0.5"
+                            transition={
+                              prefersReduced
+                                ? { duration: 0 }
+                                : { type: 'spring', stiffness: 760, damping: 44, mass: 0.42 }
+                            }
+                          >
+                            {items.slice(0, 35).map((item) => {
+                              const rowIcon =
+                                item.dna === 'secret' ? (
+                                  <ShieldCheck
+                                    weight="fill"
+                                    className="w-3.5 h-3.5 text-[var(--k-emerald)] shrink-0"
+                                  />
+                                ) : item.dna === 'link' ? (
+                                  <GlobeSimple
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0"
+                                  />
+                                ) : item.dna === 'shot' ? (
+                                  <ImageSquare
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-info)] shrink-0"
+                                  />
+                                ) : item.dna === 'voice' ? (
+                                  <Microphone
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0"
+                                  />
+                                ) : item.dna === 'snippet' ? (
+                                  <Code
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-violet)] shrink-0"
+                                  />
+                                ) : item.dna === 'doc' ? (
+                                  <FileText
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-amber)] shrink-0"
+                                  />
+                                ) : (
+                                  <NotePencil
+                                    weight="duotone"
+                                    className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0"
+                                  />
+                                );
+                              const rowValue = `item:${item.id.toLowerCase()}`;
+                              const isRowSelected = selectedValue.toLowerCase() === rowValue;
+                              return (
+                                <HighlightItem key={item.id} value={rowValue}>
+                                  <Command.Item
+                                    value={rowValue}
+                                    data-active={isRowSelected ? 'true' : undefined}
+                                    onSelect={() => {
+                                      void flushHudEditorSave().finally(() => {
+                                        void window.kapsula.focusVaultItem(item.id);
+                                        void window.kapsula.closeHud();
+                                      });
+                                    }}
+                                    className={`relative z-10 flex items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-[12.5px] cursor-pointer transition-colors duration-[90ms] ${
+                                      isRowSelected
+                                        ? 'text-[var(--k-accent)]'
+                                        : 'text-[var(--k-ink-primary)] aria-selected:text-[var(--k-accent)]'
+                                    }`}
+                                  >
+                                    <span className="inline-flex items-center gap-2 min-w-0">
+                                      {rowIcon}
+                                      <span className="truncate font-medium">
+                                        {item.title || getDnaHumanLabel(item, locale)}
+                                      </span>
+                                    </span>
+                                    <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
+                                      {getDnaHumanLabel(item, locale)}
+                                    </span>
+                                  </Command.Item>
+                                </HighlightItem>
                               );
-                            const rowValue = `item:${item.id.toLowerCase()}`;
-                            const isRowSelected = selectedValue.toLowerCase() === rowValue;
-                            return (
-                              <Command.Item
-                                key={item.id}
-                                value={rowValue}
-                                data-active={isRowSelected ? 'true' : undefined}
-                                onSelect={() => {
-                                  void flushHudEditorSave().finally(() => {
-                                    void window.kapsula.focusVaultItem(item.id);
-                                    void window.kapsula.closeHud();
-                                  });
-                                }}
-                                className={`flex items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-[12.5px] cursor-pointer transition-colors duration-[90ms] ${
-                                  isRowSelected
-                                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
-                                    : 'hover:bg-[var(--k-bg-surface-2)]/70 aria-selected:bg-[var(--k-accent-soft)] aria-selected:text-[var(--k-accent)]'
-                                }`}
-                              >
-                                <span className="inline-flex items-center gap-2 min-w-0">
-                                  {rowIcon}
-                                  <span className="truncate font-medium">
-                                    {item.title || getDnaHumanLabel(item, locale)}
-                                  </span>
-                                </span>
-                                <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                                  {getDnaHumanLabel(item, locale)}
-                                </span>
-                              </Command.Item>
-                            );
-                          })}
+                            })}
+                          </AnimateHighlight>
                         </Command.Group>
                       ) : (
                         <div className="px-3 py-6 text-center text-[12px] text-[var(--k-ink-muted)]">
@@ -1849,17 +1905,17 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             <span
                               data-testid="hud-editor-save-state"
                               className={`px-2 py-0.5 rounded-full font-medium k-tabular ${
-                                editorSaveState === 'saving'
-                                  ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
-                                  : editorSaveState === 'error'
-                                    ? 'bg-[var(--k-danger-soft)] text-[var(--k-danger)]'
+                                editorSaveState === 'error'
+                                  ? 'bg-[var(--k-danger-soft)] text-[var(--k-danger)]'
+                                  : editorSaveState === 'saving' && hudPersistingSlow
+                                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                                     : 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-muted)]'
                               }`}
                             >
-                              {editorSaveState === 'saving'
-                                ? t('common.saving')
-                                : editorSaveState === 'error'
-                                  ? t('common.saveError')
+                              {editorSaveState === 'error'
+                                ? t('common.saveError')
+                                : editorSaveState === 'saving' && hudPersistingSlow
+                                  ? t('common.saving')
                                   : t('common.saved')}
                             </span>
                             <span className="hidden sm:inline">

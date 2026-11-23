@@ -1,5 +1,5 @@
 import React from 'react';
-import { Switch } from '@base-ui/react/switch';
+import { Switch } from '@animate-ui/react/primitives/base-ui/switch';
 import { playTactileSound } from '../../lib/tactileSound';
 
 interface SwitchToggleProps {
@@ -26,12 +26,15 @@ export const SwitchToggle: React.FC<SwitchToggleProps> = ({
     disabled={disabled}
     aria-label={ariaLabel}
     data-testid={testId}
-    className={`group k-focus-ring relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors duration-150 ease-[var(--k-ease-out)] cursor-pointer select-none ${
+    className={`k-focus-ring relative inline-flex h-[22px] w-[38px] shrink-0 items-center justify-start data-[checked]:justify-end rounded-full p-[2px] border transition-colors duration-150 ease-[var(--k-ease-out)] cursor-pointer select-none ${
       checked
         ? 'bg-[var(--k-accent)] border-[var(--k-accent)]'
         : 'bg-[var(--k-bg-surface-3)] border-[var(--k-border-strong)]'
     } ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
   >
-    <Switch.Thumb className="block h-4 w-4 group-active:w-[19px] rounded-full bg-white shadow-xs transition-[transform,translate,width] duration-[150ms] ease-[var(--k-ease-out)] translate-x-[2px] data-[checked]:translate-x-[18px] data-[checked]:group-active:translate-x-[15px]" />
+    <Switch.Thumb
+      transition={{ type: 'spring', stiffness: 540, damping: 32, mass: 0.68 }}
+      className="block h-4 w-4 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.28)]"
+    />
   </Switch.Root>
 );

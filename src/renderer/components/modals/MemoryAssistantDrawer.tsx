@@ -13,9 +13,7 @@ import {
   ImageSquare,
   Microphone,
   NotePencil,
-  PaperPlaneTilt,
   SidebarSimple,
-  Sparkle,
   Trash,
   X,
 } from '@phosphor-icons/react';
@@ -23,8 +21,13 @@ import type { AskVaultCitation, ChatTurn } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
 import { friendlyErrorMessage, getMediaUrl, stripLeadingTitle, stripMarkdownPreview } from '../../lib/format';
+import { BorderTrail } from '../motion-primitives/border-trail';
+import { TextShimmer } from '../motion-primitives/text-shimmer';
 import { KapsulaEmblem } from '../ui/KapsulaEmblem';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { SendIcon } from '../icons/send';
+import { SparklesIcon } from '../icons/sparkles';
+import { LiveIcon } from '../icons/LiveIcon';
 
 type DrawerWidthMode = 'compact' | 'wide' | 'full';
 
@@ -222,23 +225,55 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
             prefersReduced
               ? { opacity: 0 }
               : widthMode === 'full'
-                ? { opacity: 0, transform: 'scale(0.988)' }
-                : { opacity: 0, transform: 'translate3d(28px, 0, 0)' }
+                ? {
+                    opacity: 0,
+                    filter: 'blur(3px)',
+                    transform: 'perspective(950px) rotateX(-8deg) scale(0.94)',
+                  }
+                : {
+                    opacity: 0,
+                    filter: 'blur(2px)',
+                    transform: 'perspective(950px) translate3d(48px, 0, 0) rotateY(6deg) scale(0.97)',
+                  }
           }
           animate={
             prefersReduced
               ? { opacity: 1 }
-              : { opacity: 1, transform: 'translate3d(0px, 0, 0) scale(1)' }
+              : {
+                  opacity: 1,
+                  filter: 'blur(0px)',
+                  transform: 'perspective(950px) translate3d(0px, 0, 0) rotateX(0deg) rotateY(0deg) scale(1)',
+                  transition: {
+                    type: 'spring',
+                    stiffness: 410,
+                    damping: 30,
+                    mass: 0.76,
+                    opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
+                  },
+                }
           }
           exit={
             prefersReduced
               ? { opacity: 0 }
               : widthMode === 'full'
-                ? { opacity: 0, transform: 'scale(0.99)' }
-                : { opacity: 0, transform: 'translate3d(24px, 0, 0)' }
+                ? {
+                    opacity: 0,
+                    filter: 'blur(2px)',
+                    transform: 'perspective(950px) rotateX(-5deg) scale(0.96)',
+                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                  }
+                : {
+                    opacity: 0,
+                    filter: 'blur(2px)',
+                    transform: 'perspective(950px) translate3d(36px, 0, 0) rotateY(4deg) scale(0.98)',
+                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                  }
           }
-          transition={{ duration: 0.17, ease: [0.32, 0.72, 0, 1] }}
-          style={widthMode === 'full' ? undefined : { width: `${targetWidthPx}px` }}
+          style={
+            widthMode === 'full'
+              ? undefined
+              : { width: `${targetWidthPx}px`, transformOrigin: 'right center' }
+          }
           className={
             widthMode === 'full'
               ? 'fixed top-[46px] left-0 right-0 bottom-0 z-[45] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] border-t border-[var(--k-border-hairline)] flex flex-col overflow-hidden'
@@ -336,8 +371,8 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                 {turns.length === 0 ? (
                   <div className="flex flex-col gap-3 py-4">
                     <div className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4">
-                      <div className="flex items-center gap-2 text-[13.5px] font-medium mb-1">
-                        <Sparkle weight="fill" className="w-4 h-4 text-[var(--k-accent)]" />
+                      <div className="flex items-center gap-2 text-[13.5px] font-medium mb-1 text-[var(--k-ink-primary)]">
+                        <LiveIcon icon={SparklesIcon} size={16} className="text-[var(--k-accent)]" />
                         <span>{t('assistant.emptyHeading')}</span>
                       </div>
                       <p className="m-0 text-[12.5px] text-[var(--k-ink-secondary)] leading-relaxed">
@@ -467,8 +502,24 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                 )}
 
                 {loading ? (
-                  <div className="self-start rounded-2xl rounded-bl-sm bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] px-3.5 py-2.5 text-[12.5px] text-[var(--k-ink-secondary)]">
-                    {t('assistant.thinking')}
+                  <div className="relative self-start rounded-2xl rounded-bl-sm bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] px-3.5 py-2.5 text-[12.5px] text-[var(--k-ink-secondary)] overflow-hidden">
+                    {!prefersReduced ? (
+                      <BorderTrail
+                        size={96}
+                        borderRadius={16}
+                        thickness={20}
+                        glow
+                        transition={{ repeat: Infinity, duration: 2.3, ease: 'linear' }}
+                        className="opacity-90"
+                      />
+                    ) : null}
+                    <TextShimmer
+                      as="span"
+                      duration={1.15}
+                      className="[--base-color:var(--k-ink-secondary)] [--base-gradient-color:var(--k-ink-primary)] font-medium"
+                    >
+                      {t('assistant.thinking')}
+                    </TextShimmer>
                   </div>
                 ) : null}
               </div>
@@ -501,7 +552,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                   aria-label={t('assistant.sendAria')}
                   className="k-interactive inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] cursor-pointer disabled:bg-[var(--k-bg-surface-3)] disabled:text-[var(--k-ink-muted)] disabled:opacity-100 disabled:cursor-default"
                 >
-                  <PaperPlaneTilt weight="fill" className="w-3.5 h-3.5" />
+                  <LiveIcon icon={SendIcon} size={15} />
                 </button>
               </div>
             </form>

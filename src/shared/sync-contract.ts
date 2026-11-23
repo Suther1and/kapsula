@@ -165,6 +165,21 @@ export interface SyncMediaRef {
   byteSize: number;
 }
 
+/**
+ * Strips machine-local transient video cache metadata so cached social reels
+ * stay strictly on the local device and never upload or leak into E2EE sync.
+ */
+export function sanitizeMediaMetaForSync(meta: MediaMeta | null | undefined): MediaMeta | null {
+  if (!meta) return null;
+  if (meta.cachedVideoFile === undefined && meta.videoExtractStatus === undefined) {
+    return meta;
+  }
+  const next: MediaMeta = { ...meta };
+  delete next.cachedVideoFile;
+  delete next.videoExtractStatus;
+  return next;
+}
+
 // Decrypted E2EE entity payloads (cross-platform JSON contract v1)
 export interface SyncedItemPayload {
   v: 1;

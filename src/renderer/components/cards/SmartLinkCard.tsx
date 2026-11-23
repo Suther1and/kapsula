@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowSquareOut, GlobeSimple, PaperPlaneTilt } from '@phosphor-icons/react';
+import { ArrowSquareOut, GlobeSimple, PaperPlaneTilt, PlayCircle } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
@@ -13,6 +13,8 @@ interface SmartLinkCardProps {
 }
 
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
+const SOCIAL_VIDEO_URL_RE =
+  /(?:instagram\.com\/(?:reel|p|tv)\/|tiktok\.com\/|v\.redd\.it\/|reddit\.com\/r\/[^/]+\/comments\/|t\.me\/[^/]+\/\d+|(?:x|twitter)\.com\/[^/]+\/status\/\d+)/i;
 
 export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
   item,
@@ -20,11 +22,20 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
 }) => {
   const { t } = useI18n();
   const [bannerError, setBannerError] = useState(false);
+  const [extractingVideo, setExtractingVideo] = useState(false);
 
   // Use local cached kapsula-media:// paths (remote ogImageUrl is blocked by CSP)
   const localBannerSrc = getMediaUrl(item.thumbPath || item.imagePath);
-  const hasVideo = Boolean(item.mediaPath && VIDEO_PATH_RE.test(item.mediaPath));
-  const showBanner = Boolean(localBannerSrc) && !hasVideo && !bannerError && !compactList;
+  const cachedVideoFile = item.mediaMeta?.cachedVideoFile ?? null;
+  const youtubeVideoId = item.mediaMeta?.youtubeVideoId ?? null;
+  const hasDirectVideo = Boolean(item.mediaPath && VIDEO_PATH_RE.test(item.mediaPath));
+  const hasAnyVideo = Boolean(hasDirectVideo || cachedVideoFile || youtubeVideoId);
+  const canTryVideoFetch = Boolean(
+    !hasAnyVideo &&
+      item.url &&
+      (item.mediaMeta?.videoUrl || SOCIAL_VIDEO_URL_RE.test(item.url))
+  );
+  const showBanner = Boolean(localBannerSrc) && !hasAnyVideo && !bannerError && !compactList;
 
   const hostLabel =
     item.domain ||
@@ -95,9 +106,11 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
 
   return (
     <div className="flex flex-col gap-2.5">
-      {hasVideo && item.mediaPath ? (
+      {hasAnyVideo ? (
         <InlineReferenceVideo
-          mediaPath={item.mediaPath}
+          mediaPath={hasDirectVideo ? item.mediaPath : null}
+          cachedVideoFile={cachedVideoFile}
+          youtubeVideoId={youtubeVideoId}
           posterPath={item.thumbPath || item.imagePath}
           heightClass="max-h-[190px]"
         />
@@ -161,7 +174,7 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
       ) : null}
 
       {item.url ? (
-        <div className="flex items-center justify-start gap-2 pt-0.5">
+        <div className="flex flex-wrap items-center justify-start gap-2 pt-0.5">
           <CopySlotPill
             label={t('dna.link')}
             copiedLabel={t('common.done')}
@@ -180,6 +193,35 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
             <span>{t('common.open')}</span>
             <ArrowSquareOut className="w-3.5 h-3.5" />
           </button>
+          {canTryVideoFetch ? (
+            item.mediaMeta?.videoExtractStatus === 'login_required' ? (
+              <span
+                title={t('video.loginRequired')}
+                className="text-[11px] text-[var(--k-ink-muted)] truncate max-w-[190px]"
+              >
+                {t('video.loginRequired')}
+              </span>
+            ) : (
+              <button
+                type="button"
+                data-testid={`ensure-link-video-${item.id}`}
+                disabled={extractingVideo}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setExtractingVideo(true);
+                  try {
+                    await window.kapsula.ensureLinkVideo?.(item.id);
+                  } finally {
+                    setExtractingVideo(false);
+                  }
+                }}
+                className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-accent)] hover:border-[var(--k-accent)] cursor-pointer disabled:opacity-55"
+              >
+                <PlayCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{extractingVideo ? t('video.loading') : t('video.retry')}</span>
+              </button>
+            )
+          ) : null}
         </div>
       ) : null}
     </div>

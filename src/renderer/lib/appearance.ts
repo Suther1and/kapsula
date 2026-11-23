@@ -99,6 +99,14 @@ export function sanitizeAppearanceConfig(raw: Partial<AppearanceConfig> | null |
   const bgTint = clampNumber(raw.bgTint, base.bgTint, 0, 100);
   const bgLightness = clampNumber(raw.bgLightness, base.bgLightness, 0, 100);
   const density: UiDensity = raw.density === 'compact' ? 'compact' : 'comfortable';
+  const glassPreset: AppearanceConfig['glassPreset'] =
+    raw.glassPreset === 'subtle' || raw.glassPreset === 'frosted' || raw.glassPreset === 'liquid'
+      ? raw.glassPreset
+      : 'off';
+  const glassNativeMaterial: AppearanceConfig['glassNativeMaterial'] =
+    raw.glassNativeMaterial === 'mica' || raw.glassNativeMaterial === 'acrylic'
+      ? raw.glassNativeMaterial
+      : 'none';
 
   return {
     accentMode,
@@ -110,6 +118,8 @@ export function sanitizeAppearanceConfig(raw: Partial<AppearanceConfig> | null |
     bgTint,
     bgLightness,
     density,
+    glassPreset,
+    glassNativeMaterial,
   };
 }
 
@@ -240,6 +250,7 @@ export function applyAppearanceToDocument(
   }
   root.setAttribute('data-accent', config.accentMode === 'preset' ? config.accentPreset : 'custom');
   root.setAttribute('data-density', config.density);
+  root.setAttribute('data-glass', config.glassPreset ?? 'off');
 
   const tokens = computeThemeTokens(theme, config);
   const nextVarKeys = Object.keys(tokens.cssVars);

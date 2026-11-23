@@ -1,18 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
+  ArrowRight,
   ArrowsClockwise,
   Bell,
   CalendarBlank,
   CaretLeft,
   CaretRight,
+  Check,
+  Copy,
   DownloadSimple,
   LinkSimple,
   ListBullets,
   ListChecks,
+  MagnifyingGlass,
   MapPin,
   Plus,
   Sparkle,
+  Trash,
   UploadSimple,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
@@ -28,9 +33,14 @@ import {
   buildDstSafeAllDayEnd,
   expandCalendarEventOccurrences,
 } from '@shared/calendar-recurrence';
+import {
+  layoutOverlappingEvents,
+  partitionAllDayEntries,
+} from '@shared/calendar-layout';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import { friendlyErrorMessage } from '../../lib/format';
 import { AnimatedCheckbox } from '../ui/AnimatedCheckbox';
+import { ContextMenuSurface, type ContextMenuEntry } from '../ui/ContextMenuSurface';
 import { PopoverSurface } from '../ui/PopoverSurface';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { CalendarEventSheet, type CalendarEventSheetSeed } from './CalendarEventSheet';
@@ -44,9 +54,10 @@ interface CalendarHubViewProps {
   onFocusEventHandled?: () => void;
   onOpenItem: (itemId: string) => void;
   onOpenIntegrations: () => void;
+  onTasksChanged?: () => void;
 }
 
-type CalendarMode = 'month' | 'week' | 'agenda';
+type CalendarMode = 'month' | 'week' | 'day' | 'agenda';
 
 interface CalendarDisplayEntry {
   id: string;
@@ -65,9 +76,10 @@ interface CalendarDisplayEntry {
   attachmentsCount: number;
   linkedItemId?: string | null;
   sourceEvent?: CalendarEvent;
+  sourceTask?: VaultTaskEntry;
 }
 
-const WEEK_HOURS = Array.from({ length: 17 }, (_, i) => i + 7); // 07:00 .. 23:00
+const DAY_HOURS = Array.from({ length: 24 }, (_, i) => i); // 00:00 .. 23:00
 const HOUR_ROW_PX = 48;
 
 function startOfDay(d: Date): Date {
@@ -172,10 +184,12 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   onFocusEventHandled,
   onOpenItem,
   onOpenIntegrations,
+  onTasksChanged,
 }) => {
   const { t, locale, dateLocale } = useI18n();
   const weekdaysShort = useMemo(() => t('cal.weekdaysShort').split(','), [t]);
   const prefersReduced = useReducedMotion();
+  const [nowTickMs, setNowTickMs] = useState(() => Date.now());
   const [cursorDate, setCursorDate] = useState(() => startOfDay(new Date()));
   const [navDir, setNavDir] = useState<1 | -1>(1);
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
@@ -185,14 +199,60 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const [syncing, setSyncing] = useState(false);
   const [syncPopoverOpen, setSyncPopoverOpen] = useState(false);
   const [dragOverDayKey, setDragOverDayKey] = useState<string | null>(null);
+  const [openOverflowDayKey, setOpenOverflowDayKey] = useState<string | null>(null);
+  const [hidePastAgenda, setHidePastAgenda] = useState(false);
+  const [unscheduledQuery, setUnscheduledQuery] = useState('');
+  const [taskDoneOverrides, setTaskDoneOverrides] = useState<Record<string, boolean>>({});
+  const [taskDueOverrides, setTaskDueOverrides] = useState<Record<string, number>>({});
 
   const [quickLine, setQuickLine] = useState('');
   const quickAddingRef = useRef(false);
   const schedulingTaskRef = useRef(false);
+  const timeGridScrollRef = useRef<HTMLDivElement | null>(null);
+  const scrolledModeRef = useRef<CalendarMode | null>(null);
+  const suppressNextSlotClickRef = useRef(false);
+
+  const [dragCreateDraft, setDragCreateDraft] = useState<{
+    dayKey: string;
+    anchorMin: number;
+    currentMin: number;
+  } | null>(null);
+  const dragCreateMetaRef = useRef<{
+    dayKey: string;
+    day: Date;
+    startY: number;
+    anchorMin: number;
+    currentMin: number;
+    columnTop: number;
+  } | null>(null);
+
+  const [resizingDraft, setResizingDraft] = useState<{
+    entryId: string;
+    endMin: number;
+  } | null>(null);
+  const resizeMetaRef = useRef<{
+    entryId: string;
+    sourceEvent: CalendarEvent;
+    dayStartMs: number;
+    startY: number;
+    initialEndMin: number;
+    currentEndMin: number;
+    minEndMin: number;
+  } | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
   const [sheetSeed, setSheetSeed] = useState<CalendarEventSheetSeed | null>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTickMs(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    setTaskDoneOverrides({});
+    setTaskDueOverrides({});
+  }, [tasks]);
 
   useEffect(() => {
     if (initialEvents) {
@@ -329,7 +389,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
 
     for (const task of tasks) {
       const parentItem = itemMap.get(task.itemId);
-      const effectiveDueAt = task.dueAt ?? parentItem?.remindAt ?? null;
+      const effectiveDueAt = taskDueOverrides[task.id] ?? task.dueAt ?? parentItem?.remindAt ?? null;
       if (effectiveDueAt === null) continue;
 
       const dayKey = `${task.itemId}:${toLocalDateInput(effectiveDueAt)}`;
@@ -352,12 +412,13 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
         hasEndTime: false,
         color: 'var(--k-info)',
         isReminderOnly: true,
-        isDone: task.done,
+        isDone: taskDoneOverrides[task.id] ?? task.done,
         location: '',
         checklistDone: 0,
         checklistTotal: 0,
         attachmentsCount: 1,
         linkedItemId: task.itemId,
+        sourceTask: task,
       });
     }
 
@@ -386,7 +447,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       }
     }
     return out.sort((a, b) => a.startAt - b.startAt);
-  }, [events, items, tasks, itemMap, windowRange, t]);
+  }, [events, items, tasks, itemMap, windowRange, t, taskDoneOverrides, taskDueOverrides]);
 
   const monthCells = useMemo(() => {
     const year = cursorDate.getFullYear();
@@ -440,21 +501,31 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       .slice(0, 8);
   }, [combinedEntries, selectedDay]);
 
-  const unscheduledTasks = useMemo(() => {
+  const allUnscheduledTasks = useMemo(() => {
     const scheduledTaskKeys = new Set(
       events
         .filter((ev) => ev.linkedItemId)
         .map((ev) => `${ev.linkedItemId}:${ev.title.trim().toLowerCase()}`)
     );
-    return tasks
-      .filter((t) => {
-        if (t.done) return false;
-        if (t.dueAt != null) return false;
-        if (itemMap.get(t.itemId)?.remindAt != null) return false;
-        return !scheduledTaskKeys.has(`${t.itemId}:${t.text.trim().toLowerCase()}`);
-      })
-      .slice(0, 12);
-  }, [tasks, events, itemMap]);
+    return tasks.filter((task) => {
+      if (taskDoneOverrides[task.id] ?? task.done) return false;
+      if ((taskDueOverrides[task.id] ?? task.dueAt) != null) return false;
+      if (itemMap.get(task.itemId)?.remindAt != null) return false;
+      return !scheduledTaskKeys.has(`${task.itemId}:${task.text.trim().toLowerCase()}`);
+    });
+  }, [tasks, events, itemMap, taskDoneOverrides, taskDueOverrides]);
+
+  const unscheduledTasks = useMemo(() => {
+    const q = unscheduledQuery.trim().toLowerCase();
+    const list = q
+      ? allUnscheduledTasks.filter(
+          (task) =>
+            task.text.toLowerCase().includes(q) ||
+            (task.itemTitle || '').toLowerCase().includes(q)
+        )
+      : allUnscheduledTasks;
+    return list.slice(0, 20);
+  }, [allUnscheduledTasks, unscheduledQuery]);
 
   const openCreateSheetForDay = (day: Date, seed?: CalendarEventSheetSeed) => {
     setActiveEvent(null);
@@ -499,6 +570,49 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     await loadCalendar();
   };
 
+  const buildEventUpsertPayload = useCallback(
+    (ev: CalendarEvent, overrides: Partial<CalendarEventInput> = {}): CalendarEventInput => ({
+      id: ev.id,
+      title: ev.title,
+      notes: ev.notes,
+      location: ev.location,
+      startAt: ev.startAt,
+      endAt: ev.endAt,
+      allDay: ev.allDay,
+      hasEndTime: ev.hasEndTime,
+      kind: ev.kind,
+      recurrence: ev.recurrence ?? 'none',
+      color: ev.color,
+      linkedItemId: ev.linkedItemId,
+      checklist: ev.checklist,
+      attachments: ev.attachments,
+      isDone: ev.isDone,
+      externalSource: ev.externalSource ?? null,
+      externalId: ev.externalId ?? null,
+      etag: ev.etag ?? null,
+      ...overrides,
+    }),
+    []
+  );
+
+  const handleToggleVaultTaskEntry = async (task: VaultTaskEntry) => {
+    const prevDone = taskDoneOverrides[task.id] ?? task.done;
+    const nextDone = !prevDone;
+    setTaskDoneOverrides((prev) => ({ ...prev, [task.id]: nextDone }));
+    try {
+      await window.kapsula.toggleTask({
+        itemId: task.itemId,
+        sourceType: task.sourceType,
+        taskIndex: task.taskIndex,
+        done: nextDone,
+      });
+      onTasksChanged?.();
+    } catch (err) {
+      setTaskDoneOverrides((prev) => ({ ...prev, [task.id]: prevDone }));
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
+  };
+
   const handleToggleEventDone = async (ev: CalendarEvent) => {
     const prevDone = ev.isDone;
     const nextDone = !prevDone;
@@ -509,25 +623,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     setActiveEvent((prev) => (prev && prev.id === ev.id ? { ...prev, isDone: nextDone } : prev));
 
     try {
-      const updated = await window.kapsula.upsertCalendarEvent({
-        id: ev.id,
-        title: ev.title,
-        notes: ev.notes,
-        location: ev.location,
-        startAt: ev.startAt,
-        endAt: ev.endAt,
-        allDay: ev.allDay,
-        hasEndTime: ev.hasEndTime,
-        kind: ev.kind,
-        recurrence: ev.recurrence ?? 'none',
-        color: ev.color,
-        linkedItemId: ev.linkedItemId,
-        checklist: ev.checklist,
-        attachments: ev.attachments,
-        isDone: nextDone,
-        externalSource: ev.externalSource,
-        externalId: ev.externalId,
-      });
+      const updated = await window.kapsula.upsertCalendarEvent(
+        buildEventUpsertPayload(ev, { isDone: nextDone })
+      );
       if (ev.kind === 'task' && ev.linkedItemId) {
         const matchingTask = tasks.find(
           (taskItem) =>
@@ -541,6 +639,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             taskIndex: matchingTask.taskIndex,
             done: nextDone,
           });
+          onTasksChanged?.();
         }
       }
       if (activeEvent?.id === ev.id) {
@@ -556,8 +655,195 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     }
   };
 
-  // Drag & Drop: move event or schedule task onto a target day
-  const handleDropOnDay = async (targetDay: Date, dataTransfer: DataTransfer) => {
+  const handleMoveEventByDays = async (ev: CalendarEvent, deltaDays: number) => {
+    const targetDay = new Date(ev.startAt);
+    targetDay.setDate(targetDay.getDate() + deltaDays);
+    try {
+      const origStart = new Date(ev.startAt);
+      const origEnd = new Date(ev.endAt);
+      const nextStart = new Date(targetDay);
+      nextStart.setHours(
+        ev.allDay ? 0 : origStart.getHours(),
+        ev.allDay ? 0 : origStart.getMinutes(),
+        0,
+        0
+      );
+      let nextEndMs: number;
+      if (ev.allDay) {
+        nextEndMs = buildDstSafeAllDayEnd(nextStart);
+      } else {
+        const dayDelta = Math.round(
+          (startOfDay(origEnd).getTime() - startOfDay(origStart).getTime()) / 86_400_000
+        );
+        const nextEnd = new Date(nextStart);
+        nextEnd.setDate(nextEnd.getDate() + Math.max(0, dayDelta));
+        nextEnd.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
+        nextEndMs =
+          nextEnd.getTime() > nextStart.getTime()
+            ? nextEnd.getTime()
+            : nextStart.getTime() + Math.max(0, ev.endAt - ev.startAt);
+      }
+      await window.kapsula.upsertCalendarEvent(
+        buildEventUpsertPayload(ev, { startAt: nextStart.getTime(), endAt: nextEndMs })
+      );
+      setSelectedDay(startOfDay(targetDay));
+      toast.success(
+        t('cal.toast.movedTo', {
+          date: targetDay.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' }),
+        })
+      );
+      await loadCalendar();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
+  };
+
+  const handleDuplicateEvent = async (ev: CalendarEvent) => {
+    const shiftMs = ev.allDay ? 86_400_000 : 3_600_000;
+    try {
+      await window.kapsula.upsertCalendarEvent({
+        title: ev.title,
+        notes: ev.notes,
+        location: ev.location,
+        startAt: ev.startAt + shiftMs,
+        endAt: ev.endAt + shiftMs,
+        allDay: ev.allDay,
+        hasEndTime: ev.hasEndTime,
+        kind: ev.kind,
+        recurrence: ev.recurrence ?? 'none',
+        color: ev.color,
+        linkedItemId: ev.linkedItemId,
+        checklist: ev.checklist,
+        attachments: ev.attachments,
+        isDone: false,
+      });
+      toast.success(t('cal.toast.duplicated'));
+      await loadCalendar();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
+  };
+
+  const buildEntryContextMenu = (entry: CalendarDisplayEntry): ContextMenuEntry[] => {
+    if (entry.sourceEvent) {
+      const ev = entry.sourceEvent;
+      const itemsList: ContextMenuEntry[] = [
+        {
+          type: 'item',
+          id: 'open',
+          label: t('cal.ctx.open'),
+          icon: <CalendarBlank className="w-3.5 h-3.5" />,
+          onSelect: () => openViewSheet(ev),
+        },
+        {
+          type: 'item',
+          id: 'toggle-done',
+          label: ev.isDone ? t('cal.ctx.markUndone') : t('cal.ctx.markDone'),
+          icon: <Check className="w-3.5 h-3.5" />,
+          onSelect: () => void handleToggleEventDone(ev),
+        },
+      ];
+      if (!entry.isRecurringInstance) {
+        itemsList.push({
+          type: 'item',
+          id: 'move-tomorrow',
+          label: t('cal.ctx.moveTomorrow'),
+          icon: <ArrowRight className="w-3.5 h-3.5" />,
+          onSelect: () => void handleMoveEventByDays(ev, 1),
+        });
+      }
+      itemsList.push(
+        {
+          type: 'item',
+          id: 'duplicate',
+          label: t('cal.ctx.duplicate'),
+          icon: <Copy className="w-3.5 h-3.5" />,
+          onSelect: () => void handleDuplicateEvent(ev),
+        },
+        { type: 'separator', id: 'sep-delete' },
+        {
+          type: 'item',
+          id: 'delete',
+          label: t('cal.ctx.delete'),
+          icon: <Trash className="w-3.5 h-3.5" />,
+          danger: true,
+          onSelect: () => void handleDeleteEvent(ev.id),
+        }
+      );
+      return itemsList;
+    }
+
+    if (entry.sourceTask) {
+      const task = entry.sourceTask;
+      const taskDone = taskDoneOverrides[task.id] ?? task.done;
+      return [
+        {
+          type: 'item',
+          id: 'open-item',
+          label: t('cal.openItem'),
+          icon: <LinkSimple className="w-3.5 h-3.5" />,
+          onSelect: () => onOpenItem(task.itemId),
+        },
+        {
+          type: 'item',
+          id: 'toggle-task',
+          label: taskDone ? t('cal.ctx.markUndone') : t('cal.ctx.markDone'),
+          icon: <Check className="w-3.5 h-3.5" />,
+          onSelect: () => void handleToggleVaultTaskEntry(task),
+        },
+      ];
+    }
+
+    return [];
+  };
+
+  const scheduleVaultTaskAt = useCallback(
+    async (
+      task: {
+        id?: string;
+        itemId: string;
+        sourceType?: 'markdown' | 'voice_action';
+        taskIndex?: number;
+        taskKey?: string;
+        text: string;
+      },
+      dueAtMs: number,
+      hasEndTime: boolean
+    ) => {
+      if (task.sourceType && typeof task.taskIndex === 'number') {
+        if (task.id) {
+          setTaskDueOverrides((prev) => ({ ...prev, [task.id!]: dueAtMs }));
+        }
+        const resolvedTaskKey =
+          task.taskKey ||
+          (task.sourceType === 'voice_action' ? `va:${task.taskIndex}` : `md:${task.taskIndex}`);
+        await window.kapsula.updateTaskMeta({
+          itemId: task.itemId,
+          taskKey: resolvedTaskKey,
+          dueAt: dueAtMs,
+        });
+        onTasksChanged?.();
+      } else {
+        await window.kapsula.upsertCalendarEvent({
+          title: task.text,
+          startAt: dueAtMs,
+          endAt: dueAtMs + 1_800_000,
+          hasEndTime,
+          linkedItemId: task.itemId,
+          kind: 'task',
+          color: '#3B82F6',
+        });
+      }
+    },
+    [onTasksChanged]
+  );
+
+  // Drag & Drop: move event or schedule task onto a target day (or 30-min time slot)
+  const handleDropOnDay = async (
+    targetDay: Date,
+    dataTransfer: DataTransfer,
+    overrideSlotTime?: { hour: number; minute: number }
+  ) => {
     setDragOverDayKey(null);
     const eventId = dataTransfer.getData('text/kapsula-cal-event-id');
     if (eventId) {
@@ -567,47 +853,49 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
         const origStart = new Date(ev.startAt);
         const origEnd = new Date(ev.endAt);
         const nextStart = new Date(targetDay);
-        nextStart.setHours(
-          ev.allDay ? 0 : origStart.getHours(),
-          ev.allDay ? 0 : origStart.getMinutes(),
-          0,
-          0
-        );
+        let nextAllDay = ev.allDay;
+        let nextHasEndTime = ev.hasEndTime;
         let nextEndMs: number;
-        if (ev.allDay) {
-          nextEndMs = buildDstSafeAllDayEnd(nextStart);
+
+        if (overrideSlotTime) {
+          nextAllDay = false;
+          nextHasEndTime = true;
+          nextStart.setHours(overrideSlotTime.hour, overrideSlotTime.minute, 0, 0);
+          const durMs = ev.allDay
+            ? 3_600_000
+            : Math.max(15 * 60_000, ev.endAt - ev.startAt);
+          nextEndMs = nextStart.getTime() + durMs;
         } else {
-          const dayDelta = Math.round(
-            (startOfDay(origEnd).getTime() - startOfDay(origStart).getTime()) / 86_400_000
+          nextStart.setHours(
+            ev.allDay ? 0 : origStart.getHours(),
+            ev.allDay ? 0 : origStart.getMinutes(),
+            0,
+            0
           );
-          const nextEnd = new Date(nextStart);
-          nextEnd.setDate(nextEnd.getDate() + Math.max(0, dayDelta));
-          nextEnd.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
-          nextEndMs =
-            nextEnd.getTime() > nextStart.getTime()
-              ? nextEnd.getTime()
-              : nextStart.getTime() + Math.max(0, ev.endAt - ev.startAt);
+          if (ev.allDay) {
+            nextEndMs = buildDstSafeAllDayEnd(nextStart);
+          } else {
+            const dayDelta = Math.round(
+              (startOfDay(origEnd).getTime() - startOfDay(origStart).getTime()) / 86_400_000
+            );
+            const nextEnd = new Date(nextStart);
+            nextEnd.setDate(nextEnd.getDate() + Math.max(0, dayDelta));
+            nextEnd.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
+            nextEndMs =
+              nextEnd.getTime() > nextStart.getTime()
+                ? nextEnd.getTime()
+                : nextStart.getTime() + Math.max(0, ev.endAt - ev.startAt);
+          }
         }
-        await window.kapsula.upsertCalendarEvent({
-          id: ev.id,
-          title: ev.title,
-          notes: ev.notes,
-          location: ev.location,
-          startAt: nextStart.getTime(),
-          endAt: nextEndMs,
-          allDay: ev.allDay,
-          hasEndTime: ev.hasEndTime,
-          kind: ev.kind,
-          recurrence: ev.recurrence ?? 'none',
-          color: ev.color,
-          linkedItemId: ev.linkedItemId,
-          checklist: ev.checklist,
-          attachments: ev.attachments,
-          isDone: ev.isDone,
-          externalSource: ev.externalSource ?? null,
-          externalId: ev.externalId ?? null,
-          etag: ev.etag ?? null,
-        });
+
+        await window.kapsula.upsertCalendarEvent(
+          buildEventUpsertPayload(ev, {
+            startAt: nextStart.getTime(),
+            endAt: nextEndMs,
+            allDay: nextAllDay,
+            hasEndTime: nextHasEndTime,
+          })
+        );
         setSelectedDay(startOfDay(targetDay));
         toast.success(
           t('cal.toast.movedTo', {
@@ -624,18 +912,17 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     const taskRaw = dataTransfer.getData('text/kapsula-task-json');
     if (taskRaw) {
       try {
-        const parsedTask = JSON.parse(taskRaw) as { itemId: string; text: string };
+        const parsedTask = JSON.parse(taskRaw) as {
+          id?: string;
+          itemId: string;
+          sourceType?: 'markdown' | 'voice_action';
+          taskIndex?: number;
+          taskKey?: string;
+          text: string;
+        };
         const slot = new Date(targetDay);
-        slot.setHours(12, 0, 0, 0);
-        await window.kapsula.upsertCalendarEvent({
-          title: parsedTask.text,
-          startAt: slot.getTime(),
-          endAt: slot.getTime() + 1_800_000,
-          hasEndTime: false,
-          linkedItemId: parsedTask.itemId,
-          kind: 'task',
-          color: '#3B82F6',
-        });
+        slot.setHours(overrideSlotTime?.hour ?? 12, overrideSlotTime?.minute ?? 0, 0, 0);
+        await scheduleVaultTaskAt(parsedTask, slot.getTime(), Boolean(overrideSlotTime));
         setSelectedDay(startOfDay(targetDay));
         toast.success(
           t('cal.toast.taskScheduled', {
@@ -730,15 +1017,23 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   };
 
   const monthLabel = useMemo(() => {
+    if (mode === 'day') {
+      const dayFmt = new Intl.DateTimeFormat(dateLocale, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }).format(cursorDate);
+      return dayFmt.charAt(0).toUpperCase() + dayFmt.slice(1);
+    }
     const fmt = new Intl.DateTimeFormat(dateLocale, { month: 'long', year: 'numeric' }).format(cursorDate);
     return fmt.charAt(0).toUpperCase() + fmt.slice(1);
-  }, [cursorDate, dateLocale]);
+  }, [cursorDate, dateLocale, mode]);
 
-  const today = useMemo(() => startOfDay(new Date()), []);
-  const nowDate = new Date();
-  const nowMinutesFrom7 = (nowDate.getHours() - 7) * 60 + nowDate.getMinutes();
-  const showNowLine = nowMinutesFrom7 >= 0 && nowMinutesFrom7 <= WEEK_HOURS.length * 60;
-  const nowLineTopPx = (nowMinutesFrom7 / 60) * HOUR_ROW_PX;
+  const nowDate = useMemo(() => new Date(nowTickMs), [nowTickMs]);
+  const today = useMemo(() => startOfDay(nowDate), [nowDate]);
+  const nowMinutes = nowDate.getHours() * 60 + nowDate.getMinutes();
+  const nowLineTopPx = (nowMinutes / 60) * HOUR_ROW_PX;
 
   const selectedDayTitle = useMemo(() => {
     const raw = selectedDay.toLocaleDateString(dateLocale, {
@@ -749,12 +1044,257 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     return raw.charAt(0).toUpperCase() + raw.slice(1);
   }, [selectedDay, dateLocale]);
 
+  const shiftPeriod = useCallback(
+    (dir: -1 | 1) => {
+      setNavDir(dir);
+      if (mode === 'day') {
+        const nextDay = new Date(
+          cursorDate.getFullYear(),
+          cursorDate.getMonth(),
+          cursorDate.getDate() + dir
+        );
+        setCursorDate(nextDay);
+        setSelectedDay(nextDay);
+        return;
+      }
+      if (mode === 'week') {
+        setCursorDate(
+          (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + dir * 7)
+        );
+        return;
+      }
+      setCursorDate((d) => new Date(d.getFullYear(), d.getMonth() + dir, 1));
+    },
+    [cursorDate, mode]
+  );
+
+  const visibleGridDays = useMemo(
+    () => (mode === 'day' ? [startOfDay(cursorDate)] : weekDays),
+    [mode, cursorDate, weekDays]
+  );
+
+  // Auto-scroll 24h time grid to 07:00 after AnimatePresence mounts Week or Day view
+  useEffect(() => {
+    if (mode !== 'week' && mode !== 'day') {
+      scrolledModeRef.current = null;
+    }
+  }, [mode]);
+
+  const setTimeGridScrollNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      timeGridScrollRef.current = node;
+      if (!node) return;
+      if ((mode === 'week' || mode === 'day') && scrolledModeRef.current !== mode) {
+        scrolledModeRef.current = mode;
+        // Leave 14px breathing room above 07:00 so the hour label (-mt-1.5) is never clipped
+        const targetTop = Math.max(0, 7 * HOUR_ROW_PX - 14);
+        node.scrollTop = targetTop;
+        window.requestAnimationFrame(() => {
+          if (timeGridScrollRef.current === node) {
+            node.scrollTop = targetTop;
+          }
+        });
+      }
+    },
+    [mode]
+  );
+
+  const switchCalendarMode = useCallback(
+    (nextMode: CalendarMode) => {
+      if (nextMode === 'day') {
+        setCursorDate(selectedDay);
+      } else if (nextMode === 'week') {
+        const inWeek = weekDays.some((d) => sameDay(d, selectedDay));
+        if (!inWeek) {
+          setCursorDate(selectedDay);
+        }
+      }
+      setMode(nextMode);
+    },
+    [selectedDay, weekDays]
+  );
+
+  // Drag-to-create and bottom-edge drag-to-resize on 24h grid
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      const dc = dragCreateMetaRef.current;
+      if (dc) {
+        const relY = Math.max(0, Math.min(24 * HOUR_ROW_PX, e.clientY - dc.columnTop));
+        const snappedMin = Math.min(
+          23 * 60 + 30,
+          Math.max(0, Math.floor((relY / HOUR_ROW_PX) * 2) * 30)
+        );
+        dc.currentMin = snappedMin;
+        setDragCreateDraft({
+          dayKey: dc.dayKey,
+          anchorMin: dc.anchorMin,
+          currentMin: snappedMin,
+        });
+      }
+
+      const rs = resizeMetaRef.current;
+      if (rs) {
+        const deltaSteps = Math.round((e.clientY - rs.startY) / (HOUR_ROW_PX / 4));
+        const nextEndMin = Math.max(
+          rs.minEndMin,
+          Math.min(24 * 60, rs.initialEndMin + deltaSteps * 15)
+        );
+        rs.currentEndMin = nextEndMin;
+        setResizingDraft({ entryId: rs.entryId, endMin: nextEndMin });
+      }
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      const dc = dragCreateMetaRef.current;
+      if (dc) {
+        dragCreateMetaRef.current = null;
+        setDragCreateDraft(null);
+        const movedPx = Math.abs(e.clientY - dc.startY);
+        if (movedPx >= 10 || dc.currentMin !== dc.anchorMin) {
+          const minStart = Math.min(dc.anchorMin, dc.currentMin);
+          const minEnd = Math.min(
+            24 * 60,
+            Math.max(minStart + 30, Math.max(dc.anchorMin, dc.currentMin) + 30)
+          );
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const startTime = `${pad(Math.floor(minStart / 60))}:${pad(minStart % 60)}`;
+          suppressNextSlotClickRef.current = true;
+          window.setTimeout(() => {
+            suppressNextSlotClickRef.current = false;
+          }, 0);
+          setSelectedDay(startOfDay(dc.day));
+          openCreateSheetForDay(dc.day, {
+            dateStr: dc.dayKey,
+            startTime,
+            hasEndTime: true,
+            durationMin: Math.max(30, minEnd - minStart),
+          });
+        }
+      }
+
+      const rs = resizeMetaRef.current;
+      if (rs) {
+        resizeMetaRef.current = null;
+        setResizingDraft(null);
+        if (rs.currentEndMin !== rs.initialEndMin) {
+          const nextEndAt = Math.max(
+            rs.sourceEvent.startAt + 15 * 60_000,
+            rs.dayStartMs + rs.currentEndMin * 60_000
+          );
+          if (nextEndAt !== rs.sourceEvent.endAt) {
+            void window.kapsula
+              .upsertCalendarEvent(
+                buildEventUpsertPayload(rs.sourceEvent, {
+                  endAt: nextEndAt,
+                  hasEndTime: true,
+                })
+              )
+              .then(() => {
+                toast.success(t('cal.toast.resized'));
+                return loadCalendar();
+              })
+              .catch((err) => {
+                toast.error(friendlyErrorMessage(err, undefined, locale));
+              });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [buildEventUpsertPayload, loadCalendar, locale, t]);
+
+  // Keyboard shortcuts (T, ArrowLeft/Right, 1-4) ignored when typing or dialogs open
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (sheetOpen || syncPopoverOpen || openOverflowDayKey !== null) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+
+      if (e.code === 'KeyT') {
+        e.preventDefault();
+        const now = startOfDay(new Date());
+        setCursorDate(now);
+        setSelectedDay(now);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        shiftPeriod(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        shiftPeriod(1);
+      } else if (e.key === '1') {
+        e.preventDefault();
+        switchCalendarMode('month');
+      } else if (e.key === '2') {
+        e.preventDefault();
+        switchCalendarMode('week');
+      } else if (e.key === '3') {
+        e.preventDefault();
+        switchCalendarMode('day');
+      } else if (e.key === '4') {
+        e.preventDefault();
+        switchCalendarMode('agenda');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [sheetOpen, syncPopoverOpen, openOverflowDayKey, shiftPeriod, switchCalendarMode]);
+
+  const agendaEntries = useMemo(() => {
+    if (!hidePastAgenda) return combinedEntries;
+    const todayStart = today.getTime();
+    return combinedEntries.filter((e) => e.endAt >= todayStart || e.startAt >= todayStart);
+  }, [combinedEntries, hidePastAgenda, today]);
+
+  const agendaGroups = useMemo(() => {
+    const groups: Array<{ dayKey: string; label: string; items: CalendarDisplayEntry[] }> = [];
+    const byKey = new Map<string, { dayKey: string; label: string; items: CalendarDisplayEntry[] }>();
+    for (const ev of agendaEntries) {
+      const dayKey = toLocalDateInput(ev.startAt);
+      let grp = byKey.get(dayKey);
+      if (!grp) {
+        const raw = new Date(ev.startAt).toLocaleDateString(dateLocale, {
+          day: 'numeric',
+          month: 'short',
+          weekday: 'short',
+        });
+        grp = {
+          dayKey,
+          label: raw.charAt(0).toUpperCase() + raw.slice(1),
+          items: [],
+        };
+        byKey.set(dayKey, grp);
+        groups.push(grp);
+      }
+      grp.items.push(ev);
+    }
+    return groups;
+  }, [agendaEntries, dateLocale]);
+
   const viewKey =
     mode === 'month'
       ? `m-${cursorDate.getFullYear()}-${cursorDate.getMonth()}`
       : mode === 'week'
         ? `w-${toLocalDateInput(weekDays[0]!.getTime())}`
-        : 'agenda';
+        : mode === 'day'
+          ? `d-${toLocalDateInput(cursorDate.getTime())}`
+          : 'agenda';
 
   return (
     <div data-testid="calendar-hub-view" className="flex flex-col gap-3.5 pb-6">
@@ -829,14 +1369,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
           <div className="inline-flex items-center rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] p-0.5 shadow-2xs">
             <button
               type="button"
-              onClick={() => {
-                setNavDir(-1);
-                setCursorDate((d) =>
-                  mode === 'week'
-                    ? new Date(d.getFullYear(), d.getMonth(), d.getDate() - 7)
-                    : new Date(d.getFullYear(), d.getMonth() - 1, 1)
-                );
-              }}
+              onClick={() => shiftPeriod(-1)}
               aria-label={t('cal.prevPeriodAria')}
               className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
             >
@@ -855,14 +1388,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => {
-                setNavDir(1);
-                setCursorDate((d) =>
-                  mode === 'week'
-                    ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7)
-                    : new Date(d.getFullYear(), d.getMonth() + 1, 1)
-                );
-              }}
+              onClick={() => shiftPeriod(1)}
               aria-label={t('cal.nextPeriodAria')}
               className="k-interactive w-7 h-7 rounded-lg hover:bg-[var(--k-bg-surface-2)] inline-flex items-center justify-center cursor-pointer"
             >
@@ -875,10 +1401,11 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <SegmentedControl<CalendarMode>
             value={mode}
-            onChange={setMode}
+            onChange={switchCalendarMode}
             options={[
               { value: 'month', label: t('cal.view.month'), icon: <CalendarBlank className="w-3.5 h-3.5" /> },
               { value: 'week', label: t('cal.view.week') },
+              { value: 'day', label: t('cal.view.day') },
               { value: 'agenda', label: t('cal.view.agenda'), icon: <ListBullets className="w-3.5 h-3.5" /> },
             ]}
           />
@@ -999,26 +1526,20 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       {/* Main Two-Pane Calendar Grid + Streamlined Right Inspector */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_328px] gap-4 items-start">
         <div className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-hidden shadow-[var(--k-shadow-card)]">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={viewKey}
-              initial={
-                prefersReduced
-                  ? { opacity: 0 }
-                  : { opacity: 0, transform: `translate3d(${navDir * 12}px, 0, 0)` }
-              }
-              animate={
-                prefersReduced
-                  ? { opacity: 1 }
-                  : { opacity: 1, transform: 'translate3d(0, 0, 0)' }
-              }
-              exit={
-                prefersReduced
-                  ? { opacity: 0 }
-                  : { opacity: 0, transform: `translate3d(${-navDir * 10}px, 0, 0)` }
-              }
-              transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
-            >
+          <motion.div
+            key={viewKey}
+            initial={
+              prefersReduced
+                ? { opacity: 0.7 }
+                : { opacity: 0.68, transform: `translate3d(${navDir * 8}px, 0, 0)` }
+            }
+            animate={
+              prefersReduced
+                ? { opacity: 1 }
+                : { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+            }
+            transition={{ duration: 0.11, ease: [0.23, 1, 0.32, 1] }}
+          >
               {mode === 'month' ? (
                 <>
                   <div className="grid grid-cols-7 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50">
@@ -1096,43 +1617,101 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
 
                           <div className="space-y-1 overflow-hidden">
                             {dayEntries.slice(0, 3).map((ev) => (
-                              <button
-                                key={ev.id}
-                                type="button"
-                                draggable={Boolean(ev.sourceEvent && !ev.isRecurringInstance)}
-                                onDragStart={(e) => {
-                                  if (ev.sourceEvent && !ev.isRecurringInstance) {
-                                    e.dataTransfer.setData('text/kapsula-cal-event-id', ev.sourceEvent.id);
-                                    e.dataTransfer.effectAllowed = 'move';
-                                  }
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedDay(startOfDay(day));
-                                  handleEntryClick(ev);
-                                }}
-                                title={`${formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))} ${ev.title}`}
-                                className={`w-full text-left flex items-center gap-1.5 h-[22px] px-1.5 rounded-md text-[11px] bg-[var(--k-bg-surface-2)]/90 hover:bg-[var(--k-bg-surface-3)] transition-colors border-l-[2.5px] cursor-pointer overflow-hidden ${
-                                  ev.isDone ? 'opacity-50 line-through' : ''
-                                }`}
-                                style={{ borderLeftColor: ev.color }}
-                              >
-                                {ev.isReminderOnly ? (
-                                  <Bell weight="fill" className="w-2.5 h-2.5 text-[var(--k-amber)] shrink-0" />
-                                ) : !ev.allDay ? (
-                                  <span className="k-mono text-[10px] text-[var(--k-ink-muted)] shrink-0">
-                                    {formatTimeShort(ev.startAt, dateLocale)}
+                              <ContextMenuSurface key={ev.id} entries={buildEntryContextMenu(ev)}>
+                                <button
+                                  type="button"
+                                  draggable={Boolean(ev.sourceEvent && !ev.isRecurringInstance)}
+                                  onDragStart={(e) => {
+                                    if (ev.sourceEvent && !ev.isRecurringInstance) {
+                                      e.dataTransfer.setData('text/kapsula-cal-event-id', ev.sourceEvent.id);
+                                      e.dataTransfer.effectAllowed = 'move';
+                                    }
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDay(startOfDay(day));
+                                    handleEntryClick(ev);
+                                  }}
+                                  title={`${formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))} ${ev.title}`}
+                                  className={`w-full text-left flex items-center gap-1.5 h-[22px] px-1.5 rounded-md text-[11px] bg-[var(--k-bg-surface-2)]/90 hover:bg-[var(--k-bg-surface-3)] transition-colors border-l-[2.5px] cursor-pointer overflow-hidden ${
+                                    ev.isDone ? 'opacity-50 line-through' : ''
+                                  }`}
+                                  style={{ borderLeftColor: ev.color }}
+                                >
+                                  {ev.isReminderOnly ? (
+                                    <Bell weight="fill" className="w-2.5 h-2.5 text-[var(--k-amber)] shrink-0" />
+                                  ) : !ev.allDay ? (
+                                    <span className="k-mono text-[10px] text-[var(--k-ink-muted)] shrink-0">
+                                      {formatTimeShort(ev.startAt, dateLocale)}
+                                    </span>
+                                  ) : null}
+                                  <span className="truncate font-medium text-[var(--k-ink-primary)]">
+                                    {ev.title}
                                   </span>
-                                ) : null}
-                                <span className="truncate font-medium text-[var(--k-ink-primary)]">
-                                  {ev.title}
-                                </span>
-                              </button>
+                                </button>
+                              </ContextMenuSurface>
                             ))}
                             {overflowCount > 0 ? (
-                              <div className="px-1.5 text-[10.5px] font-medium text-[var(--k-ink-muted)]">
-                                {t('cal.overflowMore', { count: overflowCount })}
-                              </div>
+                              <PopoverSurface
+                                open={openOverflowDayKey === dayKey}
+                                onOpenChange={(nextOpen) =>
+                                  setOpenOverflowDayKey(nextOpen ? dayKey : null)
+                                }
+                                align="start"
+                                widthClass="w-64"
+                                trigger={
+                                  <button
+                                    type="button"
+                                    data-testid={`calendar-overflow-${dayKey}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDay(startOfDay(day));
+                                      setOpenOverflowDayKey((prev) =>
+                                        prev === dayKey ? null : dayKey
+                                      );
+                                    }}
+                                    className="k-interactive w-full text-left px-1.5 py-0.5 rounded-md text-[10.5px] font-medium text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer transition-colors"
+                                  >
+                                    {t('cal.overflowMore', { count: overflowCount })}
+                                  </button>
+                                }
+                              >
+                                <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                                  <div className="text-[11px] font-semibold text-[var(--k-ink-muted)] px-1 pb-1 border-b border-[var(--k-border-hairline)]">
+                                    {day.toLocaleDateString(dateLocale, {
+                                      day: 'numeric',
+                                      month: 'long',
+                                      weekday: 'short',
+                                    })}
+                                  </div>
+                                  <div className="max-h-[240px] overflow-y-auto space-y-1">
+                                    {dayEntries.map((ev) => (
+                                      <button
+                                        key={`pop-${ev.id}`}
+                                        type="button"
+                                        onClick={() => {
+                                          setOpenOverflowDayKey(null);
+                                          setSelectedDay(startOfDay(day));
+                                          handleEntryClick(ev);
+                                        }}
+                                        className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border-l-[3px] bg-[var(--k-bg-surface-2)]/70 hover:bg-[var(--k-bg-surface-3)] text-[12px] cursor-pointer transition-colors ${
+                                          ev.isDone ? 'opacity-55 line-through' : ''
+                                        }`}
+                                        style={{ borderLeftColor: ev.color }}
+                                      >
+                                        <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
+                                          {ev.allDay
+                                            ? t('common.allDay')
+                                            : formatTimeShort(ev.startAt, dateLocale)}
+                                        </span>
+                                        <span className="truncate font-medium text-[var(--k-ink-primary)]">
+                                          {ev.title}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </PopoverSurface>
                             ) : null}
                           </div>
                         </div>
@@ -1140,13 +1719,21 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     })}
                   </div>
                 </>
-              ) : mode === 'week' ? (
-                /* Real Hourly Week Grid (07:00 – 23:00) with live Now Line */
+              ) : mode === 'week' || mode === 'day' ? (
+                /* 24h Week & Day Grid with All-Day Strip, Side-by-Side Overlap Columns & Drag Manipulation */
                 <div className="flex flex-col">
-                  {/* Week Day Headers */}
-                  <div className="grid grid-cols-[52px_repeat(7,minmax(0,1fr))] border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50">
+                  {/* Day Headers */}
+                  <div
+                    className="grid pr-[6px] border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50"
+                    style={{
+                      gridTemplateColumns:
+                        mode === 'day'
+                          ? '52px minmax(0, 1fr)'
+                          : '52px repeat(7, minmax(0, 1fr))',
+                    }}
+                  >
                     <div className="py-2 text-center text-[10px] text-[var(--k-ink-muted)]" />
-                    {weekDays.map((day) => {
+                    {visibleGridDays.map((day) => {
                       const isToday = sameDay(day, today);
                       const isSelected = sameDay(day, selectedDay);
                       const dayKey = toLocalDateInput(day.getTime());
@@ -1154,7 +1741,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                         <button
                           key={dayKey}
                           type="button"
-                          onClick={() => setSelectedDay(startOfDay(day))}
+                          onClick={() => {
+                            setSelectedDay(startOfDay(day));
+                            if (mode === 'day') setCursorDate(startOfDay(day));
+                          }}
                           onDragOver={(e) => {
                             e.preventDefault();
                             setDragOverDayKey(dayKey);
@@ -1182,35 +1772,27 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     })}
                   </div>
 
-                  {/* All-day row if any */}
-                  <div className="max-h-[540px] overflow-y-auto relative">
+                  {/* Dedicated All-Day Strip */}
+                  {visibleGridDays.some((d) => partitionAllDayEntries(entriesForDay(d)).allDay.length > 0) ? (
                     <div
-                      className="grid grid-cols-[52px_repeat(7,minmax(0,1fr))] relative"
-                      style={{ height: `${WEEK_HOURS.length * HOUR_ROW_PX}px` }}
+                      data-testid="calendar-allday-strip"
+                      className="grid pr-[6px] border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/30"
+                      style={{
+                        gridTemplateColumns:
+                          mode === 'day'
+                            ? '52px minmax(0, 1fr)'
+                            : '52px repeat(7, minmax(0, 1fr))',
+                      }}
                     >
-                      {/* Hour Labels Column */}
-                      <div className="relative border-r border-[var(--k-border-hairline)]">
-                        {WEEK_HOURS.map((h, i) => (
-                          <div
-                            key={h}
-                            style={{ top: `${i * HOUR_ROW_PX}px`, height: `${HOUR_ROW_PX}px` }}
-                            className={`absolute left-0 right-0 pr-2 text-right text-[10px] k-mono text-[var(--k-ink-muted)] ${
-                              i === 0 ? 'pt-0.5' : '-mt-1.5'
-                            }`}
-                          >
-                            {String(h).padStart(2, '0')}:00
-                          </div>
-                        ))}
+                      <div className="px-1.5 py-1.5 text-[9.5px] font-medium text-[var(--k-ink-muted)] text-right leading-tight">
+                        {t('cal.allDayRow')}
                       </div>
-
-                      {/* 7 Day Columns */}
-                      {weekDays.map((day) => {
+                      {visibleGridDays.map((day) => {
                         const dayKey = toLocalDateInput(day.getTime());
-                        const isToday = sameDay(day, today);
-                        const dayEntries = entriesForDay(day);
+                        const { allDay: allDayItems } = partitionAllDayEntries(entriesForDay(day));
                         return (
                           <div
-                            key={dayKey}
+                            key={`ad-${dayKey}`}
                             onDragOver={(e) => {
                               e.preventDefault();
                               setDragOverDayKey(dayKey);
@@ -1219,52 +1801,11 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                               e.preventDefault();
                               void handleDropOnDay(day, e.dataTransfer);
                             }}
-                            className={`relative border-l border-[var(--k-border-hairline)] ${
-                              dragOverDayKey === dayKey ? 'bg-[var(--k-accent-soft)]/30' : ''
-                            }`}
+                            className="p-1 space-y-1 border-l border-[var(--k-border-hairline)] min-h-[28px]"
                           >
-                            {/* Clickable hour slots */}
-                            {WEEK_HOURS.map((h, i) => (
-                              <div
-                                key={h}
-                                onClick={() => {
-                                  setSelectedDay(startOfDay(day));
-                                  openCreateSheetForDay(day, {
-                                    startTime: `${String(h).padStart(2, '0')}:00`,
-                                    hasEndTime: true,
-                                    durationMin: 60,
-                                  });
-                                }}
-                                style={{ top: `${i * HOUR_ROW_PX}px`, height: `${HOUR_ROW_PX}px` }}
-                                className="absolute left-0 right-0 border-b border-[var(--k-border-hairline)]/55 hover:bg-[var(--k-bg-surface-2)]/35 cursor-pointer"
-                              />
-                            ))}
-
-                            {/* Live Current Time Line */}
-                            {isToday && showNowLine ? (
-                              <div
-                                style={{ top: `${nowLineTopPx}px` }}
-                                className="pointer-events-none absolute left-0 right-0 z-20 flex items-center"
-                              >
-                                <span className="w-2 h-2 rounded-full bg-[var(--k-accent)] -ml-1" />
-                                <div className="flex-1 h-[1.5px] bg-[var(--k-accent)]" />
-                              </div>
-                            ) : null}
-
-                            {/* Positioned Event Blocks */}
-                            {dayEntries.map((ev) => {
-                              const sDate = new Date(ev.startAt);
-                              const startMins = ev.allDay
-                                ? 0
-                                : Math.max(0, (sDate.getHours() - 7) * 60 + sDate.getMinutes());
-                              const durMins = ev.allDay
-                                ? 36
-                                : Math.max(30, Math.round((ev.endAt - ev.startAt) / 60_000));
-                              const topPx = (startMins / 60) * HOUR_ROW_PX + 2;
-                              const heightPx = Math.max(24, (durMins / 60) * HOUR_ROW_PX - 4);
-                              return (
+                            {allDayItems.map((ev) => (
+                              <ContextMenuSurface key={`ad-${ev.id}`} entries={buildEntryContextMenu(ev)}>
                                 <button
-                                  key={ev.id}
                                   type="button"
                                   draggable={Boolean(ev.sourceEvent && !ev.isRecurringInstance)}
                                   onDragStart={(e) => {
@@ -1279,24 +1820,283 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                     handleEntryClick(ev);
                                   }}
                                   style={{
-                                    top: `${topPx}px`,
-                                    height: `${heightPx}px`,
                                     borderLeftColor: ev.color,
-                                    backgroundColor: `color-mix(in srgb, ${ev.color} 15%, transparent)`,
+                                    backgroundColor: `color-mix(in srgb, ${ev.color} 16%, transparent)`,
                                   }}
-                                  className={`absolute left-1 right-1 z-10 rounded-lg border border-[var(--k-border-hairline)] border-l-[3px] px-1.5 py-1 text-left overflow-hidden hover:opacity-90 transition-opacity duration-140 cursor-pointer ${
-                                    ev.isDone ? 'opacity-50 line-through' : ''
+                                  className={`w-full text-left px-1.5 py-0.5 rounded-md border border-[var(--k-border-hairline)] border-l-[3px] text-[11px] font-medium truncate cursor-pointer hover:opacity-90 ${
+                                    ev.isDone ? 'opacity-50 line-through' : 'text-[var(--k-ink-primary)]'
                                   }`}
                                 >
-                                  <div className="text-[11px] font-semibold text-[var(--k-ink-primary)] truncate leading-tight">
-                                    {ev.title}
-                                  </div>
-                                  {heightPx >= 36 ? (
-                                    <div className="text-[10px] k-mono text-[var(--k-ink-secondary)] truncate">
-                                      {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
-                                    </div>
-                                  ) : null}
+                                  {ev.title}
                                 </button>
+                              </ContextMenuSurface>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  {/* 24h Timed Scroll Area (auto-scrolled to 07:00) */}
+                  <div
+                    ref={setTimeGridScrollNode}
+                    data-testid="calendar-time-grid-scroll"
+                    className="max-h-[540px] overflow-y-scroll relative"
+                  >
+                    <div
+                      className="grid relative"
+                      style={{
+                        gridTemplateColumns:
+                          mode === 'day'
+                            ? '52px minmax(0, 1fr)'
+                            : '52px repeat(7, minmax(0, 1fr))',
+                        height: `${DAY_HOURS.length * HOUR_ROW_PX}px`,
+                      }}
+                    >
+                      {/* Hour Labels Column */}
+                      <div className="relative border-r border-[var(--k-border-hairline)]">
+                        {DAY_HOURS.map((h, i) => (
+                          <div
+                            key={h}
+                            style={{ top: `${i * HOUR_ROW_PX}px`, height: `${HOUR_ROW_PX}px` }}
+                            className={`absolute left-0 right-0 pr-2 text-right text-[10px] k-mono text-[var(--k-ink-muted)] ${
+                              i === 0 ? 'pt-0.5' : '-mt-1.5'
+                            }`}
+                          >
+                            {String(h).padStart(2, '0')}:00
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Visible Day Columns (7 for Week, 1 for Day) */}
+                      {visibleGridDays.map((day) => {
+                        const dayKey = toLocalDateInput(day.getTime());
+                        const dayStartMs = startOfDay(day).getTime();
+                        const isToday = sameDay(day, today);
+                        const { timed: timedEntries } = partitionAllDayEntries(entriesForDay(day));
+                        const overlapSlots = layoutOverlappingEvents(
+                          timedEntries.map((ev) => ({
+                            id: ev.id,
+                            startAt: ev.startAt,
+                            endAt:
+                              resizingDraft && resizingDraft.entryId === ev.id
+                                ? dayStartMs + resizingDraft.endMin * 60_000
+                                : ev.endAt,
+                            allDay: false,
+                          })),
+                          { dayStartMs, minDurationMinutes: 30 }
+                        );
+                        const slotById = new Map(overlapSlots.map((s) => [s.id, s]));
+
+                        const draftBand =
+                          dragCreateDraft && dragCreateDraft.dayKey === dayKey
+                            ? {
+                                startMin: Math.min(dragCreateDraft.anchorMin, dragCreateDraft.currentMin),
+                                endMin: Math.min(
+                                  24 * 60,
+                                  Math.max(dragCreateDraft.anchorMin, dragCreateDraft.currentMin) + 30
+                                ),
+                              }
+                            : null;
+
+                        return (
+                          <div
+                            key={dayKey}
+                            data-testid={`calendar-time-col-${dayKey}`}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setDragOverDayKey(dayKey);
+                            }}
+                            onDragLeave={() => {
+                              if (dragOverDayKey === dayKey) setDragOverDayKey(null);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const relY = Math.max(
+                                0,
+                                Math.min(24 * HOUR_ROW_PX - 15, e.clientY - rect.top)
+                              );
+                              const snappedMin = Math.min(
+                                23 * 60 + 30,
+                                Math.max(0, Math.round((relY / HOUR_ROW_PX) * 2) * 30)
+                              );
+                              void handleDropOnDay(day, e.dataTransfer, {
+                                hour: Math.floor(snappedMin / 60),
+                                minute: snappedMin % 60,
+                              });
+                            }}
+                            onMouseDown={(e) => {
+                              if (e.button !== 0) return;
+                              const target = e.target as HTMLElement;
+                              if (!target.dataset.slotHour) return;
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const relY = Math.max(
+                                0,
+                                Math.min(24 * HOUR_ROW_PX - 15, e.clientY - rect.top)
+                              );
+                              const anchorMin = Math.min(
+                                23 * 60 + 30,
+                                Math.max(0, Math.floor((relY / HOUR_ROW_PX) * 2) * 30)
+                              );
+                              dragCreateMetaRef.current = {
+                                dayKey,
+                                day,
+                                startY: e.clientY,
+                                anchorMin,
+                                currentMin: anchorMin,
+                                columnTop: rect.top,
+                              };
+                            }}
+                            className={`relative border-l border-[var(--k-border-hairline)] select-none ${
+                              dragOverDayKey === dayKey ? 'bg-[var(--k-accent-soft)]/30' : ''
+                            }`}
+                          >
+                            {/* Clickable hour slots */}
+                            {DAY_HOURS.map((h, i) => (
+                              <div
+                                key={h}
+                                data-slot-hour={h}
+                                onClick={() => {
+                                  if (suppressNextSlotClickRef.current) return;
+                                  setSelectedDay(startOfDay(day));
+                                  openCreateSheetForDay(day, {
+                                    startTime: `${String(h).padStart(2, '0')}:00`,
+                                    hasEndTime: true,
+                                    durationMin: 60,
+                                  });
+                                }}
+                                style={{ top: `${i * HOUR_ROW_PX}px`, height: `${HOUR_ROW_PX}px` }}
+                                className="absolute left-0 right-0 border-b border-[var(--k-border-hairline)]/55 hover:bg-[var(--k-bg-surface-2)]/35 cursor-pointer"
+                              />
+                            ))}
+
+                            {/* Live Drag-to-Create Preview */}
+                            {draftBand ? (
+                              <div
+                                style={{
+                                  top: `${(draftBand.startMin / 60) * HOUR_ROW_PX + 1}px`,
+                                  height: `${Math.max(
+                                    22,
+                                    ((draftBand.endMin - draftBand.startMin) / 60) * HOUR_ROW_PX - 2
+                                  )}px`,
+                                }}
+                                className="pointer-events-none absolute left-1 right-1 z-30 rounded-lg border border-[var(--k-accent)] bg-[var(--k-accent-soft)]/70 px-1.5 py-0.5 text-[10.5px] k-mono font-semibold text-[var(--k-accent)]"
+                              >
+                                {`${String(Math.floor(draftBand.startMin / 60)).padStart(2, '0')}:${String(
+                                  draftBand.startMin % 60
+                                ).padStart(2, '0')}–${String(Math.floor(draftBand.endMin / 60)).padStart(
+                                  2,
+                                  '0'
+                                )}:${String(draftBand.endMin % 60).padStart(2, '0')}`}
+                              </div>
+                            ) : null}
+
+                            {/* Live Current Time Line */}
+                            {isToday ? (
+                              <div
+                                style={{ top: `${nowLineTopPx}px` }}
+                                className="pointer-events-none absolute left-0 right-0 z-20 flex items-center"
+                              >
+                                <span className="w-2 h-2 rounded-full bg-[var(--k-accent)] -ml-1" />
+                                <div className="flex-1 h-[1.5px] bg-[var(--k-accent)]" />
+                              </div>
+                            ) : null}
+
+                            {/* Positioned Side-by-Side Timed Event Blocks */}
+                            {timedEntries.map((ev) => {
+                              const slot = slotById.get(ev.id);
+                              const startMin = slot ? slot.startMin : 0;
+                              const endMin = slot ? slot.endMin : 30;
+                              const colIndex = slot ? slot.columnIndex : 0;
+                              const totalCols = slot ? slot.totalColumns : 1;
+                              const isNarrowWeekCol = mode === 'week' && totalCols >= 2;
+                              const topPx = (startMin / 60) * HOUR_ROW_PX + 1;
+                              const heightPx = Math.max(
+                                22,
+                                ((endMin - startMin) / 60) * HOUR_ROW_PX - 2
+                              );
+                              const canResize = Boolean(ev.sourceEvent && !ev.isRecurringInstance);
+
+                              return (
+                                <ContextMenuSurface key={ev.id} entries={buildEntryContextMenu(ev)}>
+                                  <button
+                                    type="button"
+                                    data-testid={`calendar-timed-event-${ev.id}`}
+                                    title={`${formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))} · ${ev.title}`}
+                                    draggable={Boolean(ev.sourceEvent && !ev.isRecurringInstance)}
+                                    onDragStart={(e) => {
+                                      if (ev.sourceEvent && !ev.isRecurringInstance) {
+                                        e.dataTransfer.setData('text/kapsula-cal-event-id', ev.sourceEvent.id);
+                                        e.dataTransfer.effectAllowed = 'move';
+                                      }
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDay(startOfDay(day));
+                                      handleEntryClick(ev);
+                                    }}
+                                    style={{
+                                      top: `${topPx}px`,
+                                      height: `${heightPx}px`,
+                                      left: isNarrowWeekCol
+                                        ? `calc(${(colIndex / totalCols) * 100}% + 1px)`
+                                        : `calc(${(colIndex / totalCols) * 100}% + 2px)`,
+                                      width: isNarrowWeekCol
+                                        ? `calc(${100 / totalCols}% - 2px)`
+                                        : `calc(${100 / totalCols}% - 4px)`,
+                                      borderLeftColor: ev.color,
+                                      backgroundColor: `color-mix(in srgb, ${ev.color} 15%, transparent)`,
+                                    }}
+                                    className={`group/evbtn absolute z-10 rounded-lg border border-[var(--k-border-hairline)] border-l-[3px] ${
+                                      isNarrowWeekCol ? 'px-1 py-0.5' : 'px-1.5 py-1'
+                                    } text-left overflow-hidden hover:opacity-95 transition-opacity duration-140 cursor-pointer ${
+                                      ev.isDone ? 'opacity-50 line-through' : ''
+                                    }`}
+                                  >
+                                    <div
+                                      className={
+                                        isNarrowWeekCol
+                                          ? 'text-[10px] font-semibold text-[var(--k-ink-primary)] leading-[1.15] break-words line-clamp-3'
+                                          : 'text-[11px] font-semibold text-[var(--k-ink-primary)] truncate leading-tight'
+                                      }
+                                    >
+                                      {ev.title}
+                                    </div>
+                                    {!isNarrowWeekCol && heightPx >= 36 ? (
+                                      <div className="text-[10px] k-mono text-[var(--k-ink-secondary)] truncate">
+                                        {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
+                                      </div>
+                                    ) : null}
+                                    {canResize ? (
+                                      <span
+                                        data-testid={`calendar-resize-handle-${ev.id}`}
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const sDate = new Date(ev.startAt);
+                                          const eDate = new Date(ev.endAt);
+                                          const startM = sDate.getHours() * 60 + sDate.getMinutes();
+                                          const sameEndDay = sameDay(sDate, eDate);
+                                          const initEndM = sameEndDay
+                                            ? Math.max(startM + 15, eDate.getHours() * 60 + eDate.getMinutes())
+                                            : 24 * 60;
+                                          resizeMetaRef.current = {
+                                            entryId: ev.id,
+                                            sourceEvent: ev.sourceEvent!,
+                                            dayStartMs,
+                                            startY: e.clientY,
+                                            initialEndMin: initEndM,
+                                            currentEndMin: initEndM,
+                                            minEndMin: Math.min(24 * 60, startM + 15),
+                                          };
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize opacity-0 group-hover/evbtn:opacity-100 bg-[var(--k-accent)]/25 transition-opacity"
+                                      />
+                                    ) : null}
+                                  </button>
+                                </ContextMenuSurface>
                               );
                             })}
                           </div>
@@ -1306,96 +2106,119 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                   </div>
                 </div>
               ) : (
-                <div
-                  data-testid="calendar-agenda-list"
-                  className="divide-y divide-[var(--k-border-hairline)] min-h-[380px]"
-                >
-                  {combinedEntries.length === 0 ? (
-                    <div className="py-16 text-center space-y-2">
-                      <div className="text-[14px] font-medium text-[var(--k-ink-secondary)]">
-                        {t('cal.emptyPeriod')}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => openCreateSheetForDay(selectedDay)}
-                        className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[12px] font-medium cursor-pointer"
-                      >
-                        <Plus weight="bold" className="w-3.5 h-3.5" />
-                        {t('cal.addFirstEvent')}
-                      </button>
-                    </div>
-                  ) : (
-                    combinedEntries.map((ev) => (
-                      <div
-                        key={ev.id}
-                        onClick={() => handleEntryClick(ev)}
-                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-[var(--k-bg-surface-2)]/60 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          {ev.sourceEvent ? (
-                            <AnimatedCheckbox
-                              size="sm"
-                              checked={ev.isDone}
-                              onChange={() => void handleToggleEventDone(ev.sourceEvent!)}
-                            />
-                          ) : (
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: ev.color }}
-                            />
-                          )}
-                          <div className="min-w-0">
-                            <div
-                              className={`text-[13.5px] font-medium truncate ${
-                                ev.isDone ? 'line-through text-[var(--k-ink-muted)]' : ''
-                              }`}
-                            >
-                              {ev.title}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--k-ink-muted)]">
-                              <span>
-                                {new Date(ev.startAt).toLocaleDateString(dateLocale, {
-                                  day: 'numeric',
-                                  month: 'short',
-                                  weekday: 'short',
-                                })}{' '}
-                                · {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
-                              </span>
-                              {ev.location ? (
-                                <span className="inline-flex items-center gap-1 truncate max-w-[200px]">
-                                  <MapPin className="w-3 h-3 shrink-0" />
-                                  {ev.location}
-                                </span>
-                              ) : null}
-                              {ev.checklistTotal > 0 ? (
-                                <span className="inline-flex items-center gap-1">
-                                  <ListChecks className="w-3 h-3" />
-                                  {ev.checklistDone}/{ev.checklistTotal}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
+                <div className="flex flex-col min-h-[380px]">
+                  <div className="flex items-center justify-end px-4 py-2 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/40">
+                    <button
+                      type="button"
+                      onClick={() => setHidePastAgenda((v) => !v)}
+                      className="k-interactive text-[11.5px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+                    >
+                      {hidePastAgenda ? t('cal.agenda.showPast') : t('cal.agenda.hidePast')}
+                    </button>
+                  </div>
+                  <div
+                    data-testid="calendar-agenda-list"
+                    className="divide-y divide-[var(--k-border-hairline)] flex-1"
+                  >
+                    {agendaGroups.length === 0 ? (
+                      <div className="py-16 text-center space-y-2">
+                        <div className="text-[14px] font-medium text-[var(--k-ink-secondary)]">
+                          {t('cal.emptyPeriod')}
                         </div>
-
-                        {ev.linkedItemId ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenItem(ev.linkedItemId!);
-                            }}
-                            className="k-interactive text-[11.5px] text-[var(--k-accent)] hover:underline shrink-0 cursor-pointer"
-                          >
-                            {t('cal.openItem')}
-                          </button>
-                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => openCreateSheetForDay(selectedDay)}
+                          className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-[12px] font-medium cursor-pointer"
+                        >
+                          <Plus weight="bold" className="w-3.5 h-3.5" />
+                          {t('cal.addFirstEvent')}
+                        </button>
                       </div>
-                    ))
-                  )}
+                    ) : (
+                      agendaGroups.map((group) => (
+                        <div key={group.dayKey} className="divide-y divide-[var(--k-border-hairline)]/60">
+                          <div className="sticky top-0 z-10 px-4 py-1.5 bg-[var(--k-bg-surface-2)]/95 backdrop-blur-sm text-[11px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+                            {group.label}
+                          </div>
+                          {group.items.map((ev) => (
+                            <ContextMenuSurface key={ev.id} entries={buildEntryContextMenu(ev)}>
+                              <div
+                                onClick={() => handleEntryClick(ev)}
+                                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-[var(--k-bg-surface-2)]/60 transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {ev.sourceEvent ? (
+                                    <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                                      <AnimatedCheckbox
+                                        size="sm"
+                                        checked={ev.isDone}
+                                        onChange={() => void handleToggleEventDone(ev.sourceEvent!)}
+                                      />
+                                    </div>
+                                  ) : ev.sourceTask ? (
+                                    <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+                                      <AnimatedCheckbox
+                                        size="sm"
+                                        checked={ev.isDone}
+                                        onChange={() => void handleToggleVaultTaskEntry(ev.sourceTask!)}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                                      style={{ backgroundColor: ev.color }}
+                                    />
+                                  )}
+                                  <div className="min-w-0">
+                                    <div
+                                      className={`text-[13.5px] font-medium truncate ${
+                                        ev.isDone ? 'line-through text-[var(--k-ink-muted)]' : ''
+                                      }`}
+                                    >
+                                      {ev.title}
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--k-ink-muted)]">
+                                      <span className="k-mono">
+                                        {formatEntryTimeLabel(ev, dateLocale, t('common.allDay'))}
+                                      </span>
+                                      {ev.location ? (
+                                        <span className="inline-flex items-center gap-1 truncate max-w-[200px]">
+                                          <MapPin className="w-3 h-3 shrink-0" />
+                                          {ev.location}
+                                        </span>
+                                      ) : null}
+                                      {ev.checklistTotal > 0 ? (
+                                        <span className="inline-flex items-center gap-1">
+                                          <ListChecks className="w-3 h-3" />
+                                          {ev.checklistDone}/{ev.checklistTotal}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {ev.linkedItemId ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onOpenItem(ev.linkedItemId!);
+                                    }}
+                                    className="k-interactive text-[11.5px] text-[var(--k-accent)] hover:underline shrink-0 cursor-pointer"
+                                  >
+                                    {t('cal.openItem')}
+                                  </button>
+                                ) : null}
+                              </div>
+                            </ContextMenuSurface>
+                          ))}
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
             </motion.div>
-          </AnimatePresence>
         </div>
 
         {/* Streamlined Right Day Panel */}
@@ -1434,31 +2257,39 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                 </button>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[210px] overflow-y-auto pr-0.5">
                 {selectedDayEntries.map((entry) => {
                   const linkedNote = entry.linkedItemId ? itemMap.get(entry.linkedItemId) : undefined;
                   return (
-                    <div
-                      key={entry.id}
-                      data-testid={`calendar-day-entry-${entry.id}`}
-                      onClick={() => handleEntryClick(entry)}
-                      className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/70 hover:border-[var(--k-border-strong)] p-3 space-y-2 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        {entry.sourceEvent ? (
-                          <div className="pt-0.5">
-                            <AnimatedCheckbox
-                              size="sm"
-                              checked={entry.isDone}
-                              onChange={() => void handleToggleEventDone(entry.sourceEvent!)}
+                    <ContextMenuSurface key={entry.id} entries={buildEntryContextMenu(entry)}>
+                      <div
+                        data-testid={`calendar-day-entry-${entry.id}`}
+                        onClick={() => handleEntryClick(entry)}
+                        className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/70 hover:border-[var(--k-border-strong)] p-3 space-y-2 transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          {entry.sourceEvent ? (
+                            <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>
+                              <AnimatedCheckbox
+                                size="sm"
+                                checked={entry.isDone}
+                                onChange={() => void handleToggleEventDone(entry.sourceEvent!)}
+                              />
+                            </div>
+                          ) : entry.sourceTask ? (
+                            <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>
+                              <AnimatedCheckbox
+                                size="sm"
+                                checked={entry.isDone}
+                                onChange={() => void handleToggleVaultTaskEntry(entry.sourceTask!)}
+                              />
+                            </div>
+                          ) : (
+                            <span
+                              className="w-2.5 h-2.5 rounded-full mt-1.5 shrink-0"
+                              style={{ backgroundColor: entry.color }}
                             />
-                          </div>
-                        ) : (
-                          <span
-                            className="w-2.5 h-2.5 rounded-full mt-1.5 shrink-0"
-                            style={{ backgroundColor: entry.color }}
-                          />
-                        )}
+                          )}
 
                         <div className="flex-1 min-w-0 space-y-1">
                           <div
@@ -1510,6 +2341,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                         </div>
                       ) : null}
                     </div>
+                    </ContextMenuSurface>
                   );
                 })}
               </div>
@@ -1534,7 +2366,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                 {t('cal.noUpcoming14Days')}
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 max-h-[155px] overflow-y-auto pr-0.5">
                 {upcomingEntries.map((ev) => (
                   <button
                     key={`up-${ev.id}`}
@@ -1569,14 +2401,25 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
             )}
           </div>
 
-          {/* Unscheduled Tasks — draggable onto any day cell! */}
-          {unscheduledTasks.length > 0 ? (
+          {/* Unscheduled Tasks — searchable & draggable onto any day cell or time slot! */}
+          {allUnscheduledTasks.length > 0 ? (
             <div className="p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-[10.5px] uppercase tracking-wider text-[var(--k-ink-muted)] font-semibold">
                   {t('cal.unscheduledTasks')}
                 </div>
                 <span className="text-[10.5px] text-[var(--k-ink-muted)]">{t('cal.dragToDayHint')}</span>
+              </div>
+              <div className="relative">
+                <MagnifyingGlass className="w-3.5 h-3.5 text-[var(--k-ink-muted)] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  data-testid="calendar-unscheduled-search"
+                  value={unscheduledQuery}
+                  onChange={(e) => setUnscheduledQuery(e.target.value)}
+                  placeholder={t('cal.unscheduledSearchPlaceholder')}
+                  className="w-full h-7.5 pl-7.5 pr-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/70 text-[12px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)] outline-none focus:border-[var(--k-border-focus)]"
+                />
               </div>
               <div className="space-y-1.5 max-h-[210px] overflow-y-auto">
                 {unscheduledTasks.map((taskItem) => (
@@ -1586,7 +2429,14 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                     onDragStart={(e) => {
                       e.dataTransfer.setData(
                         'text/kapsula-task-json',
-                        JSON.stringify({ itemId: taskItem.itemId, text: taskItem.text })
+                        JSON.stringify({
+                          id: taskItem.id,
+                          itemId: taskItem.itemId,
+                          sourceType: taskItem.sourceType,
+                          taskIndex: taskItem.taskIndex,
+                          taskKey: taskItem.taskKey,
+                          text: taskItem.text,
+                        })
                       );
                       e.dataTransfer.effectAllowed = 'copy';
                     }}
@@ -1607,15 +2457,7 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                         try {
                           const slot = new Date(selectedDay);
                           slot.setHours(12, 0, 0, 0);
-                          await window.kapsula.upsertCalendarEvent({
-                            title: taskItem.text,
-                            startAt: slot.getTime(),
-                            endAt: slot.getTime() + 1_800_000,
-                            hasEndTime: false,
-                            linkedItemId: taskItem.itemId,
-                            kind: 'task',
-                            color: '#3B82F6',
-                          });
+                          await scheduleVaultTaskAt(taskItem, slot.getTime(), false);
                           toast.success(t('cal.toast.taskAddedDay'));
                           await loadCalendar();
                         } catch (err) {

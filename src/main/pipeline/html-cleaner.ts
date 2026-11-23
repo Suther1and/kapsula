@@ -58,6 +58,7 @@ export interface DocumentMeta {
   titleTag: string | null;
   description: string | null;
   ogImageUrl: string | null;
+  ogVideoUrl: string | null;
   fallbackCoverUrl: string | null;
   galleryUrls: string[];
   siteName: string | null;
@@ -376,6 +377,14 @@ export function extractDocumentMeta(
 
   const jsonLd = extractJsonLdSignals(doc, baseUrl, sanitizeUrl);
 
+  const rawOgVid = getMeta(
+    'og:video:secure_url',
+    'og:video:url',
+    'og:video',
+    'twitter:player:stream'
+  );
+  const ogVideoUrl = sanitizeUrl(rawOgVid, baseUrl);
+
   const rawOgImg = getMeta('og:image', 'og:image:secure_url', 'twitter:image', 'twitter:image:src');
   let ogImageUrl = sanitizeUrl(rawOgImg, baseUrl);
   if (ogImageUrl && /\.(?:svg|ico)(?:\?|$)/i.test(ogImageUrl)) {
@@ -426,6 +435,7 @@ export function extractDocumentMeta(
     titleTag,
     description,
     ogImageUrl: ogImageUrl || fallbackCoverUrl,
+    ogVideoUrl,
     fallbackCoverUrl,
     galleryUrls,
     siteName,

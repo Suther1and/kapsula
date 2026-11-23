@@ -21,6 +21,7 @@ import type {
   CaptureInput,
   CaptureMode,
   ChatTurn,
+  CreateTaskInput,
   FocusBoardUpdateInput,
   ItemRevision,
   ItemSubKind,
@@ -70,8 +71,9 @@ import {
 import { ensureDemoSeeded } from './db/demo-seed';
 import type { UpdateItemPatch, VaultRepository } from './db/repository';
 import { registerV8IntegrationIpc } from './ipc-integrations';
-import type { CapturePipeline } from './pipeline/capture-pipeline';
+import { CapturePipeline } from './pipeline/capture-pipeline';
 import { readClipboardSnapshot } from './pipeline/clipboard-helper';
+import { sanitizeVideoCacheLimitMb } from './pipeline/video-cache';
 import { analyzeForSecret, detectCardBrand, formatCardDigits, maskLoginHint } from './security/secret-shield';
 import type { SyncAuthInput, SyncServerConfigInput } from '@shared/sync-contract';
 import { ClipboardWiper, VaultCrypto } from './security/vault-crypto';
@@ -1681,6 +1683,15 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
   );
 
+  handleTrusted('tasks:create', (_e, input: CreateTaskInput) => {
+    const created = svc.repo.createStandaloneTask(input);
+    if (created) {
+      svc.windows.broadcast('vault:item-upserted', created);
+      emitCountsChanged();
+    }
+    return created;
+  });
+
   handleTrusted(
     'tasks:update-meta',
     (
@@ -1691,6 +1702,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         priority?: TaskPriority;
         dueAt?: number | null;
         columnId?: string;
+        orbit?: string | null;
+        focusBoardId?: string | null;
+        notes?: string | null;
       }
     ) => {
       const updated = svc.repo.updateTaskMeta(input);
@@ -1930,6 +1944,14 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     if (shortcutsChanged) {
       svc.reapplyShortcuts?.();
     }
+    if (
+      typeof patch.videoCacheLimitMb === 'number' &&
+      Number.isFinite(patch.videoCacheLimitMb)
+    ) {
+      const sanitizedLimit = sanitizeVideoCacheLimitMb(patch.videoCacheLimitMb);
+      svc.repo.setSetting('video_cache_limit_mb', String(sanitizedLimit));
+      svc.pipeline.getVideoCache().setLimitMb(sanitizedLimit);
+    }
     if (patch.vaultUnlocked === false) {
       lockVaultIfProtected(false);
     }
@@ -2132,6 +2154,15 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     const dir = resolveDataDir();
     fs.mkdirSync(dir, { recursive: true });
     await shell.openPath(dir);
+  });
+
+  handleTrusted('media:video-cache-stats', () => svc.pipeline.getVideoCache().getStats());
+
+  handleTrusted('media:clear-video-cache', () => svc.pipeline.getVideoCache().clear());
+
+  handleTrusted('media:ensure-link-video', async (_e, itemId: string) => {
+    if (typeof itemId !== 'string' || !itemId.trim()) return null;
+    return svc.pipeline.ensureLinkVideo(itemId.trim());
   });
 
   handleTrusted('vault:export-backup', async () => {

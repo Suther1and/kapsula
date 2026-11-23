@@ -451,6 +451,32 @@ export class WindowManager {
     }
   }
 
+  /**
+   * Applies optional OS translucency ONLY to the main Vault window.
+   * Quick Launch HUD stays strictly solid (opaque) at all times.
+   */
+  public setVaultGlassMaterial(material: 'none' | 'mica' | 'acrylic', enabled: boolean): void {
+    if (!this.vault || this.vault.isDestroyed()) return;
+    const win = this.vault as BrowserWindow & {
+      setBackgroundMaterial?: (mat: 'auto' | 'none' | 'mica' | 'acrylic' | 'tabbed') => void;
+    };
+    try {
+      if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
+        win.setBackgroundMaterial(enabled && material !== 'none' ? material : 'none');
+      } else if (process.platform === 'darwin' && typeof this.vault.setVibrancy === 'function') {
+        this.vault.setVibrancy(
+          enabled && material !== 'none'
+            ? material === 'acrylic'
+              ? 'hud'
+              : 'under-window'
+            : null
+        );
+      }
+    } catch {
+      // ignore OS material errors on older Windows builds or headless CI
+    }
+  }
+
   public broadcast(channel: string, payload: unknown): void {
     for (const win of [this.vault, this.hud]) {
       if (win && !win.isDestroyed()) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   CheckSquare,
   Copy,
@@ -293,42 +293,45 @@ export const NotesView: React.FC<NotesViewProps> = ({
       >
         <div className="px-3.5 pt-2.5 pb-2 space-y-2 border-b border-[var(--k-border-hairline)] shrink-0">
           <div className="flex items-center justify-between gap-2">
-            <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
-              {(
-                [
-                  { id: 'dedicated', label: t('notes.modeDedicated') },
-                  { id: 'all_text', label: t('notes.modeAllText') },
-                ] as const
-              ).map((s) => {
-                const active = scope === s.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      mobileBridge.haptic('light');
-                      setScope(s.id);
-                    }}
-                    className={`relative px-2.5 py-1 rounded-[10px] text-[12px] font-medium transition-colors ${
-                      active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
-                    }`}
-                  >
-                    {active ? (
-                      <motion.span
-                        layoutId="k-notes-scope-pill"
-                        transition={
-                          prefersReduced
-                            ? { duration: 0.01 }
-                            : { type: 'spring', stiffness: 480, damping: 35 }
-                        }
-                        className="absolute inset-0 rounded-[10px] bg-[var(--k-bg-surface-1)] shadow-xs"
-                      />
-                    ) : null}
-                    <span className="relative z-10">{s.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <LayoutGroup id="k-notes-scope-toggle">
+              <div className="inline-flex p-0.5 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)]">
+                {(
+                  [
+                    { id: 'dedicated', label: t('notes.modeDedicated') },
+                    { id: 'all_text', label: t('notes.modeAllText') },
+                  ] as const
+                ).map((s) => {
+                  const active = scope === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        mobileBridge.haptic('light');
+                        setScope(s.id);
+                      }}
+                      className={`relative px-2.5 py-1 rounded-[10px] text-[12px] font-medium transition-colors ${
+                        active ? 'text-[var(--k-ink-primary)]' : 'text-[var(--k-ink-muted)]'
+                      }`}
+                    >
+                      {active ? (
+                        <motion.span
+                          layoutId="k-notes-scope-pill"
+                          style={{ borderRadius: 10 }}
+                          transition={
+                            prefersReduced
+                              ? { duration: 0.01 }
+                              : { type: 'spring', stiffness: 560, damping: 38, mass: 0.65 }
+                          }
+                          className="pointer-events-none absolute inset-0 bg-[var(--k-bg-surface-1)] shadow-xs"
+                        />
+                      ) : null}
+                      <span className="relative z-10">{s.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </LayoutGroup>
 
             <button
               type="button"

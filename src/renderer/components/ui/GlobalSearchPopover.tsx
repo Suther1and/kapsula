@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { Highlight, HighlightItem } from '@animate-ui/react/primitives/effects/highlight';
 import {
   ArrowRight,
   CalendarBlank,
@@ -173,7 +174,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
       }
 
       const matchedTasks = tasks
-        .filter((t) => !t.done && matchesBilingualHaystack(`${t.text} ${t.itemTitle}`, q))
+        .filter((tk) => !tk.done && matchesBilingualHaystack(`${tk.text} ${tk.itemTitle}`, q))
         .slice(0, 3);
       for (const task of matchedTasks) {
         out.push({ kind: 'task', id: `task-${task.id}`, task });
@@ -229,6 +230,8 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, entries, activeIdx, onClose, onOpenItem, onOpenEvent, onToggleTask]);
 
+  const activeEntryId = entries[activeIdx]?.id ?? null;
+
   return (
     <div className="pointer-events-none absolute top-[calc(100%+6px)] left-1/2 -translate-x-1/2 w-[max(100%,420px)] max-w-[calc(100vw-32px)] z-[110]">
       <AnimatePresence>
@@ -239,7 +242,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(0, -5px, 0) scale(0.985)' }
+                : { opacity: 0, transform: 'translate3d(0, -6px, 0) scale(0.985)' }
             }
             animate={
               prefersReduced
@@ -251,176 +254,189 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                 ? { opacity: 0 }
                 : { opacity: 0, transform: 'translate3d(0, -4px, 0) scale(0.985)' }
             }
-            transition={{ duration: 0.11, ease: [0.23, 1, 0.32, 1] }}
+            transition={{ type: 'spring', stiffness: 520, damping: 36, mass: 0.7 }}
             style={{ transformOrigin: 'top center' }}
             onMouseDown={(e) => e.preventDefault()}
             className="pointer-events-auto rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl overflow-hidden"
           >
-          <div ref={listRef} className="max-h-[400px] overflow-y-auto p-1.5 space-y-0.5">
-            {entries.length === 0 ? (
-              <div className="py-8 text-center text-[12.5px] text-[var(--k-ink-muted)]">
-                {t('ui.searchPop.nothingFound', { query: q })}
-              </div>
-            ) : (
-              entries.map((entry, idx) => {
-                const isActive = idx === activeIdx;
-                if (entry.kind === 'item') {
-                  const it = entry.item;
-                  const thumb = it.dna !== 'secret' ? getMediaUrl(it.thumbPath || it.imagePath) : null;
-                  const orbit = it.orbit ? orbitMap.get(it.orbit) : undefined;
-                  const title = cleanBrokenTextArtifacts(it.title || getDnaHumanLabel(it, locale), true);
-                  const sub =
-                    it.dna === 'secret'
-                      ? it.secretMeta?.loginHint || t('dna.vaultRecord')
-                      : truncateAtWordBoundary(
-                          cleanBrokenTextArtifacts(stripMarkdownPreview(it.summary || it.body || it.url || ''), true),
-                          70
-                        );
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onMouseEnter={() => setActiveIdx(idx)}
-                      onClick={() => {
-                        onClose();
-                        onOpenItem(it);
-                      }}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors cursor-pointer ${
-                        isActive
-                          ? 'bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)]'
-                          : 'hover:bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)]'
-                      }`}
-                    >
-                      <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0 overflow-hidden">
-                        {thumb ? (
-                          <img src={thumb} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          renderItemIcon(it)
-                        )}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-medium truncate">{title}</div>
-                        {sub ? (
-                          <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{sub}</div>
-                        ) : null}
-                      </div>
-                      {orbit ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[10.5px] text-[var(--k-ink-secondary)] shrink-0 max-w-[96px] truncate">
-                          <span
-                            className="w-1.5 h-1.5 rounded-full shrink-0"
-                            style={{ backgroundColor: orbit.color }}
-                          />
-                          <span className="truncate">{orbit.name}</span>
-                        </span>
-                      ) : null}
-                      <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                        {formatDateCompact(it.contentUpdatedAt || it.createdAt, locale)}
-                      </span>
-                    </button>
-                  );
-                }
+            <div ref={listRef} className="max-h-[400px] overflow-y-auto p-1.5">
+              {entries.length === 0 ? (
+                <div className="py-8 text-center text-[12.5px] text-[var(--k-ink-muted)]">
+                  {t('ui.searchPop.nothingFound', { query: q })}
+                </div>
+              ) : (
+                <Highlight
+                  mode="parent"
+                  controlledItems
+                  value={activeEntryId}
+                  onValueChange={(val) => {
+                    if (!val) return;
+                    const found = entries.findIndex((e) => e.id === val);
+                    if (found >= 0) setActiveIdx(found);
+                  }}
+                  hover
+                  exitDelay={0}
+                  className="rounded-xl bg-[var(--k-accent-soft)]"
+                  containerClassName="space-y-0.5"
+                  transition={
+                    prefersReduced
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 760, damping: 44, mass: 0.42 }
+                  }
+                >
+                  {entries.map((entry, idx) => {
+                    if (entry.kind === 'item') {
+                      const it = entry.item;
+                      const thumb = it.dna !== 'secret' ? getMediaUrl(it.thumbPath || it.imagePath) : null;
+                      const orbit = it.orbit ? orbitMap.get(it.orbit) : undefined;
+                      const title = cleanBrokenTextArtifacts(it.title || getDnaHumanLabel(it, locale), true);
+                      const sub =
+                        it.dna === 'secret'
+                          ? it.secretMeta?.loginHint || t('dna.vaultRecord')
+                          : truncateAtWordBoundary(
+                              cleanBrokenTextArtifacts(stripMarkdownPreview(it.summary || it.body || it.url || ''), true),
+                              70
+                            );
+                      return (
+                        <HighlightItem key={entry.id} value={entry.id}>
+                          <button
+                            type="button"
+                            onMouseEnter={() => setActiveIdx(idx)}
+                            onClick={() => {
+                              onClose();
+                              onOpenItem(it);
+                            }}
+                            className="relative z-10 w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[var(--k-ink-primary)] cursor-pointer"
+                          >
+                            <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0 overflow-hidden">
+                              {thumb ? (
+                                <img src={thumb} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                renderItemIcon(it)
+                              )}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[13px] font-medium truncate">{title}</div>
+                              {sub ? (
+                                <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{sub}</div>
+                              ) : null}
+                            </div>
+                            {orbit ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[10.5px] text-[var(--k-ink-secondary)] shrink-0 max-w-[96px] truncate">
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                                  style={{ backgroundColor: orbit.color }}
+                                />
+                                <span className="truncate">{orbit.name}</span>
+                              </span>
+                            ) : null}
+                            <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
+                              {formatDateCompact(it.contentUpdatedAt || it.createdAt, locale)}
+                            </span>
+                          </button>
+                        </HighlightItem>
+                      );
+                    }
 
-                if (entry.kind === 'event') {
-                  const ev = entry.event;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onMouseEnter={() => setActiveIdx(idx)}
-                      onClick={() => {
-                        onClose();
-                        onOpenEvent(ev);
-                      }}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors cursor-pointer ${
-                        isActive ? 'bg-[var(--k-accent-soft)]' : 'hover:bg-[var(--k-bg-surface-2)]'
-                      }`}
-                    >
-                      <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0">
-                        <CalendarBlank className="w-4 h-4" style={{ color: ev.color }} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-medium truncate">{ev.title}</div>
-                        <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                          {t('ui.searchPop.eventPrefix')}{' '}
-                          {new Date(ev.startAt).toLocaleDateString(dateLocale, {
-                            day: 'numeric',
-                            month: 'short',
-                          })}
-                          {!ev.allDay
-                            ? t('ui.searchPop.atTime', {
-                                time: new Date(ev.startAt).toLocaleTimeString(dateLocale, {
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                }),
-                              })
-                            : ''}
-                        </div>
-                      </div>
-                      <ArrowRight className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
-                    </button>
-                  );
-                }
+                    if (entry.kind === 'event') {
+                      const ev = entry.event;
+                      return (
+                        <HighlightItem key={entry.id} value={entry.id}>
+                          <button
+                            type="button"
+                            onMouseEnter={() => setActiveIdx(idx)}
+                            onClick={() => {
+                              onClose();
+                              onOpenEvent(ev);
+                            }}
+                            className="relative z-10 w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[var(--k-ink-primary)] cursor-pointer"
+                          >
+                            <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0">
+                              <CalendarBlank className="w-4 h-4" style={{ color: ev.color }} />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[13px] font-medium truncate">{ev.title}</div>
+                              <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
+                                {t('ui.searchPop.eventPrefix')}{' '}
+                                {new Date(ev.startAt).toLocaleDateString(dateLocale, {
+                                  day: 'numeric',
+                                  month: 'short',
+                                })}
+                                {!ev.allDay
+                                  ? t('ui.searchPop.atTime', {
+                                      time: new Date(ev.startAt).toLocaleTimeString(dateLocale, {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      }),
+                                    })
+                                  : ''}
+                              </div>
+                            </div>
+                            <ArrowRight className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
+                          </button>
+                        </HighlightItem>
+                      );
+                    }
 
-                if (entry.kind === 'task') {
-                  const taskItem = entry.task;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onMouseEnter={() => setActiveIdx(idx)}
-                      onClick={() => onToggleTask(taskItem)}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors cursor-pointer ${
-                        isActive ? 'bg-[var(--k-accent-soft)]' : 'hover:bg-[var(--k-bg-surface-2)]'
-                      }`}
-                    >
-                      <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0">
-                        <CheckSquare className="w-4 h-4 text-[var(--k-accent)]" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-medium truncate">{taskItem.text}</div>
-                        <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                          {t('ui.searchPop.taskPrefix', { title: taskItem.itemTitle })}
-                        </div>
-                      </div>
-                      <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
-                        {t('ui.searchPop.checkTask')}
-                      </span>
-                    </button>
-                  );
-                }
+                    if (entry.kind === 'task') {
+                      const taskItem = entry.task;
+                      return (
+                        <HighlightItem key={entry.id} value={entry.id}>
+                          <button
+                            type="button"
+                            onMouseEnter={() => setActiveIdx(idx)}
+                            onClick={() => onToggleTask(taskItem)}
+                            className="relative z-10 w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[var(--k-ink-primary)] cursor-pointer"
+                          >
+                            <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0">
+                              <CheckSquare className="w-4 h-4 text-[var(--k-accent)]" />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[13px] font-medium truncate">{taskItem.text}</div>
+                              <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
+                                {t('ui.searchPop.taskPrefix', { title: taskItem.itemTitle })}
+                              </div>
+                            </div>
+                            <span className="text-[10.5px] text-[var(--k-ink-muted)] shrink-0">
+                              {t('ui.searchPop.checkTask')}
+                            </span>
+                          </button>
+                        </HighlightItem>
+                      );
+                    }
 
-                const cmd = entry.command;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onMouseEnter={() => setActiveIdx(idx)}
-                    onClick={() => {
-                      onClose();
-                      cmd.run();
-                    }}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-left transition-colors cursor-pointer ${
-                      isActive ? 'bg-[var(--k-accent-soft)]' : 'hover:bg-[var(--k-bg-surface-2)]'
-                    }`}
-                  >
-                    <span className="w-6 h-6 rounded-md bg-[var(--k-bg-surface-2)] flex items-center justify-center shrink-0">
-                      {cmd.icon}
-                    </span>
-                    <span className="text-[12.5px] font-medium flex-1 truncate">{cmd.label}</span>
-                    {cmd.hint ? (
-                      <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] px-1.5 py-0.5 rounded bg-[var(--k-bg-surface-2)]">
-                        {cmd.hint}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })
-            )}
-          </div>
-          <div className="px-3 py-1.5 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50 flex items-center justify-between text-[11px] text-[var(--k-ink-muted)]">
-            <span>{t('ui.searchPop.footerKeys')}</span>
-            <span>{t('ui.searchPop.footerBrand')}</span>
-          </div>
+                    const cmd = entry.command;
+                    return (
+                      <HighlightItem key={entry.id} value={entry.id}>
+                        <button
+                          type="button"
+                          onMouseEnter={() => setActiveIdx(idx)}
+                          onClick={() => {
+                            onClose();
+                            cmd.run();
+                          }}
+                          className="relative z-10 w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-left text-[var(--k-ink-primary)] cursor-pointer"
+                        >
+                          <span className="w-6 h-6 rounded-md bg-[var(--k-bg-surface-2)] flex items-center justify-center shrink-0">
+                            {cmd.icon}
+                          </span>
+                          <span className="text-[12.5px] font-medium flex-1 truncate">{cmd.label}</span>
+                          {cmd.hint ? (
+                            <span className="k-mono text-[10.5px] text-[var(--k-ink-muted)] px-1.5 py-0.5 rounded bg-[var(--k-bg-surface-2)]">
+                              {cmd.hint}
+                            </span>
+                          ) : null}
+                        </button>
+                      </HighlightItem>
+                    );
+                  })}
+                </Highlight>
+              )}
+            </div>
+            <div className="px-3 py-1.5 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/50 flex items-center justify-between text-[11px] text-[var(--k-ink-muted)]">
+              <span>{t('ui.searchPop.footerKeys')}</span>
+              <span>{t('ui.searchPop.footerBrand')}</span>
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>

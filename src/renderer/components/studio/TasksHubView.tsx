@@ -9,6 +9,7 @@ import {
   CheckCircle,
   CheckSquare,
   Clock,
+  DotsSixVertical,
   DotsThree,
   Eye,
   EyeSlash,
@@ -25,6 +26,7 @@ import {
   PencilSimple,
   Plus,
   Shapes,
+  SlidersHorizontal,
   Sparkle,
   Star,
   Trash,
@@ -33,11 +35,15 @@ import {
 } from '@phosphor-icons/react';
 import NumberFlow from '@number-flow/react';
 import { toast } from 'sonner';
-import type { OrbitDef, TaskBoardColumn, TaskPriority, VaultTaskEntry } from '@shared/types';
+import type { CreateTaskInput, OrbitDef, TaskBoardColumn, TaskPriority, VaultTaskEntry } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
+import { parseRussianEvent } from '@shared/russian-event-parser';
 import {
   type TaskColumnIconId,
+  combineTaskDateAndTime,
   computeColumnDropOrder,
+  formatTaskDateInputValue,
+  formatTaskTimeInputValue,
   getDefaultTaskBoardColumns,
   getTaskColumnIcons,
   isDoneColumn,
@@ -54,6 +60,7 @@ import { ContextMenuSurface, type ContextMenuEntry } from '../ui/ContextMenuSurf
 import { PopoverSurface } from '../ui/PopoverSurface';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectMenu } from '../ui/SelectMenu';
+import { TaskDetailSheet, type TaskMetaUpdatePatch } from './TaskDetailSheet';
 
 export type TasksViewMode = 'list' | 'board';
 
@@ -66,6 +73,9 @@ interface TasksHubViewProps {
   onScheduleTask?: (itemId: string, remindAt: number | null) => Promise<void>;
   onOpenItem: (itemId: string) => void;
   onAddQuickTask: (text: string, columnId?: string) => Promise<void>;
+  onCreateTask?: (input: CreateTaskInput) => Promise<void>;
+  scopedOrbitId?: string | null;
+  scopedBoardId?: string | null;
   onTasksChanged?: () => void;
 }
 
@@ -241,6 +251,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   onToggleTask,
   onOpenItem,
   onAddQuickTask,
+  onCreateTask,
+  scopedOrbitId = null,
+  scopedBoardId = null,
   onTasksChanged,
 }) => {
   const { t, locale } = useI18n();
@@ -304,9 +317,36 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
   const [orbitFilter, setOrbitFilter] = useState<string>('all');
   const [showDone, setShowDone] = useState(true);
-  const [listStatusFilter, setListStatusFilter] = useState<'active' | 'done' | 'all'>('active');
+  const [listStatusFilter, setListStatusFilter] = useState<'active' | 'today' | 'upcoming' | 'done' | 'all'>('active');
   const [groupBy, setGroupBy] = useState<GroupMode>('due');
   const [openDateTaskId, setOpenDateTaskId] = useState<string | null>(null);
+  const [rowCustomDateStr, setRowCustomDateStr] = useState('');
+  const [rowCustomTimeStr, setRowCustomTimeStr] = useState('');
+
+  // Quick-add enriched state (only applied when user explicitly picks options or scoped)
+  const [quickOrbitOverride, setQuickOrbitOverride] = useState<string | null>(null);
+  const [quickPriority, setQuickPriority] = useState<TaskPriority>('none');
+  const [quickDueAt, setQuickDueAt] = useState<number | null>(null);
+  const [quickColumnId, setQuickColumnId] = useState<string | null>(null);
+  const [quickDatePopoverOpen, setQuickDatePopoverOpen] = useState(false);
+  const [quickDateStr, setQuickDateStr] = useState('');
+  const [quickTimeStr, setQuickTimeStr] = useState('');
+
+  // Detail sheet & Bulk multi-select state
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Column drag-to-reorder state
+  const [colDragVisual, setColDragVisual] = useState<{ colId: string; targetIndex: number } | null>(null);
+  const colDragRef = useRef<{
+    colId: string;
+    startX: number;
+    active: boolean;
+    targetIndex: number;
+  } | null>(null);
+  const lastOpenColByTaskRef = useRef<Map<string, string>>(new Map());
+  const clickDetailTimerRef = useRef<number | null>(null);
 
   // Inline task rename state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -440,6 +480,14 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     return out;
   }, [tasks, optimisticMap, validColIds, sortedColumns, doneColId, inboxColId]);
 
+  const scopedTasks = useMemo(() => {
+    return effectiveTasks.filter((task) => {
+      if (scopedOrbitId && task.orbit !== scopedOrbitId) return false;
+      if (scopedBoardId && task.focusBoardId !== scopedBoardId) return false;
+      return true;
+    });
+  }, [effectiveTasks, scopedOrbitId, scopedBoardId]);
+
   const itemTaskCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const task of effectiveTasks) {
@@ -448,29 +496,35 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     return counts;
   }, [effectiveTasks]);
 
-  const filteredTasks = useMemo(() => {
+  const filteredBaseTasks = useMemo(() => {
     const q = searchFilter.trim();
-    return effectiveTasks.filter((task) => {
+    return scopedTasks.filter((task) => {
       if (priorityFilter !== 'all' && (task.priority ?? 'none') !== priorityFilter) {
         return false;
       }
-      if (orbitFilter === '__none__' && task.orbit) {
-        return false;
-      }
-      if (orbitFilter !== 'all' && orbitFilter !== '__none__' && task.orbit !== orbitFilter) {
-        return false;
-      }
-      if (viewMode === 'board' && !showDone && task.done) {
-        return false;
+      if (!scopedOrbitId && !scopedBoardId) {
+        if (orbitFilter === '__none__' && task.orbit) {
+          return false;
+        }
+        if (orbitFilter !== 'all' && orbitFilter !== '__none__' && task.orbit !== orbitFilter) {
+          return false;
+        }
       }
       if (q) {
         const orb = task.orbit ? orbitMap.get(task.orbit) : undefined;
-        const hay = [task.text, task.itemTitle, orb?.name ?? ''].join('\n');
+        const hay = [task.text, task.notes ?? '', task.itemTitle, orb?.name ?? ''].join('\n');
         if (!matchesBilingualHaystack(hay, q)) return false;
       }
       return true;
     });
-  }, [effectiveTasks, priorityFilter, orbitFilter, viewMode, showDone, searchFilter, orbitMap]);
+  }, [scopedTasks, priorityFilter, orbitFilter, scopedOrbitId, scopedBoardId, searchFilter, orbitMap]);
+
+  const filteredTasks = useMemo(() => {
+    if (viewMode === 'board' && !showDone) {
+      return filteredBaseTasks.filter((task) => !task.done);
+    }
+    return filteredBaseTasks;
+  }, [filteredBaseTasks, viewMode, showDone]);
 
   const tasksByColumn = useMemo(() => {
     const map = new Map<string, VaultTaskEntry[]>();
@@ -575,8 +629,14 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     async (task: VaultTaskEntry) => {
       const wasDone = task.done;
       const nextDone = !wasDone;
+      if (!wasDone && task.columnId && !isDoneColumn(task.columnId, sortedColumns)) {
+        lastOpenColByTaskRef.current.set(task.id, task.columnId);
+      }
       const prevColId =
-        task.columnId && !isDoneColumn(task.columnId, sortedColumns) ? task.columnId : inboxColId;
+        task.columnId && !isDoneColumn(task.columnId, sortedColumns)
+          ? task.columnId
+          : (lastOpenColByTaskRef.current.get(task.id) ?? inboxColId);
+      const restoreOpenCol = lastOpenColByTaskRef.current.get(task.id) ?? inboxColId;
       const seq = ++mutationSeqCounterRef.current;
 
       inFlightMutationSeqRef.current.set(task.id, seq);
@@ -585,7 +645,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         [task.id]: {
           ...prev[task.id],
           done: nextDone,
-          columnId: nextDone ? doneColId : inboxColId,
+          columnId: nextDone ? doneColId : restoreOpenCol,
         },
       }));
 
@@ -643,54 +703,92 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     [onToggleTask, doneColId, inboxColId, sortedColumns, t]
   );
 
-  const handleUpdatePriority = useCallback(
-    async (task: VaultTaskEntry, priority: TaskPriority) => {
+  const applyTaskMetaMutation = useCallback(
+    async (
+      task: VaultTaskEntry,
+      optimisticPatch: Partial<VaultTaskEntry>,
+      apiPatch: TaskMetaUpdatePatch,
+      errKey:
+        | 'tasks.err.updatePriority'
+        | 'tasks.err.updateDue'
+        | 'tasks.err.updateOrbit'
+        | 'tasks.err.updateNotes',
+      successMsg?: string
+    ) => {
       const taskKey = getCanonicalTaskKey(task);
-      setOptimisticMap((prev) => ({
-        ...prev,
-        [task.id]: { ...prev[task.id], priority },
-      }));
+      const seq = ++mutationSeqCounterRef.current;
+      let prevSnapshot: (Partial<VaultTaskEntry> & { deleted?: boolean }) | undefined;
+      inFlightMutationSeqRef.current.set(task.id, seq);
+      setOptimisticMap((prev) => {
+        prevSnapshot = prev[task.id];
+        return {
+          ...prev,
+          [task.id]: { ...prev[task.id], ...optimisticPatch },
+        };
+      });
       try {
         await window.kapsula.updateTaskMeta({
           itemId: task.itemId,
           taskKey,
-          priority,
+          ...apiPatch,
         });
+        if (inFlightMutationSeqRef.current.get(task.id) === seq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+        }
+        if (successMsg) toast.success(successMsg);
         onTasksChanged?.();
       } catch (err) {
-        toast.error(friendlyErrorMessage(err, t('tasks.err.updatePriority'), locale));
+        if (inFlightMutationSeqRef.current.get(task.id) === seq) {
+          inFlightMutationSeqRef.current.delete(task.id);
+          setOptimisticMap((prev) => {
+            const next = { ...prev };
+            if (prevSnapshot) next[task.id] = prevSnapshot;
+            else delete next[task.id];
+            return next;
+          });
+        }
+        toast.error(friendlyErrorMessage(err, t(errKey), locale));
       }
     },
     [onTasksChanged, t, locale]
+  );
+
+  const handleUpdatePriority = useCallback(
+    (task: VaultTaskEntry, priority: TaskPriority) =>
+      applyTaskMetaMutation(task, { priority }, { priority }, 'tasks.err.updatePriority'),
+    [applyTaskMetaMutation]
   );
 
   const handleUpdateDueAt = useCallback(
-    async (task: VaultTaskEntry, kind: 'today' | 'tomorrow' | 'week' | 'clear') => {
+    (task: VaultTaskEntry, target: 'today' | 'tomorrow' | 'week' | 'clear' | number | null) => {
       setOpenDateTaskId(null);
-      const dueAt = computeDueAtPreset(kind);
-      const taskKey = getCanonicalTaskKey(task);
-      setOptimisticMap((prev) => ({
-        ...prev,
-        [task.id]: { ...prev[task.id], dueAt },
-      }));
-      try {
-        await window.kapsula.updateTaskMeta({
-          itemId: task.itemId,
-          taskKey,
-          dueAt,
-        });
-        toast.success(dueAt ? t('tasks.toast.dueUpdated') : t('tasks.toast.dueCleared'));
-        onTasksChanged?.();
-      } catch (err) {
-        toast.error(friendlyErrorMessage(err, t('tasks.err.updateDue'), locale));
-      }
+      const dueAt = typeof target === 'string' ? computeDueAtPreset(target) : target;
+      return applyTaskMetaMutation(
+        task,
+        { dueAt },
+        { dueAt },
+        'tasks.err.updateDue',
+        dueAt ? t('tasks.toast.dueUpdated') : t('tasks.toast.dueCleared')
+      );
     },
-    [onTasksChanged, t, locale]
+    [applyTaskMetaMutation, t]
   );
 
-  const handleCommitRename = useCallback(
-    async (task: VaultTaskEntry) => {
-      const clean = editingTaskDraft.trim();
+  const handleUpdateOrbit = useCallback(
+    (task: VaultTaskEntry, nextOrbit: string) =>
+      applyTaskMetaMutation(
+        task,
+        { orbit: nextOrbit },
+        { orbit: nextOrbit },
+        'tasks.err.updateOrbit',
+        t('tasks.toast.orbitUpdated')
+      ),
+    [applyTaskMetaMutation, t]
+  );
+
+  const handleCommitRenameText = useCallback(
+    async (task: VaultTaskEntry, rawNextText: string) => {
+      const clean = rawNextText.replace(/[\r\n]+/g, ' ').trim();
       setEditingTaskId(null);
       if (!clean || clean === task.text) return;
       const taskKey = getCanonicalTaskKey(task);
@@ -722,7 +820,36 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         toast.error(friendlyErrorMessage(err, t('tasks.err.rename'), locale));
       }
     },
-    [editingTaskDraft, onTasksChanged, t, locale]
+    [onTasksChanged, t, locale]
+  );
+
+  const handleCommitRename = useCallback(
+    (task: VaultTaskEntry) => handleCommitRenameText(task, editingTaskDraft),
+    [editingTaskDraft, handleCommitRenameText]
+  );
+
+  const handleSheetUpdateMeta = useCallback(
+    async (task: VaultTaskEntry, patch: TaskMetaUpdatePatch) => {
+      if (patch.columnId && patch.columnId !== task.columnId) {
+        await handleMoveTaskToColumn(task, patch.columnId);
+        return;
+      }
+      const optPatch: Partial<VaultTaskEntry> = {};
+      if (patch.priority !== undefined) optPatch.priority = patch.priority;
+      if (patch.dueAt !== undefined) optPatch.dueAt = patch.dueAt;
+      if (patch.orbit !== undefined) optPatch.orbit = patch.orbit ?? '';
+      if (patch.notes !== undefined) optPatch.notes = patch.notes ?? undefined;
+      const errKey =
+        patch.notes !== undefined
+          ? 'tasks.err.updateNotes'
+          : patch.orbit !== undefined
+            ? 'tasks.err.updateOrbit'
+            : patch.dueAt !== undefined
+              ? 'tasks.err.updateDue'
+              : 'tasks.err.updatePriority';
+      await applyTaskMetaMutation(task, optPatch, patch, errKey);
+    },
+    [applyTaskMetaMutation, handleMoveTaskToColumn]
   );
 
   const handleDeleteTask = useCallback(
@@ -1042,6 +1169,13 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   // Task Right-Click Context Menu
   const buildTaskContextMenu = (task: VaultTaskEntry): ContextMenuEntry[] => [
     {
+      type: 'item',
+      id: 'open-details',
+      label: t('tasks.ctx.openDetails'),
+      icon: <SlidersHorizontal className="w-3.5 h-3.5" />,
+      onSelect: () => setSelectedTaskId(task.id),
+    },
+    {
       type: 'submenu',
       id: 'move-col',
       label: t('tasks.ctx.moveToColumn'),
@@ -1054,6 +1188,29 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         active: task.columnId === col.id,
         onSelect: () => void handleMoveTaskToColumn(task, col.id),
       })),
+    },
+    {
+      type: 'submenu',
+      id: 'move-section',
+      label: t('tasks.ctx.moveToSection'),
+      icon: <FolderSimple className="w-3.5 h-3.5" />,
+      items: [
+        {
+          type: 'item',
+          id: 'orbit-none',
+          label: t('tasks.ctx.noSection'),
+          active: !task.orbit,
+          onSelect: () => void handleUpdateOrbit(task, ''),
+        },
+        ...orbits.map((orb) => ({
+          type: 'item' as const,
+          id: `orbit-${orb.id}`,
+          label: orb.name,
+          dotColor: orb.color,
+          active: task.orbit === orb.id,
+          onSelect: () => void handleUpdateOrbit(task, orb.id),
+        })),
+      ],
     },
     {
       type: 'submenu',
@@ -1136,18 +1293,250 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     },
   ];
 
-  // List view derived collections
-  const activeTasksAll = useMemo(() => effectiveTasks.filter((t) => !t.done), [effectiveTasks]);
-  const doneTasksAll = useMemo(() => effectiveTasks.filter((t) => t.done), [effectiveTasks]);
+  // List view derived collections & filtered counters
+  const activeFilteredTasks = useMemo(() => filteredBaseTasks.filter((t) => !t.done), [filteredBaseTasks]);
+  const doneFilteredTasks = useMemo(() => filteredBaseTasks.filter((t) => t.done), [filteredBaseTasks]);
+
+  const { todayFilteredTasks, upcomingFilteredTasks } = useMemo(() => {
+    const todayEnd = startOfTodayMs() + 86_400_000;
+    const todayArr: VaultTaskEntry[] = [];
+    const upcomingArr: VaultTaskEntry[] = [];
+    for (const task of activeFilteredTasks) {
+      const due = getEffectiveDueAt(task);
+      if (due === null) continue;
+      if (due < todayEnd) todayArr.push(task);
+      else upcomingArr.push(task);
+    }
+    return { todayFilteredTasks: todayArr, upcomingFilteredTasks: upcomingArr };
+  }, [activeFilteredTasks]);
 
   const listDisplayed = useMemo(() => {
-    const active = filteredTasks.filter((t) => !t.done);
-    const done = filteredTasks.filter((t) => t.done);
-    if (!showDone) return active;
-    if (listStatusFilter === 'active') return active;
-    if (listStatusFilter === 'done') return done;
-    return [...active, ...done];
-  }, [filteredTasks, listStatusFilter, showDone]);
+    if (!showDone) return activeFilteredTasks;
+    if (listStatusFilter === 'active') return activeFilteredTasks;
+    if (listStatusFilter === 'today') return todayFilteredTasks;
+    if (listStatusFilter === 'upcoming') return upcomingFilteredTasks;
+    if (listStatusFilter === 'done') return doneFilteredTasks;
+    return [...activeFilteredTasks, ...doneFilteredTasks];
+  }, [
+    activeFilteredTasks,
+    todayFilteredTasks,
+    upcomingFilteredTasks,
+    doneFilteredTasks,
+    listStatusFilter,
+    showDone,
+  ]);
+
+  const effectiveQuickOrbit =
+    scopedOrbitId ??
+    (quickOrbitOverride !== null
+      ? quickOrbitOverride
+      : orbitFilter !== 'all' && orbitFilter !== '__none__'
+        ? orbitFilter
+        : '');
+
+  const handleCreateTopTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newTaskText.trim();
+    if (!clean || creating) return;
+    setCreating(true);
+    try {
+      const targetCol = quickColumnId ?? inboxColId;
+      if (onCreateTask) {
+        let resolvedDueAt = quickDueAt;
+        let resolvedTitle = clean;
+        if (resolvedDueAt === null) {
+          const parsed = parseRussianEvent(clean);
+          if (parsed && parsed.startAt > 0) {
+            resolvedDueAt = parsed.startAt;
+            if (parsed.title && parsed.title.trim().length >= 2) {
+              resolvedTitle = parsed.title.trim();
+            }
+          }
+        }
+        await onCreateTask({
+          text: resolvedTitle,
+          orbit: effectiveQuickOrbit,
+          focusBoardId: scopedBoardId ?? null,
+          columnId: targetCol,
+          priority: quickPriority,
+          dueAt: resolvedDueAt,
+        });
+      } else {
+        await onAddQuickTask(clean, targetCol);
+      }
+      setNewTaskText('');
+      setQuickDueAt(null);
+      setQuickDateStr('');
+      setQuickTimeStr('');
+      setQuickPriority('none');
+      setQuickColumnId(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('tasks.create.error'), locale));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleCreateColumnTask = async (e: React.FormEvent, columnId: string) => {
+    e.preventDefault();
+    const clean = colQuickAddText.trim();
+    if (!clean || colCreating) return;
+    setColCreating(true);
+    try {
+      if (onCreateTask) {
+        await onCreateTask({
+          text: clean,
+          orbit: effectiveQuickOrbit,
+          focusBoardId: scopedBoardId ?? null,
+          columnId,
+          priority: 'none',
+          dueAt: null,
+        });
+      } else {
+        await onAddQuickTask(clean, columnId);
+      }
+      setColQuickAddText('');
+      setColQuickAddId(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('tasks.create.error'), locale));
+    } finally {
+      setColCreating(false);
+    }
+  };
+
+  const toggleBulkSelect = (taskId: string) => {
+    setSelectedTaskIds((prev) =>
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
+    );
+  };
+
+  const handleBulkToggleDone = async (markDone: boolean) => {
+    const targets = listDisplayed.filter((tk) => selectedTaskIds.includes(tk.id) && tk.done !== markDone);
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    try {
+      for (const taskItem of targets) {
+        await onToggleTask(taskItem);
+      }
+      setSelectedTaskIds([]);
+      toast.success(
+        t(markDone ? 'tasks.toast.bulkCompleted' : 'tasks.toast.bulkReopened', {
+          count: targets.length,
+        })
+      );
+      onTasksChanged?.();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkUpdateMeta = async (patch: { orbit?: string; priority?: TaskPriority }) => {
+    const targets = listDisplayed.filter((tk) => selectedTaskIds.includes(tk.id));
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    try {
+      for (const taskItem of targets) {
+        await window.kapsula.updateTaskMeta({
+          itemId: taskItem.itemId,
+          taskKey: getCanonicalTaskKey(taskItem),
+          ...patch,
+        });
+      }
+      setSelectedTaskIds([]);
+      toast.success(t('tasks.toast.bulkMoved', { count: targets.length }));
+      onTasksChanged?.();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const targets = listDisplayed.filter((tk) => selectedTaskIds.includes(tk.id));
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    try {
+      for (const taskItem of targets) {
+        await window.kapsula.deleteVaultTask({
+          itemId: taskItem.itemId,
+          taskKey: getCanonicalTaskKey(taskItem),
+        });
+      }
+      setSelectedTaskIds([]);
+      toast.success(t('tasks.toast.bulkDeleted', { count: targets.length }));
+      onTasksChanged?.();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, t('tasks.err.delete'), locale));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleColumnHeaderPointerDown = (e: React.PointerEvent<HTMLElement>, colId: string) => {
+    if (e.button !== 0 || sortedColumns.length <= 1) return;
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startIndex = sortedColumns.findIndex((c) => c.id === colId);
+    if (startIndex < 0) return;
+    colDragRef.current = { colId, startX, active: false, targetIndex: startIndex };
+
+    const computeTargetColIndex = (clientX: number): number => {
+      const container = boardScrollRef.current;
+      if (!container) return startIndex;
+      const colEls = Array.from(
+        container.querySelectorAll<HTMLElement>('[data-kanban-col-id]')
+      );
+      let idx = 0;
+      for (const el of colEls) {
+        const id = el.dataset.kanbanColId;
+        if (!id) continue;
+        const rect = el.getBoundingClientRect();
+        if (clientX > rect.left + rect.width / 2) {
+          idx += 1;
+        }
+      }
+      return Math.max(0, Math.min(sortedColumns.length - 1, idx));
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const cur = colDragRef.current;
+      if (!cur) return;
+      if (!cur.active && Math.abs(ev.clientX - cur.startX) < 8) return;
+      cur.active = true;
+      const targetIndex = computeTargetColIndex(ev.clientX);
+      if (!cur || cur.targetIndex !== targetIndex || !colDragVisual) {
+        cur.targetIndex = targetIndex;
+        setColDragVisual({ colId: cur.colId, targetIndex });
+      }
+    };
+
+    const cleanup = (ev: PointerEvent, commit: boolean) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      const cur = colDragRef.current;
+      colDragRef.current = null;
+      setColDragVisual(null);
+      if (!commit || !cur?.active) return;
+      const fromIdx = sortedColumns.findIndex((c) => c.id === cur.colId);
+      const toIdx = computeTargetColIndex(ev.clientX);
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+      const next = [...sortedColumns];
+      const [moved] = next.splice(fromIdx, 1);
+      if (!moved) return;
+      next.splice(toIdx, 0, moved);
+      void persistColumns(next);
+    };
+
+    const onUp = (ev: PointerEvent) => cleanup(ev, true);
+    const onCancel = (ev: PointerEvent) => cleanup(ev, false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  };
 
   const listGrouped = useMemo<
     Array<{ key: string; label: string; accent?: string; color?: string; items: VaultTaskEntry[] }>
@@ -1228,32 +1617,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     return out;
   }, [listDisplayed, listStatusFilter, showDone, groupBy, orbitMap, t]);
 
-  const handleCreateTopTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = newTaskText.trim();
-    if (!clean || creating) return;
-    setCreating(true);
-    try {
-      await onAddQuickTask(clean, inboxColId);
-      setNewTaskText('');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleCreateColumnTask = async (e: React.FormEvent, columnId: string) => {
-    e.preventDefault();
-    const clean = colQuickAddText.trim();
-    if (!clean || colCreating) return;
-    setColCreating(true);
-    try {
-      await onAddQuickTask(clean, columnId);
-      setColQuickAddText('');
-      setColQuickAddId(null);
-    } finally {
-      setColCreating(false);
-    }
-  };
+  // End of derived list & Kanban handlers
 
   const renderDueBadge = (task: VaultTaskEntry) => {
     const due = getEffectiveDueAt(task);
@@ -1476,22 +1840,24 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             ]}
           />
 
-          <SelectMenu
-            size="sm"
-            value={orbitFilter}
-            onChange={setOrbitFilter}
-            className="min-w-[124px] max-w-[175px] whitespace-nowrap shrink-0"
-            data-testid="tasks-orbit-filter"
-            options={[
-              { value: 'all', label: t('tasks.orbitFilterAll') },
-              { value: '__none__', label: t('nav.noSection') },
-              ...orbits.map((orb) => ({
-                value: orb.id,
-                label: orb.name,
-                dotColor: orb.color,
-              })),
-            ]}
-          />
+          {!scopedOrbitId && !scopedBoardId ? (
+            <SelectMenu
+              size="sm"
+              value={orbitFilter}
+              onChange={setOrbitFilter}
+              className="min-w-[124px] max-w-[175px] whitespace-nowrap shrink-0"
+              data-testid="tasks-orbit-filter"
+              options={[
+                { value: 'all', label: t('tasks.orbitFilterAll') },
+                { value: '__none__', label: t('nav.noSection') },
+                ...orbits.map((orb) => ({
+                  value: orb.id,
+                  label: orb.name,
+                  dotColor: orb.color,
+                })),
+              ]}
+            />
+          ) : null}
 
           <button
             type="button"
@@ -1529,10 +1895,48 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
         <div className="ml-auto text-[12px] text-[var(--k-ink-muted)] k-tabular whitespace-nowrap shrink-0">
           {t('tasks.openCountLabel')}{' '}
           <strong className="text-[var(--k-ink-primary)]">
-            <NumberFlow value={activeTasksAll.length} />
+            <NumberFlow value={activeFilteredTasks.length} />
           </strong>
         </div>
       </div>
+
+      {/* Section Quick-Filter Pills (global hub only) */}
+      {!scopedOrbitId && !scopedBoardId && orbits.length > 0 ? (
+        <div
+          data-testid="tasks-section-pills"
+          className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar"
+        >
+          <button
+            type="button"
+            onClick={() => setOrbitFilter('all')}
+            className={`k-interactive h-7 px-2.5 rounded-full text-[11.5px] font-medium whitespace-nowrap border cursor-pointer transition-colors ${
+              orbitFilter === 'all'
+                ? 'bg-[var(--k-accent-soft)] border-[var(--k-accent)]/40 text-[var(--k-accent)]'
+                : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+            }`}
+          >
+            {t('tasks.orbitFilterAll')}
+          </button>
+          {orbits.map((orb) => {
+            const active = orbitFilter === orb.id;
+            return (
+              <button
+                key={orb.id}
+                type="button"
+                onClick={() => setOrbitFilter((prev) => (prev === orb.id ? 'all' : orb.id))}
+                className={`k-interactive h-7 px-2.5 rounded-full text-[11.5px] font-medium whitespace-nowrap inline-flex items-center gap-1.5 border cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-[var(--k-accent-soft)] border-[var(--k-accent)]/40 text-[var(--k-accent)]'
+                    : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: orb.color }} />
+                <span>{orb.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {/* BOARD MODE (KANBAN) */}
       {viewMode === 'board' ? (
@@ -1628,15 +2032,30 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                   data-kanban-col-id={col.id}
                   data-testid={`kanban-col-${col.id}`}
                   className={`flex-1 basis-[224px] min-w-[224px] max-w-[304px] shrink-0 rounded-2xl border transition-[border-color,background-color,box-shadow] duration-[120ms] ease-[var(--k-ease-out)] flex flex-col max-h-[calc(100vh-192px)] ${
-                    isDropTarget
-                      ? 'border-[var(--k-accent)]/65 bg-[var(--k-accent-soft)]/18 ring-1 ring-[var(--k-accent)]/25'
-                      : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-rail)]/85'
+                    colDragVisual && colDragVisual.targetIndex === colIndex && colDragVisual.colId !== col.id
+                      ? 'ring-2 ring-[var(--k-accent)]/55 border-[var(--k-accent)]/70'
+                      : colDragVisual?.colId === col.id
+                        ? 'opacity-65 border-dashed border-[var(--k-accent)]/60'
+                        : isDropTarget
+                          ? 'border-[var(--k-accent)]/65 bg-[var(--k-accent-soft)]/18 ring-1 ring-[var(--k-accent)]/25'
+                          : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-rail)]/85'
                   }`}
                 >
                   {/* Column Header */}
                   <ContextMenuSurface entries={colMenuEntries}>
                     <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--k-border-hairline)] shrink-0">
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        {sortedColumns.length > 1 ? (
+                          <button
+                            type="button"
+                            data-testid={`kanban-col-drag-${col.id}`}
+                            aria-label={t('tasks.col.dragAria', { title: colTitle })}
+                            onPointerDown={(e) => handleColumnHeaderPointerDown(e, col.id)}
+                            className="w-4 h-5 -ml-1 flex items-center justify-center text-[var(--k-ink-subtle)] hover:text-[var(--k-ink-primary)] cursor-grab active:cursor-grabbing shrink-0"
+                          >
+                            <DotsSixVertical weight="bold" className="w-3.5 h-3.5" />
+                          </button>
+                        ) : null}
                         {showColumnIcons && resolvedColIcon !== 'none' ? (
                           <span
                             data-testid={`kanban-col-icon-${col.id}`}
@@ -1836,6 +2255,11 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               data-kanban-card-id={task.id}
                               data-testid={`kanban-card-${task.id}`}
                               onPointerDown={(e) => handleCardPointerDown(e, task)}
+                              onClick={(e) => {
+                                if (Date.now() - lastDragEndAtRef.current < 260) return;
+                                if ((e.target as HTMLElement).closest('button, input, textarea, [data-no-drag="true"]')) return;
+                                setSelectedTaskId(task.id);
+                              }}
                               className={`shrink-0 min-w-0 overflow-hidden rounded-xl border bg-[var(--k-bg-surface-1)] p-3 shadow-[var(--k-shadow-card)] transition-[border-color,background-color,box-shadow] duration-[145ms] ease-[var(--k-ease-out)] cursor-grab active:cursor-grabbing select-none ${
                                 isBeingDragged
                                   ? 'opacity-30 border-dashed border-[var(--k-accent)]/60'
@@ -2060,10 +2484,10 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       ) : (
         /* LIST MODE */
         <>
-          {/* Unified Top Capture Slot */}
+          {/* Unified Top Capture Slot with Quick Metadata Pickers */}
           <form
             onSubmit={handleCreateTopTask}
-            className="flex items-center gap-2.5 rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3.5 py-2 shadow-[var(--k-shadow-card)] focus-within:border-[var(--k-border-focus)] transition-colors"
+            className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] px-3.5 py-2 shadow-[var(--k-shadow-card)] focus-within:border-[var(--k-border-focus)] transition-colors"
           >
             <Plus weight="bold" className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
             <input
@@ -2072,8 +2496,147 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
               value={newTaskText}
               onChange={(e) => setNewTaskText(e.target.value)}
               placeholder={t('tasks.list.quickAddPlaceholder')}
-              className="flex-1 bg-transparent border-none outline-none text-[13.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
+              className="flex-1 min-w-[180px] bg-transparent border-none outline-none text-[13.5px] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]"
             />
+            {onCreateTask ? (
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                {!scopedOrbitId && orbits.length > 0 ? (
+                  <SelectMenu
+                    size="sm"
+                    value={effectiveQuickOrbit}
+                    onChange={(val) => setQuickOrbitOverride(val)}
+                    className="max-w-[130px]"
+                    options={[
+                      { value: '', label: t('tasks.ctx.noSection') },
+                      ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
+                    ]}
+                  />
+                ) : null}
+
+                <PopoverSurface
+                  open={quickDatePopoverOpen}
+                  onOpenChange={(open) => {
+                    if (open) {
+                      setQuickDateStr(formatTaskDateInputValue(quickDueAt));
+                      setQuickTimeStr(formatTaskTimeInputValue(quickDueAt));
+                    }
+                    setQuickDatePopoverOpen(open);
+                  }}
+                  align="end"
+                  widthClass="w-56 !p-2"
+                  trigger={
+                    <button
+                      type="button"
+                      data-testid="quick-task-due-btn"
+                      className={`k-interactive h-7 px-2 rounded-lg text-[11.5px] inline-flex items-center gap-1 border cursor-pointer ${
+                        quickDueAt
+                          ? 'border-[var(--k-accent)]/40 bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium'
+                          : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+                      }`}
+                    >
+                      <CalendarBlank className="w-3.5 h-3.5" />
+                      <span>
+                        {quickDueAt
+                          ? formatReminderStamp(quickDueAt, locale)
+                          : t('tasks.quickAdd.dateLabel')}
+                      </span>
+                    </button>
+                  }
+                >
+                  <div className="space-y-1.5 text-[12px]">
+                    <div className="grid grid-cols-2 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickDueAt(computeDueAtPreset('today'));
+                          setQuickDatePopoverOpen(false);
+                        }}
+                        className="px-2 py-1.5 rounded-lg bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] text-left cursor-pointer"
+                      >
+                        {t('tasks.ctx.tonight')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickDueAt(computeDueAtPreset('tomorrow'));
+                          setQuickDatePopoverOpen(false);
+                        }}
+                        className="px-2 py-1.5 rounded-lg bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] text-left cursor-pointer"
+                      >
+                        {t('tasks.ctx.tomorrow10')}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-[var(--k-border-hairline)]">
+                      <input
+                        type="date"
+                        value={quickDateStr}
+                        onChange={(e) => setQuickDateStr(e.target.value)}
+                        className="h-7 px-1.5 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11px]"
+                      />
+                      <input
+                        type="time"
+                        value={quickTimeStr}
+                        onChange={(e) => setQuickTimeStr(e.target.value)}
+                        className="h-7 px-1.5 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11px]"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickDueAt(null);
+                          setQuickDateStr('');
+                          setQuickTimeStr('');
+                          setQuickDatePopoverOpen(false);
+                        }}
+                        className="text-[11px] text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] px-1.5 py-1 cursor-pointer"
+                      >
+                        {t('tasks.ctx.clearDue')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ts = combineTaskDateAndTime(quickDateStr, quickTimeStr);
+                          if (ts !== null) setQuickDueAt(ts);
+                          setQuickDatePopoverOpen(false);
+                        }}
+                        className="h-6.5 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11px] font-medium cursor-pointer"
+                      >
+                        {t('tasks.quickAdd.applyDate')}
+                      </button>
+                    </div>
+                  </div>
+                </PopoverSurface>
+
+                <SelectMenu
+                  size="sm"
+                  value={quickPriority}
+                  onChange={(v) => setQuickPriority(v as TaskPriority)}
+                  className="max-w-[116px]"
+                  options={[
+                    { value: 'none', label: t('tasks.priority.none') },
+                    { value: 'urgent', label: t(PRIORITY_META.urgent.labelKey), dotColor: PRIORITY_META.urgent.dotColor },
+                    { value: 'high', label: t(PRIORITY_META.high.labelKey), dotColor: PRIORITY_META.high.dotColor },
+                    { value: 'medium', label: t(PRIORITY_META.medium.labelKey), dotColor: PRIORITY_META.medium.dotColor },
+                    { value: 'low', label: t(PRIORITY_META.low.labelKey), dotColor: PRIORITY_META.low.dotColor },
+                  ]}
+                />
+
+                {sortedColumns.length > 1 ? (
+                  <SelectMenu
+                    size="sm"
+                    value={quickColumnId ?? inboxColId}
+                    onChange={(val) => setQuickColumnId(val)}
+                    className="max-w-[120px] hidden @[680px]:inline-flex"
+                    options={sortedColumns.map((c) => ({
+                      value: c.id,
+                      label: localizeTaskBoardColumnTitle(c, locale),
+                      dotColor: c.color,
+                    }))}
+                  />
+                ) : null}
+              </div>
+            ) : null}
             <button
               type="submit"
               disabled={!newTaskText.trim() || creating}
@@ -2083,31 +2646,117 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             </button>
           </form>
 
-          {/* List Grouping Controls */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            {showDone ? (
-              <SegmentedControl<'active' | 'done' | 'all'>
-                value={listStatusFilter}
-                onChange={setListStatusFilter}
-                options={[
-                  { value: 'active', label: t('tasks.list.tabActive', { count: activeTasksAll.length }) },
-                  { value: 'done', label: t('tasks.list.tabDone', { count: doneTasksAll.length }) },
-                  { value: 'all', label: t('common.all') },
-                ]}
-              />
-            ) : null}
-            {listStatusFilter !== 'done' ? (
-              <SegmentedControl<GroupMode>
-                value={groupBy}
-                onChange={setGroupBy}
-                options={[
-                  { value: 'due', label: t('tasks.list.groupByDue') },
-                  { value: 'orbit', label: t('tasks.list.groupBySection') },
-                  { value: 'note', label: t('tasks.list.groupByNote') },
-                ]}
-              />
-            ) : null}
+          {/* List Smart Focus & Grouping Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {showDone ? (
+                <SegmentedControl<'active' | 'today' | 'upcoming' | 'done' | 'all'>
+                  value={listStatusFilter}
+                  onChange={setListStatusFilter}
+                  options={[
+                    { value: 'active', label: t('tasks.list.tabActive', { count: activeFilteredTasks.length }) },
+                    { value: 'today', label: t('tasks.focus.today', { count: todayFilteredTasks.length }) },
+                    { value: 'upcoming', label: t('tasks.focus.upcoming', { count: upcomingFilteredTasks.length }) },
+                    { value: 'done', label: t('tasks.list.tabDone', { count: doneFilteredTasks.length }) },
+                    { value: 'all', label: t('common.all') },
+                  ]}
+                />
+              ) : null}
+              {listStatusFilter !== 'done' ? (
+                <SegmentedControl<GroupMode>
+                  value={groupBy}
+                  onChange={setGroupBy}
+                  options={[
+                    { value: 'due', label: t('tasks.list.groupByDue') },
+                    { value: 'orbit', label: t('tasks.list.groupBySection') },
+                    { value: 'note', label: t('tasks.list.groupByNote') },
+                  ]}
+                />
+              ) : null}
+            </div>
           </div>
+
+          {/* Bulk Action Bar (List mode when >= 1 task selected) */}
+          <AnimatePresence>
+            {selectedTaskIds.length > 0 ? (
+              <motion.div
+                data-testid="tasks-bulk-bar"
+                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+                transition={{ duration: 0.14 }}
+                className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--k-accent)]/35 bg-[var(--k-bg-surface-1)] px-3 py-2 shadow-[var(--k-shadow-card)]"
+              >
+                <span className="text-[12px] font-semibold text-[var(--k-accent)]">
+                  {t('tasks.bulk.selected', { count: selectedTaskIds.length })}
+                </span>
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => setSelectedTaskIds(listDisplayed.map((tItem) => tItem.id))}
+                  className="k-interactive h-7 px-2 rounded-lg text-[11.5px] bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
+                >
+                  {t('tasks.bulk.selectAll')}
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => void handleBulkToggleDone(true)}
+                  className="k-interactive h-7 px-2.5 rounded-lg text-[11.5px] font-medium bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] cursor-pointer"
+                >
+                  {t('tasks.bulk.markDone')}
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => void handleBulkToggleDone(false)}
+                  className="k-interactive h-7 px-2 rounded-lg text-[11.5px] bg-[var(--k-bg-surface-2)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
+                >
+                  {t('tasks.bulk.reopen')}
+                </button>
+                {orbits.length > 0 ? (
+                  <SelectMenu
+                    size="sm"
+                    value=""
+                    placeholder={t('tasks.bulk.moveToSection')}
+                    onChange={(orb) => void handleBulkUpdateMeta({ orbit: orb })}
+                    options={[
+                      { value: '', label: t('tasks.ctx.noSection') },
+                      ...orbits.map((o) => ({ value: o.id, label: o.name, dotColor: o.color })),
+                    ]}
+                  />
+                ) : null}
+                <SelectMenu
+                  size="sm"
+                  value=""
+                  placeholder={t('tasks.bulk.setPriority')}
+                  onChange={(p) => void handleBulkUpdateMeta({ priority: p as TaskPriority })}
+                  options={[
+                    { value: 'urgent', label: t(PRIORITY_META.urgent.labelKey), dotColor: PRIORITY_META.urgent.dotColor },
+                    { value: 'high', label: t(PRIORITY_META.high.labelKey), dotColor: PRIORITY_META.high.dotColor },
+                    { value: 'medium', label: t(PRIORITY_META.medium.labelKey), dotColor: PRIORITY_META.medium.dotColor },
+                    { value: 'low', label: t(PRIORITY_META.low.labelKey), dotColor: PRIORITY_META.low.dotColor },
+                    { value: 'none', label: t('tasks.priority.none') },
+                  ]}
+                />
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => void handleBulkDelete()}
+                  className="k-interactive h-7 px-2.5 rounded-lg text-[11.5px] font-medium text-[var(--k-danger)] bg-[var(--k-danger-soft)] cursor-pointer"
+                >
+                  {t('tasks.bulk.delete')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTaskIds([])}
+                  className="ml-auto h-7 px-2 rounded-lg text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+                >
+                  {t('tasks.bulk.clear')}
+                </button>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
           {/* Grouped Tasks List */}
           {listGrouped.length === 0 ? (
@@ -2181,6 +2830,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                           task,
                           itemTaskCounts.get(task.itemId) ?? 1
                         );
+                        const isSelectedRow = selectedTaskIds.includes(task.id);
                         return (
                           <ContextMenuSurface key={task.id} entries={buildTaskContextMenu(task)}>
                             <motion.div
@@ -2190,7 +2840,26 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               exit={prefersReduced ? { opacity: 0 } : { opacity: 0, height: 0, marginBottom: 0 }}
                               transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
                               data-testid={`task-row-${task.id}`}
-                              className="group rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] hover:bg-[var(--k-bg-surface-2)]/45 shadow-[var(--k-shadow-card)] transition-[border-color,background-color] duration-150 flex items-center justify-between gap-3 px-3.5 py-2.5 overflow-hidden"
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest('button, input, textarea, [data-no-detail="true"]')) return;
+                                if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                                  e.preventDefault();
+                                  toggleBulkSelect(task.id);
+                                  return;
+                                }
+                                if (selectedTaskIds.length > 0) {
+                                  toggleBulkSelect(task.id);
+                                  return;
+                                }
+                                if (!isEditing) {
+                                  setSelectedTaskId(task.id);
+                                }
+                              }}
+                              className={`group rounded-xl border transition-[border-color,background-color] duration-150 flex items-center justify-between gap-3 px-3.5 py-2.5 overflow-hidden cursor-pointer ${
+                                isSelectedRow
+                                  ? 'border-[var(--k-accent)]/60 bg-[var(--k-accent-soft)]/25 shadow-[var(--k-shadow-card)]'
+                                  : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] hover:bg-[var(--k-bg-surface-2)]/45 shadow-[var(--k-shadow-card)]'
+                              }`}
                             >
                               <div className="flex items-start gap-3 min-w-0 flex-1">
                                 <AnimatedCheckbox
@@ -2206,6 +2875,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                   {isEditing ? (
                                     <input
                                       autoFocus
+                                      data-no-detail="true"
                                       value={editingTaskDraft}
                                       onChange={(e) => setEditingTaskDraft(e.target.value)}
                                       onBlur={() => void handleCommitRename(task)}
@@ -2221,7 +2891,26 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                     />
                                   ) : (
                                     <div
-                                      onDoubleClick={() => {
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (e.shiftKey || e.ctrlKey || e.metaKey || selectedTaskIds.length > 0) {
+                                          toggleBulkSelect(task.id);
+                                          return;
+                                        }
+                                        if (clickDetailTimerRef.current) {
+                                          window.clearTimeout(clickDetailTimerRef.current);
+                                        }
+                                        clickDetailTimerRef.current = window.setTimeout(() => {
+                                          clickDetailTimerRef.current = null;
+                                          setSelectedTaskId(task.id);
+                                        }, 190);
+                                      }}
+                                      onDoubleClick={(e) => {
+                                        e.stopPropagation();
+                                        if (clickDetailTimerRef.current) {
+                                          window.clearTimeout(clickDetailTimerRef.current);
+                                          clickDetailTimerRef.current = null;
+                                        }
                                         setEditingTaskId(task.id);
                                         setEditingTaskDraft(task.text);
                                       }}
@@ -2288,12 +2977,30 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                 </div>
                               </div>
 
-                              <div className="shrink-0">
+                              <div className="shrink-0 flex items-center gap-1" data-no-detail="true">
+                                <button
+                                  type="button"
+                                  data-testid={`task-details-btn-${task.id}`}
+                                  title={t('tasks.ctx.openDetails')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedTaskId(task.id);
+                                  }}
+                                  className="k-interactive h-7 w-7 rounded-lg inline-flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                                >
+                                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                                </button>
                                 <PopoverSurface
                                   open={openDateTaskId === task.id}
-                                  onOpenChange={(isOpen) => setOpenDateTaskId(isOpen ? task.id : null)}
+                                  onOpenChange={(isOpen) => {
+                                    if (isOpen) {
+                                      setRowCustomDateStr(formatTaskDateInputValue(dueAt));
+                                      setRowCustomTimeStr(formatTaskTimeInputValue(dueAt));
+                                    }
+                                    setOpenDateTaskId(isOpen ? task.id : null);
+                                  }}
                                   align="end"
-                                  widthClass="w-44 !p-1.5"
+                                  widthClass="w-56 !p-2"
                                   trigger={
                                     <button
                                       type="button"
@@ -2309,7 +3016,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                     </button>
                                   }
                                 >
-                                  <div className="space-y-0.5 text-[12px]">
+                                  <div className="space-y-1 text-[12px]">
                                     <button
                                       type="button"
                                       onClick={() => void handleUpdateDueAt(task, 'today')}
@@ -2331,15 +3038,43 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                                     >
                                       {t('tasks.ctx.in3Days')}
                                     </button>
-                                    {dueAt ? (
+                                    <div className="grid grid-cols-2 gap-1.5 pt-1.5 mt-1 border-t border-[var(--k-border-hairline)]">
+                                      <input
+                                        type="date"
+                                        value={rowCustomDateStr}
+                                        onChange={(e) => setRowCustomDateStr(e.target.value)}
+                                        className="h-7 px-1.5 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11px]"
+                                      />
+                                      <input
+                                        type="time"
+                                        value={rowCustomTimeStr}
+                                        onChange={(e) => setRowCustomTimeStr(e.target.value)}
+                                        className="h-7 px-1.5 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11px]"
+                                      />
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1 pt-1">
+                                      {dueAt ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleUpdateDueAt(task, 'clear')}
+                                          className="k-interactive text-left px-2 py-1 rounded-lg text-[11px] text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
+                                        >
+                                          {t('tasks.ctx.clearDue')}
+                                        </button>
+                                      ) : <span />}
                                       <button
                                         type="button"
-                                        onClick={() => void handleUpdateDueAt(task, 'clear')}
-                                        className="k-interactive w-full text-left px-2.5 py-1.5 rounded-lg text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
+                                        onClick={() => {
+                                          const ts = combineTaskDateAndTime(rowCustomDateStr, rowCustomTimeStr);
+                                          if (ts !== null) {
+                                            void handleUpdateDueAt(task, ts);
+                                          }
+                                        }}
+                                        className="k-interactive h-6.5 px-2.5 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11px] font-medium cursor-pointer"
                                       >
-                                        {t('tasks.ctx.clearDue')}
+                                        {t('tasks.quickAdd.applyDate')}
                                       </button>
-                                    ) : null}
+                                    </div>
                                   </div>
                                 </PopoverSurface>
                               </div>
@@ -2355,6 +3090,18 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
           )}
         </>
       )}
+
+      <TaskDetailSheet
+        task={effectiveTasks.find((tItem) => tItem.id === selectedTaskId) ?? null}
+        orbits={orbits}
+        columns={sortedColumns}
+        onClose={() => setSelectedTaskId(null)}
+        onToggleDone={handleToggleWithUndo}
+        onUpdateText={handleCommitRenameText}
+        onUpdateMeta={handleSheetUpdateMeta}
+        onOpenItem={onOpenItem}
+        onDelete={handleDeleteTask}
+      />
     </div>
   );
 };

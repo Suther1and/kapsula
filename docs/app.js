@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const DEFAULT_VERSION = '1.0.8';
+  const DEFAULT_VERSION = '1.0.9';
   const RELEASE_API = 'https://api.github.com/repos/Suther1and/kapsula/releases/latest';
   const DOWNLOAD_BASE = 'https://github.com/Suther1and/kapsula/releases/download/v';
 

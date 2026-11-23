@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowCounterClockwise,
   ArrowSquareOut,
@@ -39,6 +40,8 @@ import type {
   BudgetSummary,
   CalendarSyncStatus,
   CloudAiQuotaStatus,
+  GlassPreset,
+  NativeWindowMaterial,
   SettingsState,
   ThemeMode,
 } from '@shared/types';
@@ -75,6 +78,10 @@ import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectMenu } from '../ui/SelectMenu';
 import { ShortcutRecorder } from '../ui/ShortcutRecorder';
 import { SwitchToggle } from '../ui/SwitchToggle';
+import { CloudSyncIcon } from '../icons/cloud-sync';
+import { PaletteIcon } from '../icons/palette';
+import { ShieldCheckIcon } from '../icons/shield-check';
+import { LiveIcon } from '../icons/LiveIcon';
 
 const SyncSettingsPanel = lazy(() =>
   import('./SyncSettingsPanel').then((m) => ({ default: m.SyncSettingsPanel }))
@@ -121,6 +128,14 @@ function formatSyncTimestamp(
   });
 }
 
+const SETTINGS_TAB_VARIANTS = {
+  enter: (custom: { dir: number; skip: boolean }) =>
+    custom.skip ? { opacity: 1 } : { opacity: 0, x: custom.dir * 20, filter: 'blur(1.5px)' },
+  center: { opacity: 1, x: 0, filter: 'blur(0px)' },
+  exit: (custom: { dir: number; skip: boolean }) =>
+    custom.skip ? { opacity: 0 } : { opacity: 0, x: custom.dir * -14, filter: 'blur(1.5px)' },
+};
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
   onOpenChange,
@@ -131,8 +146,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRecoveryKeyVisibleChange,
 }) => {
   const { t, locale, dateLocale, pluralNoun, formatCurrencyUsd } = useI18n();
+  const prefersReduced = useReducedMotion();
   const isMac = isMacPlatform(window.kapsula?.platform ?? 'win32');
-  const [tab, setTab] = useState<Exclude<SettingsTab, 'general'>>(() => normalizeTab(initialTab));
+  const TAB_ORDER: Array<Exclude<SettingsTab, 'general'>> = [
+    'appearance',
+    'sync',
+    'security',
+    'ai',
+    'integrations',
+    'data',
+    'shortcuts',
+  ];
+  const [tab, setTabState] = useState<Exclude<SettingsTab, 'general'>>(() => normalizeTab(initialTab));
+  const [tabDir, setTabDir] = useState<1 | -1>(1);
+  const setTab = (next: Exclude<SettingsTab, 'general'>) => {
+    setTabState((prev) => {
+      if (prev === next) return prev;
+      const fromIdx = TAB_ORDER.indexOf(prev);
+      const toIdx = TAB_ORDER.indexOf(next);
+      setTabDir(toIdx >= fromIdx ? 1 : -1);
+      return next;
+    });
+  };
   const [appearance, setAppearance] = useState<AppearanceConfig>(() => getSavedAppearance());
   const [hexDraft, setHexDraft] = useState<string>(() => getSavedAppearance().accentHex);
   const [hiddenNavSections, setHiddenNavSections] = useState<HideableNavSection[]>(readHiddenNavSections);
@@ -206,6 +241,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     mediaFilesCount: number;
     totalBytes: number;
   } | null>(null);
+  const [videoCacheInfo, setVideoCacheInfo] = useState<{
+    bytesUsed: number;
+    fileCount: number;
+    limitMb: number;
+  } | null>(null);
+  const [clearingVideoCache, setClearingVideoCache] = useState(false);
   const [exportingBackup, setExportingBackup] = useState(false);
   const [exportingMdZip, setExportingMdZip] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState(false);
@@ -231,6 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     window.kapsula.getBudget().then(setBudget).catch(() => {});
     refreshCloudQuota();
     window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
+    window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
     window.kapsula.getUpdaterState().then(setUpdaterState).catch(() => {});
     window.kapsula
       .checkForUpdates({ silent: true, maxAgeMs: 10 * 60 * 1000 })
@@ -451,6 +493,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       toast.success(res.importedCount > 0 ? parts.join(' · ') : emptyMsg);
       onVaultChanged?.();
       window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
+    window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
     } catch (err) {
       toast.error(friendlyErrorMessage(err, t('settings.integrations.importErr'), locale));
     } finally {
@@ -474,9 +517,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           size="sm"
           fullWidth
           options={[
-            { value: 'appearance', label: t('settings.tab.appearance'), icon: <Palette className="w-3.5 h-3.5" /> },
-            { value: 'sync', label: t('settings.tab.sync'), icon: <CloudCheck className="w-3.5 h-3.5" /> },
-            { value: 'security', label: t('settings.tab.security'), icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+            { value: 'appearance', label: t('settings.tab.appearance'), icon: <LiveIcon icon={PaletteIcon} size={14} active={tab === 'appearance'} /> },
+            { value: 'sync', label: t('settings.tab.sync'), icon: <LiveIcon icon={CloudSyncIcon} size={14} active={tab === 'sync'} /> },
+            { value: 'security', label: t('settings.tab.security'), icon: <LiveIcon icon={ShieldCheckIcon} size={14} active={tab === 'security'} /> },
             { value: 'ai', label: t('settings.tab.ai'), icon: <Cpu className="w-3.5 h-3.5" /> },
             { value: 'integrations', label: t('settings.tab.integrations'), icon: <PlugsConnected className="w-3.5 h-3.5" /> },
             { value: 'data', label: t('settings.tab.data'), icon: <Database className="w-3.5 h-3.5" /> },
@@ -484,8 +527,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ]}
         />
 
-        {/* Fixed-height tab body prevents modal jumping when switching sections */}
-        <div className="h-[460px] overflow-y-auto k-scroll-stable pr-1 flex flex-col gap-3">
+        {/* Fixed-height tab body with crisp directional slide & zero modal height jump */}
+        <div className="relative h-[460px] overflow-hidden">
+          <AnimatePresence
+            mode="popLayout"
+            initial={false}
+            custom={{ dir: tabDir, skip: Boolean(prefersReduced) }}
+          >
+            <motion.div
+              key={tab}
+              custom={{ dir: tabDir, skip: Boolean(prefersReduced) }}
+              variants={SETTINGS_TAB_VARIANTS}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={
+                prefersReduced
+                  ? { duration: 0 }
+                  : { duration: 0.17, ease: [0.23, 1, 0.32, 1] }
+              }
+              className="absolute inset-0 overflow-y-auto k-scroll-stable pr-1 flex flex-col gap-3"
+            >
           {/* 1. APPEARANCE */}
           {tab === 'appearance' ? (
             <>
@@ -901,6 +963,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div
+                data-testid="appearance-glass-card"
+                className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3 space-y-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[13.5px] font-medium">{t('settings.appearance.glassTitle')}</div>
+                    <div className="text-[12px] text-[var(--k-ink-secondary)]">
+                      {t('settings.appearance.glassDesc')}
+                    </div>
+                  </div>
+                  <SegmentedControl<GlassPreset>
+                    value={appearance.glassPreset ?? 'off'}
+                    onChange={(glassPreset) =>
+                      applyAppearanceChange({ ...appearance, glassPreset }, { immediate: true })
+                    }
+                    options={[
+                      { value: 'off', label: t('settings.appearance.glassOff') },
+                      { value: 'subtle', label: t('settings.appearance.glassSubtle') },
+                      { value: 'frosted', label: t('settings.appearance.glassFrosted') },
+                      { value: 'liquid', label: t('settings.appearance.glassLiquid') },
+                    ]}
+                  />
+                </div>
+
+                {(appearance.glassPreset ?? 'off') !== 'off' ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-[var(--k-border-hairline)]">
+                    <div>
+                      <div className="text-[12.5px] font-medium">{t('settings.appearance.glassNativeTitle')}</div>
+                      <div className="text-[11.5px] text-[var(--k-ink-secondary)]">
+                        {isMac
+                          ? t('settings.appearance.glassNativeDescMac')
+                          : t('settings.appearance.glassNativeDesc')}
+                      </div>
+                    </div>
+                    <SegmentedControl<NativeWindowMaterial>
+                      value={appearance.glassNativeMaterial ?? 'none'}
+                      onChange={(glassNativeMaterial) =>
+                        applyAppearanceChange(
+                          { ...appearance, glassNativeMaterial },
+                          { immediate: true }
+                        )
+                      }
+                      options={[
+                        { value: 'none', label: t('settings.appearance.glassNativeNone') },
+                        {
+                          value: 'mica',
+                          label: isMac
+                            ? t('settings.appearance.glassNativeMacSoft')
+                            : t('settings.appearance.glassNativeMica'),
+                        },
+                        {
+                          value: 'acrylic',
+                          label: isMac
+                            ? t('settings.appearance.glassNativeMacDeep')
+                            : t('settings.appearance.glassNativeAcrylic'),
+                        },
+                      ]}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              <div
                 data-testid="appearance-sidebar-sections-card"
                 className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-4 py-3 flex flex-col gap-2.5"
               >
@@ -1228,7 +1353,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="flex flex-col gap-1.5 pt-0.5">
                     <div className="h-2 rounded-full bg-[var(--k-bg-surface-3)] overflow-hidden">
                       <div
-                        className="h-full rounded-full transition-all duration-300"
+                        className="h-full rounded-full transition-[width,background-color] duration-300"
                         style={{
                           width: `${Math.min(
                             100,
@@ -2021,6 +2146,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
+              <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[13.5px] font-medium">{t('settings.data.videoCacheTitle')}</div>
+                  <div className="text-[12px] text-[var(--k-ink-secondary)] k-tabular mt-0.5">
+                    {t('settings.data.videoCacheSummary', {
+                      count: videoCacheInfo?.fileCount ?? 0,
+                      used: formatFileSize(videoCacheInfo?.bytesUsed ?? 0, locale) || t('settings.data.zeroBytes'),
+                      limit: videoCacheInfo?.limitMb ?? settings?.videoCacheLimitMb ?? 500,
+                    })}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <SelectMenu
+                    size="sm"
+                    data-testid="video-cache-limit-select"
+                    value={String(videoCacheInfo?.limitMb ?? settings?.videoCacheLimitMb ?? 500)}
+                    onChange={async (val) => {
+                      const limitMb = Number(val);
+                      if (!Number.isFinite(limitMb)) return;
+                      await patch({ videoCacheLimitMb: limitMb });
+                      window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
+                    }}
+                    options={[
+                      { value: '250', label: t('settings.data.cache250mb') },
+                      { value: '500', label: t('settings.data.cache500mb') },
+                      { value: '1024', label: t('settings.data.cache1gb') },
+                      { value: '2048', label: t('settings.data.cache2gb') },
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    data-testid="clear-video-cache-btn"
+                    disabled={clearingVideoCache || (videoCacheInfo?.fileCount ?? 0) === 0}
+                    onClick={async () => {
+                      setClearingVideoCache(true);
+                      try {
+                        const stats = await window.kapsula.clearVideoCache?.();
+                        if (stats) setVideoCacheInfo(stats);
+                        toast.success(t('settings.data.videoCacheCleared'));
+                        window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
+                      } finally {
+                        setClearingVideoCache(false);
+                      }
+                    }}
+                    className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer disabled:opacity-50"
+                  >
+                    <Trash className="w-3.5 h-3.5" />
+                    <span>{t('settings.data.videoCacheClearBtn')}</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] p-4 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-[13.5px] font-medium">{t('settings.data.exportZipTitle')}</div>
@@ -2081,6 +2258,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             );
                             onVaultChanged?.();
                             window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
+    window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
                           }
                         } catch (err) {
                           toast.error(friendlyErrorMessage(err, t('settings.data.restoreErr'), locale));
@@ -2221,6 +2399,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </>
           ) : null}
+            </motion.div>
+          </AnimatePresence>
         </div>
 
         {/* Always-accessible About, Cloud Updates & Safe Diagnostics bar */}
@@ -2306,7 +2486,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {updaterState?.status === 'downloading' ? (
             <div className="h-1.5 rounded-full bg-[var(--k-bg-surface-3)] overflow-hidden">
               <div
-                className="h-full rounded-full bg-[var(--k-accent)] transition-all duration-200"
+                className="h-full rounded-full bg-[var(--k-accent)] transition-[width] duration-200"
                 style={{ width: `${Math.max(4, Math.min(100, updaterState.percent ?? 0))}%` }}
               />
             </div>

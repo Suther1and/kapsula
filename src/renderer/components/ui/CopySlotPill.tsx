@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Check, Copy } from '@phosphor-icons/react';
+import { CheckIcon } from '../icons/check';
+import { CopyIcon } from '../icons/copy';
+import { HoverIconProvider, LiveIcon } from '../icons/LiveIcon';
 import { TooltipHint } from './TooltipHint';
 import { playTactileSound } from '../../lib/tactileSound';
 import { useI18n } from '@shared/i18n/react';
@@ -32,6 +34,7 @@ export const CopySlotPill: React.FC<CopySlotPillProps> = ({
   const { t } = useI18n();
   const [remaining, setRemaining] = useState<number>(0);
   const [copiedJustNow, setCopiedJustNow] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const prefersReduced = useReducedMotion();
   const resolvedCopiedLabel = copiedLabel ?? t('common.done');
 
@@ -81,40 +84,44 @@ export const CopySlotPill: React.FC<CopySlotPillProps> = ({
         : 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)]';
 
   const buttonEl = (
-    <button
-      type="button"
-      data-testid={testId}
-      onClick={handleClick}
-      style={{ width: `${widthPx}px`, height: `${heightPx}px` }}
-      className={`k-interactive k-focus-ring k-tabular shrink-0 inline-flex items-center justify-center gap-1 rounded-lg border px-1.5 text-[11.5px] font-medium leading-none whitespace-nowrap overflow-hidden cursor-pointer select-none ${toneClasses} ${className}`}
-    >
-      <AnimatePresence mode="wait" initial={false}>
-        {isCopied ? (
-          <motion.span
-            key="check"
-            initial={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.75)', opacity: 0 }}
-            animate={prefersReduced ? { opacity: 1 } : { transform: 'scale(1)', opacity: 1 }}
-            exit={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
-            transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
-            className="inline-flex shrink-0"
-          >
-            <Check weight="bold" className="w-3.5 h-3.5" />
-          </motion.span>
-        ) : (
-          <motion.span
-            key="copy"
-            initial={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
-            animate={prefersReduced ? { opacity: 1 } : { transform: 'scale(1)', opacity: 1 }}
-            exit={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
-            transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
-            className="inline-flex shrink-0 opacity-80"
-          >
-            <Copy weight="regular" className="w-3.5 h-3.5" />
-          </motion.span>
-        )}
-      </AnimatePresence>
-      <span className="truncate">{isCopied ? activeText : label}</span>
-    </button>
+    <HoverIconProvider hovered={hovered}>
+      <button
+        type="button"
+        data-testid={testId}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={handleClick}
+        style={{ width: `${widthPx}px`, height: `${heightPx}px` }}
+        className={`k-interactive k-focus-ring k-tabular shrink-0 inline-flex items-center justify-center gap-1 rounded-lg border px-1.5 text-[11.5px] font-medium leading-none whitespace-nowrap overflow-hidden cursor-pointer select-none ${toneClasses} ${className}`}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {isCopied ? (
+            <motion.span
+              key="check"
+              initial={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.75)', opacity: 0 }}
+              animate={prefersReduced ? { opacity: 1 } : { transform: 'scale(1)', opacity: 1 }}
+              exit={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
+              transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+              className="inline-flex shrink-0"
+            >
+              <LiveIcon icon={CheckIcon} size={14} active={true} />
+            </motion.span>
+          ) : (
+            <motion.span
+              key="copy"
+              initial={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
+              animate={prefersReduced ? { opacity: 1 } : { transform: 'scale(1)', opacity: 1 }}
+              exit={prefersReduced ? { opacity: 0 } : { transform: 'scale(0.8)', opacity: 0 }}
+              transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
+              className="inline-flex shrink-0 opacity-85"
+            >
+              <LiveIcon icon={CopyIcon} size={14} />
+            </motion.span>
+          )}
+        </AnimatePresence>
+        <span className="truncate">{isCopied ? activeText : label}</span>
+      </button>
+    </HoverIconProvider>
   );
 
   return (
