@@ -24,6 +24,7 @@ import { transcribeAudioFile } from '@main/pipeline/audio-pipeline';
 import { VaultCrypto } from '@main/security/vault-crypto';
 import {
   AppUpdaterController,
+  SETTINGS_REFRESH_INTERVAL_MS,
   compareSemver,
   isAllowedDownloadUrl,
   isNewerVersion,
@@ -294,6 +295,128 @@ describe('In-App Cloud Updater (semver, asset matching, Win auto + Mac dmg)', ()
     const manualState = await updater.checkForUpdates({ silent: false });
     expect(manualState.status).toBe('error');
     expect(manualState.error).toContain('Не удалось проверить обновления');
+  });
+
+  it('silently refreshes stale update state every 10 minutes on Settings open and right before downloading', async () => {
+    expect(SETTINGS_REFRESH_INTERVAL_MS).toBe(10 * 60 * 1000);
+
+    let nowMs = 1_000_000;
+    let releaseTag = 'v1.0.4';
+    let fetchCalls = 0;
+    let failNextFetch = false;
+    const seenStatuses: string[] = [];
+    const openedUrls: string[] = [];
+
+    const updater = new AppUpdaterController({
+      currentVersion: '1.0.2',
+      platform: 'darwin',
+      arch: 'arm64',
+      isPackaged: true,
+      disableTimers: true,
+      now: () => nowMs,
+      onStateChanged: (st) => {
+        seenStatuses.push(st.status);
+      },
+      openExternal: (url) => {
+        openedUrls.push(url);
+      },
+      fetchFn: (async () => {
+        fetchCalls += 1;
+        if (failNextFetch) {
+          throw new Error('Network unavailable');
+        }
+        const ver = releaseTag.replace(/^v/, '');
+        return new Response(
+          JSON.stringify({
+            tag_name: releaseTag,
+            assets: [
+              {
+                name: `Kapsula-${ver}-mac-apple-silicon.dmg`,
+                browser_download_url: `https://github.com/Suther1and/kapsula/releases/download/${releaseTag}/Kapsula-${ver}-mac-apple-silicon.dmg`,
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }) as typeof fetch,
+    });
+
+    // Initial silent check picks up 1.0.4
+    const initial = await updater.checkForUpdates({ silent: true });
+    expect(initial.latestVersion).toBe('1.0.4');
+    expect(fetchCalls).toBe(1);
+    expect(seenStatuses).not.toContain('checking');
+
+    // New release 1.0.5 lands, Settings opens 5 minutes later -> within 10m window, uses cache
+    releaseTag = 'v1.0.5';
+    nowMs += 5 * 60 * 1000;
+    const withinWindow = await updater.refreshIfStale(SETTINGS_REFRESH_INTERVAL_MS);
+    expect(fetchCalls).toBe(1);
+    expect(withinWindow.latestVersion).toBe('1.0.4');
+
+    // Settings opens 11 minutes after initial check -> silently upgrades cached 1.0.4 -> 1.0.5 without flicker
+    nowMs += 6 * 60 * 1000;
+    const refreshed = await updater.refreshIfStale(SETTINGS_REFRESH_INTERVAL_MS);
+    expect(fetchCalls).toBe(2);
+    expect(refreshed.latestVersion).toBe('1.0.5');
+    expect(refreshed.downloadUrl).toContain('Kapsula-1.0.5-mac-apple-silicon.dmg');
+    expect(seenStatuses).not.toContain('checking');
+
+    // Release 1.0.6 lands; user clicks Download 60s later -> downloadUpdate() refreshes URL first
+    releaseTag = 'v1.0.6';
+    nowMs += 60 * 1000;
+    await updater.downloadUpdate();
+    expect(fetchCalls).toBe(3);
+    expect(openedUrls[0]).toContain('Kapsula-1.0.6-mac-apple-silicon.dmg');
+
+    // Network fails right before another Download click 60s later -> falls back to cached 1.0.6 cleanly
+    failNextFetch = true;
+    nowMs += 60 * 1000;
+    const afterFailureDl = await updater.downloadUpdate();
+    expect(fetchCalls).toBe(4);
+    expect(afterFailureDl.status).toBe('available');
+    expect(openedUrls[1]).toContain('Kapsula-1.0.6-mac-apple-silicon.dmg');
+
+    // Never clobbers active Windows downloading or downloaded states
+    let winChecks = 0;
+    let dlProgressCb: ((prog: { percent: number }) => void) | null = null;
+    const activeWin = new AppUpdaterController({
+      currentVersion: '1.0.2',
+      platform: 'win32',
+      arch: 'x64',
+      isPackaged: true,
+      disableTimers: true,
+      now: () => nowMs,
+      fetchFn: (async () => {
+        throw new Error('unexpected-network-fetch');
+      }) as typeof fetch,
+      loadAutoUpdater: async () => ({
+        autoDownload: false,
+        autoInstallOnAppQuit: true,
+        on: (ev, cb) => {
+          if (ev === 'download-progress') dlProgressCb = cb as (prog: { percent: number }) => void;
+        },
+        checkForUpdates: async () => {
+          winChecks += 1;
+          return { updateInfo: { version: '1.0.5' } };
+        },
+        downloadUpdate: async () => {
+          dlProgressCb?.({ percent: 45 });
+        },
+        quitAndInstall: () => {},
+      }),
+    });
+    await activeWin.checkForUpdates({ silent: false });
+    nowMs += 60 * 1000;
+    await activeWin.downloadUpdate();
+    expect(activeWin.getState().status).toBe('downloading');
+    expect(winChecks).toBe(2); // initial check + pre-download refresh (>30s stale)
+
+    nowMs += 20 * 60 * 1000;
+    const whileDownloading = await activeWin.refreshIfStale(SETTINGS_REFRESH_INTERVAL_MS);
+    expect(whileDownloading.status).toBe('downloading');
+    expect(whileDownloading.percent).toBe(45);
+    expect(winChecks).toBe(2);
   });
 });
 

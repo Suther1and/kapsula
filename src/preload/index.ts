@@ -227,7 +227,7 @@ export interface KapsulaBridgeApi {
   syncCopyRecoveryKey(recoveryKey: string): Promise<{ ok: boolean; wipeSeconds: number }>;
 
   getUpdaterState(): Promise<AppUpdaterState>;
-  checkForUpdates(): Promise<AppUpdaterState>;
+  checkForUpdates(opts?: { silent?: boolean; maxAgeMs?: number }): Promise<AppUpdaterState>;
   downloadUpdate(): Promise<AppUpdaterState>;
   installUpdate(): Promise<{ ok: boolean }>;
   dismissUpdate(version?: string): Promise<AppUpdaterState | null>;
@@ -406,7 +406,7 @@ const api: KapsulaBridgeApi = {
   syncCopyRecoveryKey: (recoveryKey) => ipcRenderer.invoke('sync:copy-recovery-key', recoveryKey),
 
   getUpdaterState: () => ipcRenderer.invoke('updater:get-state'),
-  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  checkForUpdates: (opts) => ipcRenderer.invoke('updater:check', opts),
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   dismissUpdate: (version) => ipcRenderer.invoke('updater:dismiss', version),

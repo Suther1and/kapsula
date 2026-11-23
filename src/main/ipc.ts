@@ -2556,13 +2556,22 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     };
   });
 
-  handleTrusted('updater:check', async () => {
+  handleTrusted('updater:check', async (_e, rawOpts?: { silent?: boolean; maxAgeMs?: number }) => {
     if (!svc.updater) {
       return {
         status: 'up-to-date' as const,
         currentVersion: app.getVersion(),
         mode: 'manual-download' as const,
       };
+    }
+    if (rawOpts && rawOpts.silent === true) {
+      const maxAgeMs =
+        typeof rawOpts.maxAgeMs === 'number' &&
+        Number.isFinite(rawOpts.maxAgeMs) &&
+        rawOpts.maxAgeMs > 0
+          ? rawOpts.maxAgeMs
+          : undefined;
+      return svc.updater.refreshIfStale(maxAgeMs);
     }
     return svc.updater.checkForUpdates({ silent: false });
   });

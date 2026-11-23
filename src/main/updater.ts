@@ -10,6 +10,26 @@ export const GITHUB_RELEASES_PAGE = `https://github.com/${GITHUB_OWNER}/${GITHUB
 const STARTUP_CHECK_DELAY_MS = 10_000;
 const PERIODIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const GITHUB_API_TIMEOUT_MS = 10_000;
+export const SETTINGS_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+export const DOWNLOAD_REFRESH_MIN_AGE_MS = 30 * 1000;
+const DOWNLOAD_REFRESH_TIMEOUT_MS = 2_500;
+
+async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      promise.then(
+        () => undefined,
+        () => undefined
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface GithubReleaseAsset {
   name: string;
@@ -189,6 +209,7 @@ export interface AppUpdaterControllerOptions {
   setDismissedVersion?: (version: string) => void;
   fetchFn?: FetchLike;
   loadAutoUpdater?: () => Promise<AutoUpdaterLike | null>;
+  now?: () => number;
 }
 
 export class AppUpdaterController {
@@ -202,12 +223,14 @@ export class AppUpdaterController {
   private readonly getDismissedVersion?: () => string | null;
   private readonly setDismissedVersion?: (version: string) => void;
   private readonly loadAutoUpdaterFn?: () => Promise<AutoUpdaterLike | null>;
+  private readonly now: () => number;
 
   private locale: AppLocale;
   private state: AppUpdaterState;
   private autoUpdater: AutoUpdaterLike | null = null;
   private autoUpdaterWired = false;
   private checkInFlight: Promise<AppUpdaterState> | null = null;
+  private silentCheckDepth = 0;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private periodicTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
@@ -224,6 +247,7 @@ export class AppUpdaterController {
     this.getDismissedVersion = opts.getDismissedVersion;
     this.setDismissedVersion = opts.setDismissedVersion;
     this.loadAutoUpdaterFn = opts.loadAutoUpdater;
+    this.now = opts.now ?? (() => Date.now());
 
     const initialMode: AppUpdaterState['mode'] =
       this.platform === 'win32' && this.isPackaged ? 'auto' : 'manual-download';
@@ -326,7 +350,9 @@ export class AppUpdaterController {
       if (!this.autoUpdaterWired) {
         this.autoUpdaterWired = true;
         this.autoUpdater.on('checking-for-update', () => {
-          this.setState({ status: 'checking', error: null });
+          if (this.silentCheckDepth === 0) {
+            this.setState({ status: 'checking', error: null });
+          }
         });
         this.autoUpdater.on('update-available', (rawInfo: unknown) => {
           const info = (rawInfo ?? {}) as { version?: string; releaseNotes?: unknown };
@@ -339,16 +365,16 @@ export class AppUpdaterController {
             downloadUrl: GITHUB_RELEASES_PAGE,
             percent: null,
             error: null,
-            checkedAt: Date.now(),
+            checkedAt: this.now(),
           });
         });
         this.autoUpdater.on('update-not-available', () => {
           this.setState({
-            status: 'up-to-date',
+            status: this.silentCheckDepth > 0 ? 'idle' : 'up-to-date',
             latestVersion: this.state.currentVersion,
             percent: null,
             error: null,
-            checkedAt: Date.now(),
+            checkedAt: this.now(),
           });
         });
         this.autoUpdater.on('download-progress', (rawProg: unknown) => {
@@ -383,7 +409,10 @@ export class AppUpdaterController {
     }
   }
 
-  private async checkViaGithubApi(silent: boolean): Promise<AppUpdaterState> {
+  private async checkViaGithubApi(
+    silent: boolean,
+    timeoutMs: number = GITHUB_API_TIMEOUT_MS
+  ): Promise<AppUpdaterState> {
     try {
       const resp = await this.fetchFn(GITHUB_LATEST_RELEASE_API, {
         method: 'GET',
@@ -391,7 +420,7 @@ export class AppUpdaterController {
           Accept: 'application/vnd.github+json',
           'User-Agent': `Kapsula-Desktop/${this.state.currentVersion}`,
         },
-        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
       if (resp.status === 404) {
@@ -400,7 +429,7 @@ export class AppUpdaterController {
           status: silent ? 'idle' : 'up-to-date',
           latestVersion: this.state.currentVersion,
           error: null,
-          checkedAt: Date.now(),
+          checkedAt: this.now(),
           mode: 'manual-download',
         });
         return this.getState();
@@ -420,7 +449,7 @@ export class AppUpdaterController {
           status: silent ? 'idle' : 'up-to-date',
           latestVersion: this.state.currentVersion,
           error: null,
-          checkedAt: Date.now(),
+          checkedAt: this.now(),
           mode: 'manual-download',
         });
         return this.getState();
@@ -434,7 +463,7 @@ export class AppUpdaterController {
           downloadUrl: null,
           percent: null,
           error: null,
-          checkedAt: Date.now(),
+          checkedAt: this.now(),
           mode: 'manual-download',
         });
         return this.getState();
@@ -454,7 +483,7 @@ export class AppUpdaterController {
         downloadUrl: asset?.browser_download_url ?? fallbackUrl,
         percent: null,
         error: null,
-        checkedAt: Date.now(),
+        checkedAt: this.now(),
       });
       return this.getState();
     } catch {
@@ -467,57 +496,89 @@ export class AppUpdaterController {
       this.setState({
         status: 'error',
         error: translate(this.locale, 'main.updater.checkError'),
-        checkedAt: Date.now(),
+        checkedAt: this.now(),
       });
       return this.getState();
     }
   }
 
-  public async checkForUpdates(opts?: { silent?: boolean }): Promise<AppUpdaterState> {
-    if (this.checkInFlight) return this.checkInFlight;
+  public async checkForUpdates(opts?: {
+    silent?: boolean;
+    maxAgeMs?: number;
+    timeoutMs?: number;
+  }): Promise<AppUpdaterState> {
     const silent = Boolean(opts?.silent);
+    if (
+      silent &&
+      (this.state.status === 'downloading' || this.state.status === 'downloaded')
+    ) {
+      return this.getState();
+    }
+    const lastCheckedAt = this.state.checkedAt;
+    if (
+      typeof opts?.maxAgeMs === 'number' &&
+      opts.maxAgeMs > 0 &&
+      typeof lastCheckedAt === 'number' &&
+      this.now() - lastCheckedAt < opts.maxAgeMs
+    ) {
+      return this.getState();
+    }
+    if (this.checkInFlight) return this.checkInFlight;
+
+    const timeoutMs =
+      typeof opts?.timeoutMs === 'number' && opts.timeoutMs > 0
+        ? opts.timeoutMs
+        : GITHUB_API_TIMEOUT_MS;
 
     this.checkInFlight = (async () => {
-      if (!silent) {
+      if (silent) {
+        this.silentCheckDepth += 1;
+      } else {
         this.setState({ status: 'checking', error: null });
       }
 
-      if (this.platform === 'win32' && this.isPackaged) {
-        const updater = await this.ensureWindowsAutoUpdater();
-        if (updater) {
-          try {
-            const res = (await updater.checkForUpdates()) as {
-              updateInfo?: { version?: string; releaseNotes?: unknown };
-            } | null;
-            const latestVer = String(res?.updateInfo?.version ?? '').replace(/^v/i, '').trim();
-            if (latestVer && isNewerVersion(latestVer, this.state.currentVersion)) {
-              this.setState({
-                status: 'available',
-                mode: 'auto',
-                latestVersion: latestVer,
-                releaseNotes: sanitizeReleaseNotes(res?.updateInfo?.releaseNotes),
-                downloadUrl: GITHUB_RELEASES_PAGE,
-                error: null,
-                checkedAt: Date.now(),
-              });
-            } else {
-              this.setState({
-                status: silent ? 'idle' : 'up-to-date',
-                mode: 'auto',
-                latestVersion: latestVer || this.state.currentVersion,
-                error: null,
-                checkedAt: Date.now(),
-              });
+      try {
+        if (this.platform === 'win32' && this.isPackaged) {
+          const updater = await this.ensureWindowsAutoUpdater();
+          if (updater) {
+            try {
+              const res = (await updater.checkForUpdates()) as {
+                updateInfo?: { version?: string; releaseNotes?: unknown };
+              } | null;
+              const latestVer = String(res?.updateInfo?.version ?? '').replace(/^v/i, '').trim();
+              if (latestVer && isNewerVersion(latestVer, this.state.currentVersion)) {
+                this.setState({
+                  status: 'available',
+                  mode: 'auto',
+                  latestVersion: latestVer,
+                  releaseNotes: sanitizeReleaseNotes(res?.updateInfo?.releaseNotes),
+                  downloadUrl: GITHUB_RELEASES_PAGE,
+                  error: null,
+                  checkedAt: this.now(),
+                });
+              } else {
+                this.setState({
+                  status: silent ? 'idle' : 'up-to-date',
+                  mode: 'auto',
+                  latestVersion: latestVer || this.state.currentVersion,
+                  error: null,
+                  checkedAt: this.now(),
+                });
+              }
+              return this.getState();
+            } catch {
+              // Fallback cleanly to GitHub Releases REST API (e.g. if latest.yml or app-update.yml is not ready)
+              return this.checkViaGithubApi(silent, timeoutMs);
             }
-            return this.getState();
-          } catch {
-            // Fallback cleanly to GitHub Releases REST API (e.g. if latest.yml or app-update.yml is not ready)
-            return this.checkViaGithubApi(silent);
           }
         }
-      }
 
-      return this.checkViaGithubApi(silent);
+        return this.checkViaGithubApi(silent, timeoutMs);
+      } finally {
+        if (silent) {
+          this.silentCheckDepth = Math.max(0, this.silentCheckDepth - 1);
+        }
+      }
     })().finally(() => {
       this.checkInFlight = null;
     });
@@ -525,7 +586,32 @@ export class AppUpdaterController {
     return this.checkInFlight;
   }
 
+  public async refreshIfStale(
+    maxAgeMs: number = SETTINGS_REFRESH_INTERVAL_MS
+  ): Promise<AppUpdaterState> {
+    if (!this.isPackaged || this.disposed) {
+      return this.getState();
+    }
+    return this.checkForUpdates({ silent: true, maxAgeMs });
+  }
+
   public async downloadUpdate(): Promise<AppUpdaterState> {
+    if (this.state.status !== 'downloading' && this.state.status !== 'downloaded') {
+      const lastCheckedAt = this.state.checkedAt;
+      if (this.checkInFlight) {
+        await awaitWithTimeout(this.checkInFlight, DOWNLOAD_REFRESH_TIMEOUT_MS);
+      } else if (
+        this.isPackaged &&
+        (typeof lastCheckedAt !== 'number' ||
+          this.now() - lastCheckedAt >= DOWNLOAD_REFRESH_MIN_AGE_MS)
+      ) {
+        await awaitWithTimeout(
+          this.checkForUpdates({ silent: true, timeoutMs: DOWNLOAD_REFRESH_TIMEOUT_MS }),
+          DOWNLOAD_REFRESH_TIMEOUT_MS
+        );
+      }
+    }
+
     if (this.state.mode === 'auto' && this.platform === 'win32' && this.isPackaged) {
       const updater = await this.ensureWindowsAutoUpdater();
       if (updater) {

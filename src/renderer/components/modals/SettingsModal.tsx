@@ -232,6 +232,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     refreshCloudQuota();
     window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
     window.kapsula.getUpdaterState().then(setUpdaterState).catch(() => {});
+    window.kapsula
+      .checkForUpdates({ silent: true, maxAgeMs: 10 * 60 * 1000 })
+      .then(setUpdaterState)
+      .catch(() => {});
     window.kapsula.getClipperPairingInfo?.().then(setClipperPairingInfo).catch(() => {});
     window.kapsula
       .getCalendarStatus()
