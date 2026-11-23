@@ -393,10 +393,10 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
               <motion.div
                 key="secret-view"
                 data-testid="secret-view-mode"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0, 0, 0)' }}
-                exit={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, -4px, 0)' }}
-                transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 className="flex flex-col gap-4"
               >
                 {isCard ? (
@@ -673,10 +673,10 @@ export const SecretStudioSheet: React.FC<SecretStudioSheetProps> = ({
               <motion.form
                 key="secret-edit"
                 data-testid="secret-edit-mode"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0, 0, 0)' }}
-                exit={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, -4px, 0)' }}
-                transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 onSubmit={handleSave}
                 className="flex flex-col gap-4"
               >

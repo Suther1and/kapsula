@@ -1861,17 +1861,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                   <div className="p-2.5 pt-2 border-t border-[var(--k-border-hairline)] shrink-0">
                     {colQuickAddId === col.id ? (
                       <motion.form
-                        initial={
-                          prefersReduced
-                            ? { opacity: 0 }
-                            : { opacity: 0, transform: 'translate3d(0, 4px, 0)' }
-                        }
-                        animate={
-                          prefersReduced
-                            ? { opacity: 1 }
-                            : { opacity: 1, transform: 'translate3d(0, 0, 0)' }
-                        }
-                        transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                         onSubmit={(e) => void handleCreateColumnTask(e, col.id)}
                         className="flex flex-col gap-1.5"
                       >
@@ -1933,17 +1925,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
             <div ref={addColCardRef} className={addingColumn ? 'w-[272px] shrink-0' : 'shrink-0'}>
               {addingColumn ? (
                 <motion.form
-                  initial={
-                    prefersReduced
-                      ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, 4px, 0)' }
-                  }
-                  animate={
-                    prefersReduced
-                      ? { opacity: 1 }
-                      : { opacity: 1, transform: 'translate3d(0, 0, 0)' }
-                  }
-                  transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                   onSubmit={(e) => void handleAddColumn(e)}
                   className="rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] p-3.5 flex flex-col gap-3 shadow-[var(--k-shadow-card)]"
                 >

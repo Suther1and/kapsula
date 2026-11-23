@@ -6,7 +6,12 @@ export type CaptureMode = 'autopilot' | 'buffer' | 'ghost' | 'focus';
 
 export type AiProvider = 'local' | 'google_ai_studio' | 'openrouter';
 
-export type SortOrderOption = 'created_desc' | 'updated_desc' | 'title_asc' | 'media_first';
+export type SortOrderOption =
+  | 'created_desc'
+  | 'created_asc'
+  | 'updated_desc'
+  | 'title_asc'
+  | 'media_first';
 
 export type ViewLayoutMode = 'grid' | 'list' | 'board';
 

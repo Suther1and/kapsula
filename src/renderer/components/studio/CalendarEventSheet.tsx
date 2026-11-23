@@ -530,10 +530,10 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                 <motion.div
                   key="cal-view-mode"
                   data-testid="calendar-event-view-mode"
-                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0, 0, 0)' }}
-                  exit={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, -4px, 0)' }}
-                  transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                   className="flex-1 min-h-0 flex flex-col"
                 >
                   <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-5">
@@ -749,10 +749,10 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                 <motion.div
                   key="cal-edit-mode"
                   data-testid="calendar-event-edit-mode"
-                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0, 0, 0)' }}
-                  exit={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, -4px, 0)' }}
-                  transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                   className="flex-1 min-h-0 flex flex-col"
                 >
                   <form

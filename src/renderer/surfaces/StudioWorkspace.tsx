@@ -193,7 +193,13 @@ type NavView =
   | { type: 'orbit'; orbitId: string }
   | { type: 'board'; boardId: string };
 
-type SortMode = 'flow' | 'created_desc' | 'updated_desc' | 'title_asc' | 'media_first';
+type SortMode =
+  | 'flow'
+  | 'created_desc'
+  | 'created_asc'
+  | 'updated_desc'
+  | 'title_asc'
+  | 'media_first';
 type QuickDnaFilter = 'all' | 'link' | 'note' | 'voice';
 type SecretKindFilter = 'all' | 'bank_card' | 'password' | 'api_key' | 'note';
 
@@ -1411,6 +1417,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
       if (sortOrder === 'created_desc') {
         return b.createdAt - a.createdAt;
+      }
+      if (sortOrder === 'created_asc') {
+        return a.createdAt - b.createdAt;
       }
       if (sortOrder === 'updated_desc') {
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
@@ -3668,9 +3677,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             {nav.type === 'notes' ? (
               <motion.div
                 key="nav-notes"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 4px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 className="flex-1 min-h-0 h-full flex overflow-hidden"
               >
                 <Suspense fallback={null}>
@@ -3683,9 +3692,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ) : nav.type === 'media' ? (
               <motion.div
                 key="nav-media"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className="max-w-[1360px] mx-auto"
               >
@@ -3716,9 +3725,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ) : nav.type === 'tasks' ? (
               <motion.div
                 key="nav-tasks"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className={`${tasksViewMode === 'board' ? 'max-w-[1520px]' : 'max-w-[1100px]'} mx-auto transition-[max-width] duration-180`}
               >
@@ -3758,9 +3767,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ) : nav.type === 'calendar' ? (
               <motion.div
                 key="nav-calendar"
-                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className="max-w-[1260px] mx-auto"
               >
@@ -3798,9 +3807,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         ? `inline-notes-board-${nav.boardId}`
                         : 'inline-notes-flow'
                   }
-                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 4px, 0)' }}
-                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                  transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                   className="flex-1 min-h-0 flex overflow-hidden"
                 >
                   <Suspense fallback={null}>
@@ -4023,6 +4032,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         options={[
                           { value: 'flow', label: t('workspace.sort.flow') },
                           { value: 'created_desc', label: t('workspace.sort.createdDesc') },
+                          { value: 'created_asc', label: t('workspace.sort.createdAsc') },
                           { value: 'updated_desc', label: t('workspace.sort.updatedDesc') },
                           { value: 'title_asc', label: t('workspace.sort.titleAsc') },
                           { value: 'media_first', label: t('workspace.sort.mediaFirst') },
@@ -4055,9 +4065,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         ? `board:${nav.boardId}`
                         : nav.type
                   }
-                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 6px, 0)' }}
-                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
-                  transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 >
                 {loading ? (
                   <div key="feed-loading" className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">

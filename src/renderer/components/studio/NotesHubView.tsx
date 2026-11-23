@@ -32,7 +32,7 @@ import { TooltipHint } from '../ui/TooltipHint';
 import { NoteStudio } from './NoteStudio';
 
 type NoteScope = 'dedicated' | 'all_text';
-type NoteSortMode = 'updated_desc' | 'created_desc' | 'title_asc';
+type NoteSortMode = 'updated_desc' | 'created_desc' | 'created_asc' | 'title_asc';
 
 interface NotesHubViewProps {
   items: VaultItem[];
@@ -173,6 +173,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
     copy.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
       if (sortBy === 'created_desc') return b.createdAt - a.createdAt;
+      if (sortBy === 'created_asc') return a.createdAt - b.createdAt;
       if (sortBy === 'title_asc') return (a.title || '').localeCompare(b.title || '', dateLocale);
       return (b.contentUpdatedAt || b.updatedAt) - (a.contentUpdatedAt || a.updatedAt);
     });
@@ -505,6 +506,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 options={[
                   { value: 'updated_desc', label: t('notes.hub.sortRecent') },
                   { value: 'created_desc', label: t('notes.hub.sortNew') },
+                  { value: 'created_asc', label: t('notes.hub.sortOld') },
                   { value: 'title_asc', label: t('notes.hub.sortAlpha') },
                 ]}
               />
