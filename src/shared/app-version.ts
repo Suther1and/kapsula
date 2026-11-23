@@ -8,7 +8,7 @@ declare const __MOBILE_DIST_CHANNEL__: 'play' | 'direct' | undefined;
 export const APP_VERSION: string =
   typeof __APP_VERSION__ === 'string' && __APP_VERSION__.trim()
     ? __APP_VERSION__.trim()
-    : '1.0.6';
+    : '1.0.7';
 
 export type MobileDistChannel = 'play' | 'direct';
 
@@ -18,7 +18,7 @@ export const BUILD_MOBILE_DIST_CHANNEL: MobileDistChannel =
     : 'direct';
 
 export function computeVersionCodeFromSemver(version: string = APP_VERSION): number {
-  const parts = String(version || '1.0.6')
+  const parts = String(version || '1.0.7')
     .split(/[^0-9]+/)
     .filter(Boolean)
     .map((p) => Number.parseInt(p, 10) || 0);

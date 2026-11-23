@@ -6,12 +6,12 @@
 
 **Private-first workspace for notes, web captures, tasks, and encrypted secrets — synced across Windows, macOS, and Android.**
 
-[![Release v1.0.6](https://img.shields.io/badge/release-v1.0.6-d95826?style=flat-square)](https://github.com/Suther1and/kapsula/releases/tag/v1.0.6)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Android-1c1c21?style=flat-square)](#download-v106)
+[![Release v1.0.7](https://img.shields.io/badge/release-v1.0.7-d95826?style=flat-square)](https://github.com/Suther1and/kapsula/releases/tag/v1.0.7)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Android-1c1c21?style=flat-square)](#download-v107)
 [![Encryption](https://img.shields.io/badge/sync-XChaCha20--Poly1305%20E2EE-0b875b?style=flat-square)](#english)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4b5563?style=flat-square)](LICENSE)
 
-**[English](#english)** · **[Русский](#русский)** · **[Website & Video](https://suther1and.github.io/kapsula/)** · **[Download v1.0.6](#download-v106)**
+**[English](#english)** · **[Русский](#русский)** · **[Website & Video](https://suther1and.github.io/kapsula/)** · **[Download v1.0.7](#download-v107)**
 
 </div>
 
@@ -19,7 +19,7 @@
 
 ## English
 
-> Jump to: **[Installers v1.0.6](#download-v106)** · **[Переключиться на русский](#русский)**
+> Jump to: **[Installers v1.0.7](#download-v107)** · **[Переключиться на русский](#русский)**
 
 **Kapsula** keeps your notes, rich web & Telegram saves, tasks, voice memos, 2FA codes, and payment secrets inside one fast local vault. Everything works offline first with instant search (`Alt+Space` / `⌥+Space`), then optionally syncs through end-to-end encryption where your keys never leave your devices.
 
@@ -67,14 +67,14 @@
 - **Zero-Knowledge Sync:** Vault records are encrypted locally with your device-derived master key before upload. Only encrypted blobs reach Supabase Storage/Database.
 - **Bring Your Own Key (or Built-In Proxy):** Connect your OpenAI / OpenRouter / Gemini key directly on-device for summarization, sorting, and semantic Q&A — never hardcoded into builds.
 
-### Download v1.0.6
+### Download v1.0.7
 
 | Platform | Architecture / Requirement | Installer |
 | :--- | :--- | :--- |
-| **Windows** | Windows 10 / 11 (x64) | [`Kapsula-1.0.6-windows.exe`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-windows.exe) |
-| **macOS** | Apple Silicon (M1–M4) | [`Kapsula-1.0.6-mac-apple-silicon.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-mac-apple-silicon.dmg) |
-| **macOS** | Intel (x64) | [`Kapsula-1.0.6-mac-intel.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-mac-intel.dmg) |
-| **Android** | Android 8.0+ (APK) | [`Kapsula-1.0.6-android.apk`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-android.apk) |
+| **Windows** | Windows 10 / 11 (x64) | [`Kapsula-1.0.7-windows.exe`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-windows.exe) |
+| **macOS** | Apple Silicon (M1–M4) | [`Kapsula-1.0.7-mac-apple-silicon.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-mac-apple-silicon.dmg) |
+| **macOS** | Intel (x64) | [`Kapsula-1.0.7-mac-intel.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-mac-intel.dmg) |
+| **Android** | Android 8.0+ (APK) | [`Kapsula-1.0.7-android.apk`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-android.apk) |
 
 <details>
 <summary>First-run notes (Windows SmartScreen, macOS Gatekeeper, Android APK)</summary>
@@ -84,7 +84,7 @@
   ```bash
   xattr -cr /Applications/Kapsula.app
   ```
-- **Android:** Signed with the persistent Kapsula release keystore so future updates install directly over v1.0.6 without losing your local vault. Allow installing apps from your browser/files app on first run.
+- **Android:** Signed with the persistent Kapsula release keystore so future updates install directly over v1.0.7 without losing your local vault. Allow installing apps from your browser/files app on first run.
 
 </details>
 
@@ -92,7 +92,7 @@
 
 ## Русский
 
-> Перейти к: **[Скачать v1.0.6](#скачать-v106)** · **[Back to English](#english)**
+> Перейти к: **[Скачать v1.0.7](#скачать-v107)** · **[Back to English](#english)**
 
 **Kapsula** собирает заметки, посты из Телеграма и веб-ссылки, задачи, голосовые наброски, 2FA-коды и пароли в одном быстром локальном пространстве. Записи, ссылки и файлы хранятся на устройстве — поиск открывается по `Alt+Пробел` (`⌥+Пробел` на macOS). Облако включается по желанию и синхронизирует базу между компьютерами и Android в зашифрованном виде.
 
@@ -144,14 +144,14 @@
 - **Шифрование на устройстве:** заметки и файлы шифруются вашим мастер-ключом до отправки в сеть — сервер видит только нечитаемые пакеты.
 - **ИИ по выбору:** подключите свой ключ OpenAI, OpenRouter или Gemini локально, чтобы сводить несколько заметок в одну, раскладывать архив по разделам и расшифровывать голос.
 
-### Скачать v1.0.6
+### Скачать v1.0.7
 
 | Платформа | Требования | Установщик |
 | :--- | :--- | :--- |
-| **Windows** | Windows 10 / 11 (x64) | [`Kapsula-1.0.6-windows.exe`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-windows.exe) |
-| **macOS** | Apple Silicon (M1–M4) | [`Kapsula-1.0.6-mac-apple-silicon.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-mac-apple-silicon.dmg) |
-| **macOS** | Intel (x64) | [`Kapsula-1.0.6-mac-intel.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-mac-intel.dmg) |
-| **Android** | Android 8.0+ (APK) | [`Kapsula-1.0.6-android.apk`](https://github.com/Suther1and/kapsula/releases/download/v1.0.6/Kapsula-1.0.6-android.apk) |
+| **Windows** | Windows 10 / 11 (x64) | [`Kapsula-1.0.7-windows.exe`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-windows.exe) |
+| **macOS** | Apple Silicon (M1–M4) | [`Kapsula-1.0.7-mac-apple-silicon.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-mac-apple-silicon.dmg) |
+| **macOS** | Intel (x64) | [`Kapsula-1.0.7-mac-intel.dmg`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-mac-intel.dmg) |
+| **Android** | Android 8.0+ (APK) | [`Kapsula-1.0.7-android.apk`](https://github.com/Suther1and/kapsula/releases/download/v1.0.7/Kapsula-1.0.7-android.apk) |
 
 <details>
 <summary>Памятка при первом запуске (Windows, macOS, Android)</summary>
@@ -161,7 +161,7 @@
   ```bash
   xattr -cr /Applications/Kapsula.app
   ```
-- **Android:** релизный APK подписан постоянным ключом — следующие обновления установятся поверх `v1.0.6` без потери заметок. При первом запуске разрешите установку из браузера или проводника.
+- **Android:** релизный APK подписан постоянным ключом — следующие обновления установятся поверх `v1.0.7` без потери заметок. При первом запуске разрешите установку из браузера или проводника.
 
 </details>
 
