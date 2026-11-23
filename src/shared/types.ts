@@ -287,6 +287,7 @@ export interface AppearanceConfig {
   accentMode: 'preset' | 'custom';
   accentPreset: AccentPresetId;
   accentHex: string;
+  sectionAccentEnabled?: boolean;
   bgPreset: BackgroundPresetId;
   bgHue: number;
   bgTint: number;

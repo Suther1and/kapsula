@@ -15,6 +15,7 @@ import type { OrbitDef, VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, getDnaHumanLabel, getMediaUrl } from '../../lib/format';
+import { useScopedAccentStyle } from '../../lib/scoped-accent';
 import { InlineReferenceVideo } from './InlineReferenceVideo';
 import { SectionIcon } from './SectionIcon';
 import { WaveformAudioPlayer } from './WaveformAudioPlayer';
@@ -42,6 +43,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
 }) => {
   const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
+  const scopedAccentStyle = useScopedAccentStyle();
 
   const navigable = itemsList.filter((x) => x.dna !== 'secret');
   const currentIndex = item ? navigable.findIndex((x) => x.id === item.id) : -1;
@@ -88,6 +90,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
         <div
           key="quick-look-root"
           data-testid="quick-look-modal"
+          style={scopedAccentStyle}
           className="fixed inset-0 z-[105] flex items-center justify-center p-6"
         >
           <motion.div

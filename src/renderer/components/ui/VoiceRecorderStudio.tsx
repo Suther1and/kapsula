@@ -65,7 +65,8 @@ export const VoiceRecorderStudio: React.FC<VoiceRecorderStudioProps> = ({
   useEffect(() => {
     cancelledRef.current = false;
     startTsRef.current = Date.now();
-    const resolvedAccent = getComputedStyle(document.documentElement)
+    const accentSource = canvasRef.current ?? document.documentElement;
+    const resolvedAccent = getComputedStyle(accentSource)
       .getPropertyValue('--k-accent')
       .trim();
     if (resolvedAccent) accentColorRef.current = resolvedAccent;

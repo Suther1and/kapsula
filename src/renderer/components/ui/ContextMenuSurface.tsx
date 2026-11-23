@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ContextMenu } from '@base-ui/react/context-menu';
 import { CaretRight, Check } from '@phosphor-icons/react';
+import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
 export type ContextMenuEntry =
   | {
@@ -40,7 +41,10 @@ interface ContextMenuSurfaceProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-const renderEntries = (entries: ContextMenuEntry[]): React.ReactNode =>
+const renderEntries = (
+  entries: ContextMenuEntry[],
+  scopedAccentStyle?: React.CSSProperties
+): React.ReactNode =>
   entries.map((entry) => {
     if (entry.type === 'separator') {
       return (
@@ -72,8 +76,11 @@ const renderEntries = (entries: ContextMenuEntry[]): React.ReactNode =>
           </ContextMenu.SubmenuTrigger>
           <ContextMenu.Portal>
             <ContextMenu.Positioner sideOffset={4} collisionPadding={10} className="z-[135]">
-              <ContextMenu.Popup className="k-popup-motion min-w-[180px] max-w-[260px] max-h-[300px] overflow-y-auto rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none">
-                {renderEntries(entry.items)}
+              <ContextMenu.Popup
+                style={scopedAccentStyle}
+                className="k-popup-motion min-w-[180px] max-w-[260px] max-h-[300px] overflow-y-auto rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
+              >
+                {renderEntries(entry.items, scopedAccentStyle)}
               </ContextMenu.Popup>
             </ContextMenu.Positioner>
           </ContextMenu.Portal>
@@ -121,6 +128,7 @@ export const ContextMenuSurface: React.FC<ContextMenuSurfaceProps> = ({
   onOpenChange,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const scopedAccentStyle = useScopedAccentStyle();
 
   if (disabled || (Array.isArray(entries) && entries.length === 0)) {
     return <>{children}</>;
@@ -140,10 +148,11 @@ export const ContextMenuSurface: React.FC<ContextMenuSurfaceProps> = ({
       <ContextMenu.Portal>
         <ContextMenu.Positioner collisionPadding={10} className="z-[130]">
           <ContextMenu.Popup
+            style={scopedAccentStyle}
             data-testid="context-menu-popup"
             className="k-popup-motion min-w-[205px] max-w-[280px] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
           >
-            {menuOpen ? renderEntries(resolvedEntries) : null}
+            {menuOpen ? renderEntries(resolvedEntries, scopedAccentStyle) : null}
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>

@@ -3,6 +3,7 @@ import {
   DARK_BG_PRESETS,
   DEFAULT_APPEARANCE_CONFIG,
   LIGHT_BG_PRESETS,
+  computeScopedAccentTokens,
   computeThemeTokens,
   contrastRatio,
   getAccentPresets,
@@ -13,6 +14,7 @@ import {
   normalizeHex,
   type AccentPresetMeta,
   type BackgroundPresetMeta,
+  type ScopedAccentTokens,
 } from '@shared/color-engine';
 import type {
   AccentPresetId,
@@ -26,6 +28,7 @@ export {
   DARK_BG_PRESETS,
   DEFAULT_APPEARANCE_CONFIG,
   LIGHT_BG_PRESETS,
+  computeScopedAccentTokens,
   computeThemeTokens,
   contrastRatio,
   getAccentPresets,
@@ -35,7 +38,14 @@ export {
   hslToHex,
   normalizeHex,
 };
-export type { AccentPresetId, AccentPresetMeta, AppearanceConfig, BackgroundPresetId, BackgroundPresetMeta };
+export type {
+  AccentPresetId,
+  AccentPresetMeta,
+  AppearanceConfig,
+  BackgroundPresetId,
+  BackgroundPresetMeta,
+  ScopedAccentTokens,
+};
 export type UiDensity = AppearanceConfig['density'];
 
 const APPEARANCE_STORAGE_KEY = 'kapsula.ui.appearance.v8';
@@ -77,6 +87,10 @@ export function sanitizeAppearanceConfig(raw: Partial<AppearanceConfig> | null |
     ? (raw.accentPreset as AccentPresetId)
     : base.accentPreset;
   const accentHex = normalizeHex(raw.accentHex ?? '') ?? base.accentHex;
+  const sectionAccentEnabled =
+    typeof raw.sectionAccentEnabled === 'boolean'
+      ? raw.sectionAccentEnabled
+      : base.sectionAccentEnabled !== false;
   const bgPreset: BackgroundPresetId =
     typeof raw.bgPreset === 'string' && VALID_BG_PRESETS.has(raw.bgPreset as BackgroundPresetId)
       ? (raw.bgPreset as BackgroundPresetId)
@@ -90,6 +104,7 @@ export function sanitizeAppearanceConfig(raw: Partial<AppearanceConfig> | null |
     accentMode,
     accentPreset,
     accentHex,
+    sectionAccentEnabled,
     bgPreset,
     bgHue,
     bgTint,

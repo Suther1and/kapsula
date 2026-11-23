@@ -2,6 +2,7 @@ import React from 'react';
 import { Select } from '@base-ui/react/select';
 import { CaretDown, Check } from '@phosphor-icons/react';
 import { useI18n } from '@shared/i18n/react';
+import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
 export interface SelectOption {
   value: string;
@@ -34,6 +35,7 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
   'data-testid': testId,
 }) => {
   const { t } = useI18n();
+  const scopedAccentStyle = useScopedAccentStyle();
   const current = options.find((o) => o.value === value);
   const resolvedPlaceholder = placeholder ?? t('ui.selectPlaceholder');
 
@@ -75,6 +77,7 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
           className="z-[140]"
         >
           <Select.Popup
+            style={scopedAccentStyle}
             data-testid={testId ? `${testId}-popup` : 'select-menu-popup'}
             className="k-popup-motion min-w-[max(180px,var(--anchor-width))] max-w-[290px] max-h-[280px] overflow-y-auto rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
           >

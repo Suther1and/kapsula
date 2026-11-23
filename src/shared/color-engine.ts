@@ -34,6 +34,14 @@ export interface ComputedThemeTokens {
   inkOnAccent: string;
 }
 
+export interface ScopedAccentTokens {
+  cssVars: Record<string, string>;
+  accentHex: string;
+  accentHover: string;
+  inkOnAccent: string;
+  isNeutral: boolean;
+}
+
 export const ACCENT_PRESETS: AccentPresetMeta[] = [
   { id: 'terracotta', label: 'Терракота', swatchDark: '#d95826', swatchLight: '#c54914' },
   { id: 'cobalt', label: 'Кобальт', swatchDark: '#4f86f7', swatchLight: '#2f6ae0' },
@@ -174,6 +182,7 @@ export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
   accentMode: 'preset',
   accentPreset: 'terracotta',
   accentHex: '#d95826',
+  sectionAccentEnabled: true,
   bgPreset: 'obsidian',
   bgHue: 240,
   bgTint: 12,
@@ -692,6 +701,111 @@ export function computeThemeTokens(
     hudHex: surfaces.hud,
     accentHex,
     inkOnAccent,
+  };
+}
+
+/**
+ * Computes WCAG-verified accent-only CSS variable overrides for a scoped container
+ * (such as an active section or visual board), preserving genuine monochrome gray
+ * when the section color is neutral (`S <= 22%`) instead of forcing artificial tint.
+ */
+export function computeScopedAccentTokens(
+  mode: ThemeMode,
+  rawHex: string,
+  config: AppearanceConfig = DEFAULT_APPEARANCE_CONFIG
+): ScopedAccentTokens | null {
+  const parsedHex = normalizeHex(rawHex);
+  if (!parsedHex) return null;
+
+  const surfaces = resolveSurfacePalette(mode, config);
+  const rawHsl = hexToHsl(parsedHex);
+  const isNeutral = rawHsl.s <= 22;
+
+  let accentHex: string;
+  let accentHover: string;
+
+  if (isNeutral) {
+    const sat = clamp(rawHsl.s, 0, 18);
+    if (mode === 'dark') {
+      let lig = clamp(rawHsl.l, 58, 72);
+      accentHex = hslToHex(rawHsl.h, sat, lig);
+      while (
+        lig < 80 &&
+        (contrastRatio(accentHex, surfaces.canvas) < 4.8 ||
+          contrastRatio(accentHex, surfaces.surface1) < 4.6)
+      ) {
+        lig = Math.min(80, lig + 1.5);
+        accentHex = hslToHex(rawHsl.h, sat, lig);
+      }
+      accentHover = hslToHex(rawHsl.h, sat, clamp(lig + 7, 64, 86));
+    } else {
+      let lig = clamp(rawHsl.l, 32, 46);
+      accentHex = hslToHex(rawHsl.h, sat, lig);
+      while (
+        lig > 20 &&
+        (contrastRatio(accentHex, surfaces.canvas) < 4.8 ||
+          contrastRatio(accentHex, surfaces.surface1) < 4.8)
+      ) {
+        lig = Math.max(20, lig - 1.5);
+        accentHex = hslToHex(rawHsl.h, sat, lig);
+      }
+      accentHover = hslToHex(rawHsl.h, sat, clamp(lig - 6, 16, 40));
+    }
+  } else {
+    const sat = clamp(rawHsl.s, 22, 96);
+    if (mode === 'dark') {
+      let lig = clamp(rawHsl.l, 46, 72);
+      accentHex = hslToHex(rawHsl.h, sat, lig);
+      while (
+        lig < 78 &&
+        (contrastRatio(accentHex, surfaces.canvas) < 4.5 ||
+          contrastRatio(accentHex, surfaces.surface1) < 4.5)
+      ) {
+        lig = Math.min(78, lig + 1.5);
+        accentHex = hslToHex(rawHsl.h, sat, lig);
+      }
+      accentHover = hslToHex(rawHsl.h, sat, clamp(lig + 6.5, 50, 84));
+    } else {
+      let lig = clamp(rawHsl.l, 30, 52);
+      accentHex = hslToHex(rawHsl.h, sat, lig);
+      while (
+        lig > 18 &&
+        (contrastRatio(accentHex, surfaces.canvas) < 4.5 ||
+          contrastRatio(accentHex, surfaces.surface1) < 4.5)
+      ) {
+        lig = Math.max(18, lig - 1.5);
+        accentHex = hslToHex(rawHsl.h, sat, lig);
+      }
+      accentHover = hslToHex(rawHsl.h, sat, clamp(lig - 5.5, 14, 46));
+    }
+  }
+
+  const inkOnAccent = pickInkOnAccent(accentHex);
+  const accentSoftAlpha = mode === 'dark' ? (isNeutral ? 0.16 : 0.15) : isNeutral ? 0.12 : 0.11;
+  const accentGlowAlpha = mode === 'dark' ? (isNeutral ? 0.26 : 0.25) : isNeutral ? 0.2 : 0.19;
+  const focusAlpha = mode === 'dark' ? 0.64 : 0.54;
+  const sheenAlpha = mode === 'dark' ? 0.14 : 0.16;
+
+  const cssVars: Record<string, string> = {
+    '--k-accent': accentHex,
+    '--k-accent-hover': accentHover,
+    '--k-accent-soft': hexToRgba(accentHex, accentSoftAlpha),
+    '--k-accent-glow': hexToRgba(accentHex, accentGlowAlpha),
+    '--k-ink-on-accent': inkOnAccent,
+    '--k-border-focus': hexToRgba(accentHex, focusAlpha),
+    '--k-secret-sheen': hexToRgba(accentHex, sheenAlpha),
+    '--k-caret':
+      mode === 'dark'
+        ? `color-mix(in srgb, ${surfaces.inkPrimary} 58%, ${accentHex} 42%)`
+        : `color-mix(in srgb, ${accentHex} 72%, ${surfaces.inkPrimary} 28%)`,
+  };
+
+  return {
+    cssVars,
+    accentHex,
+    accentHover,
+    inkOnAccent,
+    isNeutral,
   };
 }
 

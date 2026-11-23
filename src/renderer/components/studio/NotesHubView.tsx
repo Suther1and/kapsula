@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import NumberFlow from '@number-flow/react';
 import {
@@ -36,6 +36,9 @@ type NoteSortMode = 'updated_desc' | 'created_desc' | 'title_asc';
 
 interface NotesHubViewProps {
   items: VaultItem[];
+  allItemsForLinks?: VaultItem[];
+  defaultOrbitId?: string;
+  defaultFocusBoardId?: string | null;
   orbits: OrbitDef[];
   focusBoards: FocusBoard[];
   globalSearchQuery: string;
@@ -55,15 +58,18 @@ interface NotesHubViewProps {
   onOpenShotLightbox: (item: VaultItem) => void;
 }
 
-function makeInlineDraftItem(): VaultItem {
+function makeInlineDraftItem(
+  defaultOrbitId = '',
+  defaultFocusBoardId: string | null = null
+): VaultItem {
   const now = Date.now();
   return {
     id: '__draft__',
     dna: 'note',
     subKind: null,
-    orbit: '',
+    orbit: defaultOrbitId,
     modeCaptured: 'autopilot',
-    focusBoardId: null,
+    focusBoardId: defaultFocusBoardId,
     title: '',
     body: '',
     summary: '',
@@ -109,6 +115,9 @@ function makeInlineDraftItem(): VaultItem {
 
 export const NotesHubView: React.FC<NotesHubViewProps> = ({
   items,
+  allItemsForLinks,
+  defaultOrbitId = '',
+  defaultFocusBoardId = null,
   orbits,
   focusBoards,
   globalSearchQuery,
@@ -174,12 +183,14 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   const regularNotes = useMemo(() => filteredNotes.filter((n) => !n.isPinned), [filteredNotes]);
 
   // Respond to external Ctrl+N trigger while inside Notes
+  const lastHandledDraftTriggerRef = useRef(createDraftTrigger);
   useEffect(() => {
-    if (createDraftTrigger > 0) {
-      setDraftItem(makeInlineDraftItem());
+    if (createDraftTrigger > lastHandledDraftTriggerRef.current) {
+      lastHandledDraftTriggerRef.current = createDraftTrigger;
+      setDraftItem(makeInlineDraftItem(defaultOrbitId, defaultFocusBoardId));
       setSelectedNoteId(null);
     }
-  }, [createDraftTrigger]);
+  }, [createDraftTrigger, defaultOrbitId, defaultFocusBoardId]);
 
   // Keep a valid note selected when list changes
   const activeNote = useMemo(() => {
@@ -196,7 +207,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   }, [draftItem, selectedNoteId, filteredNotes, items]);
 
   const handleStartNewDraft = () => {
-    setDraftItem(makeInlineDraftItem());
+    setDraftItem(makeInlineDraftItem(defaultOrbitId, defaultFocusBoardId));
     setSelectedNoteId(null);
   };
 
@@ -368,7 +379,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
 
             <div className="flex items-center justify-between gap-2 pt-0.5 text-[10.5px] text-[var(--k-ink-muted)]">
               <div className="flex items-center gap-1.5 min-w-0">
-                {orbit ? (
+                {!defaultOrbitId && orbit ? (
                   <span className="inline-flex items-center gap-1 max-w-[116px] truncate">
                     <span
                       className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -592,7 +603,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
             isDraft={Boolean(draftItem)}
             orbits={orbits}
             focusBoards={focusBoards}
-            allItemsForLinks={items}
+            allItemsForLinks={allItemsForLinks ?? items}
             soundEnabled={soundEnabled}
             layoutMode={listVisible ? 'center' : 'full'}
             leadingBarSlot={

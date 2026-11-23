@@ -55,6 +55,7 @@ import {
 } from '@phosphor-icons/react';
 import type { SyncStatus } from '@shared/sync-contract';
 import type {
+  AppearanceConfig,
   AppUpdaterState,
   CalendarEvent,
   FocusBoard,
@@ -152,7 +153,14 @@ function useMountOnce(active: boolean): boolean {
   }, [active, mounted]);
   return active || mounted;
 }
-import { hydrateAppearanceFromSettings } from '../lib/appearance';
+import {
+  computeScopedAccentTokens,
+  getSavedAppearance,
+  hydrateAppearanceFromSettings,
+  sanitizeAppearanceConfig,
+  subscribeAppearanceChanges,
+} from '../lib/appearance';
+import { ScopedAccentContext } from '../lib/scoped-accent';
 import {
   HIDEABLE_NAV_SECTIONS,
   HIDEABLE_SECTION_LABEL_KEYS,
@@ -483,6 +491,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [secretKindFilter, setSecretKindFilter] = useState<SecretKindFilter>('all');
   const [notesDraftTrigger, setNotesDraftTrigger] = useState(0);
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
+  const showFeedToolbar =
+    nav.type !== 'notes' &&
+    nav.type !== 'media' &&
+    nav.type !== 'tasks' &&
+    nav.type !== 'calendar' &&
+    nav.type !== 'secrets' &&
+    nav.type !== 'archive' &&
+    nav.type !== 'trash';
+  const isInlineNotesMode = showFeedToolbar && filterDnaQuick === 'note';
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -719,6 +736,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (studioOpen) {
         closeStudioCleanly();
       }
+      setFilterDnaQuick((prev) => (prev === 'note' ? 'all' : prev));
       setNav(nextNav);
     },
     [studioOpen, closeStudioCleanly]
@@ -757,9 +775,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }
   }, [settings.viewLayout]);
 
+  const [appearanceConfig, setAppearanceConfig] = useState<AppearanceConfig>(() =>
+    settings.appearance ? sanitizeAppearanceConfig(settings.appearance) : getSavedAppearance()
+  );
+
   useEffect(() => {
-    hydrateAppearanceFromSettings(settings.appearance, settings.theme);
+    const effective = hydrateAppearanceFromSettings(settings.appearance, settings.theme);
+    setAppearanceConfig(effective);
   }, [settings.appearance, settings.theme]);
+
+  useEffect(() => {
+    return subscribeAppearanceChanges(() => {
+      setAppearanceConfig(getSavedAppearance());
+    });
+  }, []);
 
   // Initial data load (active items + lightweight stats; archive/trash load on demand)
   const refreshAll = useCallback(async () => {
@@ -859,7 +888,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, []);
 
   const handleOpenBlankDraft = useCallback(() => {
-    if (nav.type === 'notes') {
+    if (nav.type === 'notes' || isInlineNotesMode) {
       setNotesDraftTrigger((n) => n + 1);
       return;
     }
@@ -868,7 +897,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     setActiveItem(makeBlankDraftItem(defaultOrbit, defaultBoard));
     setStudioDraftMode(true);
     setStudioOpen(true);
-  }, [nav]);
+  }, [nav, isInlineNotesMode]);
 
   const handleOpenBlankDraftRef = useRef(handleOpenBlankDraft);
   handleOpenBlankDraftRef.current = handleOpenBlankDraft;
@@ -1193,6 +1222,32 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return map;
   }, [orbits]);
 
+  const boardMap = useMemo(() => {
+    const map = new Map<string, FocusBoard>();
+    for (const b of boards) map.set(b.id, b);
+    return map;
+  }, [boards]);
+
+  const sectionAccentEnabled = appearanceConfig.sectionAccentEnabled !== false;
+
+  const activeScopedAccent = useMemo(() => {
+    if (!sectionAccentEnabled) return null;
+    let hex: string | null = null;
+    if (nav.type === 'orbit') {
+      hex = orbitMap.get(nav.orbitId)?.color ?? null;
+    } else if (nav.type === 'board') {
+      const board = boardMap.get(nav.boardId);
+      hex = board ? board.color || SECTION_COLOR_PALETTE[2]! : null;
+    }
+    if (!hex) return null;
+    return computeScopedAccentTokens(settings.theme, hex, appearanceConfig);
+  }, [sectionAccentEnabled, nav, orbitMap, boardMap, settings.theme, appearanceConfig]);
+
+  const workspaceAccentStyle = useMemo<React.CSSProperties | undefined>(() => {
+    if (!activeScopedAccent) return undefined;
+    return activeScopedAccent.cssVars as React.CSSProperties;
+  }, [activeScopedAccent]);
+
   const counts = useMemo(() => {
     const orbitCounts: Record<string, number> = {};
     const boardCounts: Record<string, number> = {};
@@ -1261,6 +1316,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     };
   }, [items, archivedItems, trashedItems.length, vaultStats.archivedCount, vaultStats.trashedCount, tasks, calendarEvents]);
 
+  const inlineNotesItems = useMemo(() => {
+    if (nav.type === 'orbit') {
+      return items.filter((it) => it.dna !== 'secret' && it.orbit === nav.orbitId);
+    }
+    if (nav.type === 'board') {
+      return items.filter((it) => it.dna !== 'secret' && it.focusBoardId === nav.boardId);
+    }
+    return items.filter((it) => it.dna !== 'secret');
+  }, [items, nav]);
+
+  const scopedDedicatedNotesCount = useMemo(
+    () => inlineNotesItems.filter(isDedicatedNote).length,
+    [inlineNotesItems]
+  );
+
   // Filtered & sorted items
   const visibleItems = useMemo(() => {
     const base =
@@ -1304,7 +1374,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (filterDnaQuick === 'link' && item.dna !== 'link') {
         return false;
       }
-      if (filterDnaQuick === 'note' && item.dna !== 'note') {
+      if (filterDnaQuick === 'note' && !isDedicatedNote(item)) {
         return false;
       }
       if (filterDnaQuick === 'voice' && item.dna !== 'voice') {
@@ -2151,14 +2221,154 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return selectedItems;
   }, [items, selectedItems, synthesizeSeedIds]);
 
-  const showFeedToolbar =
-    nav.type !== 'notes' &&
-    nav.type !== 'media' &&
-    nav.type !== 'tasks' &&
-    nav.type !== 'calendar' &&
-    nav.type !== 'secrets' &&
-    nav.type !== 'archive' &&
-    nav.type !== 'trash';
+  const feedQuickFilterChips: Array<{
+    id: string;
+    testId?: string;
+    label: string;
+    badge?: number;
+    active: boolean;
+    onClick: () => void;
+  }> = [
+    {
+      id: 'all',
+      label: t('workspace.filter.all'),
+      active:
+        filterDnaQuick === 'all' &&
+        !filterUnsortedOnly &&
+        !filterMediaOnly &&
+        !filterPinnedOnly,
+      onClick: () => {
+        setFilterDnaQuick('all');
+        setFilterUnsortedOnly(false);
+        setFilterMediaOnly(false);
+        setFilterPinnedOnly(false);
+      },
+    },
+    ...(nav.type === 'flow' && counts.unsorted > 0
+      ? [
+          {
+            id: 'unsorted',
+            testId: 'quick-filter-unsorted',
+            label: t('nav.noSection'),
+            badge: counts.unsorted,
+            active: filterUnsortedOnly,
+            onClick: () => {
+              if (filterDnaQuick === 'note') setFilterDnaQuick('all');
+              setFilterUnsortedOnly((v) => !v);
+            },
+          },
+        ]
+      : []),
+    {
+      id: 'link',
+      testId: 'quick-filter-link',
+      label: t('workspace.filter.links'),
+      active: filterDnaQuick === 'link',
+      onClick: () => setFilterDnaQuick((v) => (v === 'link' ? 'all' : 'link')),
+    },
+    {
+      id: 'note',
+      testId: 'quick-filter-note',
+      label: t('workspace.filter.notes'),
+      badge: scopedDedicatedNotesCount > 0 ? scopedDedicatedNotesCount : undefined,
+      active: filterDnaQuick === 'note',
+      onClick: () => {
+        if (filterDnaQuick === 'note') {
+          setFilterDnaQuick('all');
+        } else {
+          setFilterDnaQuick('note');
+          setFilterPinnedOnly(false);
+          setFilterUnsortedOnly(false);
+          setFilterMediaOnly(false);
+          setSelectedIds([]);
+        }
+      },
+    },
+    {
+      id: 'voice',
+      testId: 'quick-filter-voice',
+      label: t('workspace.filter.voice'),
+      active: filterDnaQuick === 'voice',
+      onClick: () => setFilterDnaQuick((v) => (v === 'voice' ? 'all' : 'voice')),
+    },
+    {
+      id: 'pinned',
+      testId: 'quick-filter-pinned',
+      label: t('workspace.filter.pinned'),
+      active: filterPinnedOnly,
+      onClick: () => {
+        if (filterDnaQuick === 'note') setFilterDnaQuick('all');
+        setFilterPinnedOnly((v) => !v);
+      },
+    },
+  ];
+
+  const renderQuickFilterChips = () =>
+    feedQuickFilterChips.map((chip) => (
+      <button
+        key={chip.id}
+        type="button"
+        data-testid={chip.testId}
+        onClick={chip.onClick}
+        className={`k-interactive relative h-7 px-2.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 ${
+          chip.active
+            ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
+            : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]/80 border border-transparent'
+        }`}
+      >
+        <span>{chip.label}</span>
+        {chip.badge !== undefined ? (
+          <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
+        ) : null}
+      </button>
+    ));
+
+  const renderNotesHubView = ({
+    viewKey,
+    scopedItems,
+    defaultOrbitId,
+    defaultFocusBoardId,
+  }: {
+    viewKey: string;
+    scopedItems: VaultItem[];
+    defaultOrbitId?: string;
+    defaultFocusBoardId?: string | null;
+  }) => (
+    <NotesHubView
+      key={viewKey}
+      items={scopedItems}
+      allItemsForLinks={items}
+      defaultOrbitId={defaultOrbitId}
+      defaultFocusBoardId={defaultFocusBoardId}
+      orbits={orbits}
+      focusBoards={boards}
+      globalSearchQuery={searchQuery}
+      serverSearchIds={serverSearchIds}
+      soundEnabled={soundEnabled}
+      createDraftTrigger={notesDraftTrigger}
+      onItemUpdated={(updated) => {
+        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+      }}
+      onDraftPersisted={(created) => {
+        setItems((prev) =>
+          prev.some((it) => it.id === created.id)
+            ? prev.map((it) => (it.id === created.id ? created : it))
+            : [created, ...prev]
+        );
+      }}
+      onDeleteItem={(id) => void handleDeleteItem(id)}
+      onTogglePin={(it) => void handleTogglePin(it)}
+      onToggleNotesHub={(it, inNotesHub) => void handleToggleNotesHub(it, inNotesHub)}
+      onMoveToOrbit={(id, orbId) => void handleMoveToOrbit(id, orbId)}
+      onMoveToBoard={(id, boardId) => void handleMoveToBoard(id, boardId)}
+      onDuplicateItem={(id) => void handleDuplicateItem(id)}
+      onExportMarkdown={(id) => void handleExportMarkdown(id)}
+      onOpenExternalItem={handleOpenItem}
+      onOpenShotLightbox={setLightboxItem}
+    />
+  );
+
+  const isFullHeightCanvas = nav.type === 'notes' || isInlineNotesMode;
 
   const feedBackgroundMenuEntries: ContextMenuEntry[] = useMemo(
     () => [
@@ -2535,11 +2745,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       },
                     ];
 
+                    const orbitDropStyle =
+                      isCardDropOver && sectionAccentEnabled
+                        ? (computeScopedAccentTokens(
+                            settings.theme,
+                            orbit.color,
+                            appearanceConfig
+                          )?.cssVars as React.CSSProperties | undefined)
+                        : undefined;
+
                     return (
                       <ContextMenuSurface key={orbit.id} entries={orbitMenu}>
                         <div
                           draggable
                           data-testid={`sidebar-orbit-${orbit.id}`}
+                          style={orbitDropStyle}
                           onDragStart={(e) => {
                             setDragOrbitId(orbit.id);
                             setOrbitDropTarget(null);
@@ -2630,7 +2850,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
                               aria-hidden="true"
-                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)]"
+                              style={workspaceAccentStyle}
+                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
                           <span className="relative z-10 shrink-0 w-4 h-4 mr-2 flex items-center justify-center">
@@ -2775,11 +2996,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       },
                     ];
 
+                    const boardDropStyle =
+                      isCardDropOver && sectionAccentEnabled
+                        ? (computeScopedAccentTokens(
+                            settings.theme,
+                            board.color || SECTION_COLOR_PALETTE[2]!,
+                            appearanceConfig
+                          )?.cssVars as React.CSSProperties | undefined)
+                        : undefined;
+
                     return (
                       <ContextMenuSurface key={board.id} entries={boardMenu}>
                         <div
                           draggable
                           data-testid={`sidebar-board-${board.id}`}
+                          style={boardDropStyle}
                           onDragStart={(e) => {
                             setDragBoardId(board.id);
                             setBoardDropTarget(null);
@@ -2873,7 +3104,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
                               aria-hidden="true"
-                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)]"
+                              style={workspaceAccentStyle}
+                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
                           <span className="relative z-10 shrink-0 w-4 h-4 mr-2 flex items-center justify-center">
@@ -3414,7 +3646,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </header>
 
         {/* Main Scrollable Workspace Canvas + Seamless Full-Canvas Note Document View */}
-        <div className="flex-1 min-w-0 min-h-0 relative flex flex-col overflow-hidden">
+        <ScopedAccentContext.Provider value={workspaceAccentStyle}>
+        <div
+          data-testid="workspace-accent-scope"
+          data-scoped-accent={activeScopedAccent?.accentHex ?? ''}
+          style={workspaceAccentStyle}
+          className="flex-1 min-w-0 min-h-0 relative flex flex-col overflow-hidden"
+        >
           <div
             ref={feedCanvasRef}
             aria-hidden={isNoteDocumentOpen}
@@ -3423,10 +3661,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <ContextMenuSurface
               entries={feedBackgroundMenuEntries}
               className={`flex-1 min-w-0 min-h-0 relative ${
-                nav.type === 'notes' ? 'overflow-hidden' : 'overflow-y-auto k-scroll-stable'
+                isFullHeightCanvas ? 'overflow-hidden' : 'overflow-y-auto k-scroll-stable'
               }`}
             >
-          <main className={nav.type === 'notes' ? 'h-full min-h-0 flex flex-col overflow-hidden' : 'min-h-full'}>
+          <main className={isFullHeightCanvas ? 'h-full min-h-0 flex flex-col overflow-hidden' : 'min-h-full'}>
             {nav.type === 'notes' ? (
               <motion.div
                 key="nav-notes"
@@ -3436,34 +3674,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 className="flex-1 min-h-0 h-full flex overflow-hidden"
               >
                 <Suspense fallback={null}>
-                  <NotesHubView
-                    items={items}
-                    orbits={orbits}
-                    focusBoards={boards}
-                    globalSearchQuery={searchQuery}
-                    serverSearchIds={serverSearchIds}
-                    soundEnabled={soundEnabled}
-                    createDraftTrigger={notesDraftTrigger}
-                    onItemUpdated={(updated) => {
-                      setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
-                    }}
-                    onDraftPersisted={(created) => {
-                      setItems((prev) =>
-                        prev.some((it) => it.id === created.id)
-                          ? prev.map((it) => (it.id === created.id ? created : it))
-                          : [created, ...prev]
-                      );
-                    }}
-                    onDeleteItem={(id) => void handleDeleteItem(id)}
-                    onTogglePin={(it) => void handleTogglePin(it)}
-                    onToggleNotesHub={(it, inNotesHub) => void handleToggleNotesHub(it, inNotesHub)}
-                    onMoveToOrbit={(id, orbId) => void handleMoveToOrbit(id, orbId)}
-                    onMoveToBoard={(id, boardId) => void handleMoveToBoard(id, boardId)}
-                    onDuplicateItem={(id) => void handleDuplicateItem(id)}
-                    onExportMarkdown={(id) => void handleExportMarkdown(id)}
-                    onOpenExternalItem={handleOpenItem}
-                    onOpenShotLightbox={setLightboxItem}
-                  />
+                  {renderNotesHubView({
+                    viewKey: 'nav-notes-all',
+                    scopedItems: items,
+                  })}
                 </Suspense>
               </motion.div>
             ) : nav.type === 'media' ? (
@@ -3566,6 +3780,44 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   />
                 </Suspense>
               </motion.div>
+            ) : isInlineNotesMode ? (
+              <div className="h-full min-h-0 flex flex-col overflow-hidden">
+                <div
+                  style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)' }}
+                  className="shrink-0 py-2.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)]"
+                >
+                  <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
+                    {renderQuickFilterChips()}
+                  </div>
+                </div>
+                <motion.div
+                  key={
+                    nav.type === 'orbit'
+                      ? `inline-notes-orbit-${nav.orbitId}`
+                      : nav.type === 'board'
+                        ? `inline-notes-board-${nav.boardId}`
+                        : 'inline-notes-flow'
+                  }
+                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, transform: 'translate3d(0, 4px, 0)' }}
+                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, transform: 'translate3d(0px, 0, 0)' }}
+                  transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+                  className="flex-1 min-h-0 flex overflow-hidden"
+                >
+                  <Suspense fallback={null}>
+                    {renderNotesHubView({
+                      viewKey:
+                        nav.type === 'orbit'
+                          ? `inline-notes-orbit-${nav.orbitId}`
+                          : nav.type === 'board'
+                            ? `inline-notes-board-${nav.boardId}`
+                            : 'inline-notes-flow',
+                      scopedItems: inlineNotesItems,
+                      defaultOrbitId: nav.type === 'orbit' ? nav.orbitId : undefined,
+                      defaultFocusBoardId: nav.type === 'board' ? nav.boardId : null,
+                    })}
+                  </Suspense>
+                </motion.div>
+              </div>
             ) : (
               <div
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
@@ -3733,89 +3985,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 {showFeedToolbar ? (
                   <div className="flex flex-wrap items-center justify-between gap-2.5">
                     <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
-                      {(
-                        [
-                          {
-                            id: 'all',
-                            label: t('workspace.filter.all'),
-                            active:
-                              filterDnaQuick === 'all' &&
-                              !filterUnsortedOnly &&
-                              !filterMediaOnly &&
-                              !filterPinnedOnly,
-                            onClick: () => {
-                              setFilterDnaQuick('all');
-                              setFilterUnsortedOnly(false);
-                              setFilterMediaOnly(false);
-                              setFilterPinnedOnly(false);
-                            },
-                          },
-                          ...(nav.type === 'flow' && counts.unsorted > 0
-                            ? [
-                                {
-                                  id: 'unsorted',
-                                  testId: 'quick-filter-unsorted',
-                                  label: t('nav.noSection'),
-                                  badge: counts.unsorted,
-                                  active: filterUnsortedOnly,
-                                  onClick: () => setFilterUnsortedOnly((v) => !v),
-                                },
-                              ]
-                            : []),
-                          {
-                            id: 'link',
-                            testId: 'quick-filter-link',
-                            label: t('workspace.filter.links'),
-                            active: filterDnaQuick === 'link',
-                            onClick: () => setFilterDnaQuick((v) => (v === 'link' ? 'all' : 'link')),
-                          },
-                          {
-                            id: 'note',
-                            testId: 'quick-filter-note',
-                            label: t('workspace.filter.notes'),
-                            active: filterDnaQuick === 'note',
-                            onClick: () => setFilterDnaQuick((v) => (v === 'note' ? 'all' : 'note')),
-                          },
-                          {
-                            id: 'voice',
-                            testId: 'quick-filter-voice',
-                            label: t('workspace.filter.voice'),
-                            active: filterDnaQuick === 'voice',
-                            onClick: () => setFilterDnaQuick((v) => (v === 'voice' ? 'all' : 'voice')),
-                          },
-                          {
-                            id: 'pinned',
-                            testId: 'quick-filter-pinned',
-                            label: t('workspace.filter.pinned'),
-                            active: filterPinnedOnly,
-                            onClick: () => setFilterPinnedOnly((v) => !v),
-                          },
-                        ] as Array<{
-                          id: string;
-                          testId?: string;
-                          label: string;
-                          badge?: number;
-                          active: boolean;
-                          onClick: () => void;
-                        }>
-                      ).map((chip) => (
-                        <button
-                          key={chip.id}
-                          type="button"
-                          data-testid={chip.testId}
-                          onClick={chip.onClick}
-                          className={`k-interactive relative h-7 px-2.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 ${
-                            chip.active
-                              ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
-                              : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]/80 border border-transparent'
-                          }`}
-                        >
-                          <span>{chip.label}</span>
-                          {chip.badge !== undefined ? (
-                            <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
-                          ) : null}
-                        </button>
-                      ))}
+                      {renderQuickFilterChips()}
 
                       {selectableVisibleIds.length > 0 ? (
                         <button
@@ -4519,6 +4689,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ) : null}
           </AnimatePresence>
         </div>
+        </ScopedAccentContext.Provider>
 
         {mountAssistant ? (
           <Suspense fallback={null}>
@@ -4540,9 +4711,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       </div>
 
       {/* Right Inspector Sheet for Vault Secrets only */}
-      <AnimatePresence>
-        {isSecretSheetOpen && activeItem ? (
-          <div className="fixed inset-0 z-50 flex justify-end">
+      <ScopedAccentContext.Provider value={workspaceAccentStyle}>
+        <AnimatePresence>
+          {isSecretSheetOpen && activeItem ? (
+            <div style={workspaceAccentStyle} className="fixed inset-0 z-50 flex justify-end">
             <motion.div
               key="studio-scrim"
               initial={{ opacity: 0 }}
@@ -4591,9 +4763,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 />
               </Suspense>
             </motion.div>
-          </div>
-        ) : null}
-      </AnimatePresence>
+            </div>
+          ) : null}
+        </AnimatePresence>
+      </ScopedAccentContext.Provider>
 
       {/* Section (Orbit / Board) Create & Customize Modal */}
       <ModalDialog
@@ -4735,35 +4908,37 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       </ModalDialog>
 
       {/* Modals & Drawers */}
-      {mountQuickLook ? (
-        <Suspense fallback={null}>
-          <QuickLookModal
-            item={quickLookItem}
-            itemsList={visibleItems}
-            orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
-            onSelectItem={setQuickLookItem}
-            onClose={() => setQuickLookItem(null)}
-            onEditInStudio={(item) => handleOpenItem(item)}
-            onTogglePin={(item) => void handleTogglePin(item)}
-          />
-        </Suspense>
-      ) : null}
+      <ScopedAccentContext.Provider value={workspaceAccentStyle}>
+        {mountQuickLook ? (
+          <Suspense fallback={null}>
+            <QuickLookModal
+              item={quickLookItem}
+              itemsList={visibleItems}
+              orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
+              onSelectItem={setQuickLookItem}
+              onClose={() => setQuickLookItem(null)}
+              onEditInStudio={(item) => handleOpenItem(item)}
+              onTogglePin={(item) => void handleTogglePin(item)}
+            />
+          </Suspense>
+        ) : null}
 
-      {mountLightbox ? (
-        <Suspense fallback={null}>
-          <ShotLightbox
-            item={lightboxItem}
-            onClose={() => setLightboxItem(null)}
-            onEditInStudio={(item) => {
-              setLightboxItem(null);
-              handleOpenItem(item);
-            }}
-            onSaveAnnotations={async (itemId, annotations) => {
-              await window.kapsula.updateItem(itemId, { annotations });
-            }}
-          />
-        </Suspense>
-      ) : null}
+        {mountLightbox ? (
+          <Suspense fallback={null}>
+            <ShotLightbox
+              item={lightboxItem}
+              onClose={() => setLightboxItem(null)}
+              onEditInStudio={(item) => {
+                setLightboxItem(null);
+                handleOpenItem(item);
+              }}
+              onSaveAnnotations={async (itemId, annotations) => {
+                await window.kapsula.updateItem(itemId, { annotations });
+              }}
+            />
+          </Suspense>
+        ) : null}
+      </ScopedAccentContext.Provider>
 
       {mountNewSecret ? (
         <Suspense fallback={null}>
@@ -4914,24 +5089,26 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       ) : null}
 
       {mountSynthesize ? (
-        <Suspense fallback={null}>
-          <SynthesizeNotesModal
-            open={synthesizeOpen}
-            onOpenChange={(open) => {
-              setSynthesizeOpen(open);
-              if (!open) setSynthesizeSeedIds(null);
-            }}
-            items={synthesizeItemsList}
-            orbits={orbits}
-            activeOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
-            activeFocusBoardId={nav.type === 'board' ? nav.boardId : null}
-            onCreated={(created) => {
-              setSelectedIds([]);
-              setSynthesizeSeedIds(null);
-              handleOpenItem(created);
-            }}
-          />
-        </Suspense>
+        <ScopedAccentContext.Provider value={workspaceAccentStyle}>
+          <Suspense fallback={null}>
+            <SynthesizeNotesModal
+              open={synthesizeOpen}
+              onOpenChange={(open) => {
+                setSynthesizeOpen(open);
+                if (!open) setSynthesizeSeedIds(null);
+              }}
+              items={synthesizeItemsList}
+              orbits={orbits}
+              activeOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
+              activeFocusBoardId={nav.type === 'board' ? nav.boardId : null}
+              onCreated={(created) => {
+                setSelectedIds([]);
+                setSynthesizeSeedIds(null);
+                handleOpenItem(created);
+              }}
+            />
+          </Suspense>
+        </ScopedAccentContext.Provider>
       ) : null}
 
       {mountTriage ? (
@@ -5045,7 +5222,7 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
               : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
           }
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)]"
+          className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
         />
       ) : null}
       <span className="relative z-10 shrink-0 mr-2 flex items-center text-[var(--k-accent)]/85">

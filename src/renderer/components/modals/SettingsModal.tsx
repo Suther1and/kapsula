@@ -657,6 +657,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Independent Section & Board Accent Toggle */}
+                <div className="flex items-center justify-between gap-4 pt-3 border-t border-[var(--k-border-hairline)]">
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium">
+                      {t('settings.appearance.sectionAccentTitle')}
+                    </div>
+                    <div className="text-[12px] text-[var(--k-ink-secondary)]">
+                      {t('settings.appearance.sectionAccentDesc')}
+                    </div>
+                  </div>
+                  <SwitchToggle
+                    checked={appearance.sectionAccentEnabled !== false}
+                    data-testid="section-accent-toggle"
+                    aria-label={t('settings.appearance.sectionAccentTitle')}
+                    onCheckedChange={(checked) =>
+                      applyAppearanceChange(
+                        {
+                          ...appearance,
+                          sectionAccentEnabled: checked,
+                        },
+                        { immediate: true }
+                      )
+                    }
+                  />
+                </div>
               </div>
 
               {/* Background Color Presets + Custom Background Sliders */}

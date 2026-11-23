@@ -7,6 +7,7 @@ interface SwitchToggleProps {
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   'aria-label'?: string;
+  'data-testid'?: string;
 }
 
 export const SwitchToggle: React.FC<SwitchToggleProps> = ({
@@ -14,6 +15,7 @@ export const SwitchToggle: React.FC<SwitchToggleProps> = ({
   onCheckedChange,
   disabled = false,
   'aria-label': ariaLabel,
+  'data-testid': testId,
 }) => (
   <Switch.Root
     checked={checked}
@@ -23,6 +25,7 @@ export const SwitchToggle: React.FC<SwitchToggleProps> = ({
     }}
     disabled={disabled}
     aria-label={ariaLabel}
+    data-testid={testId}
     className={`group k-focus-ring relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors duration-150 ease-[var(--k-ease-out)] cursor-pointer select-none ${
       checked
         ? 'bg-[var(--k-accent)] border-[var(--k-accent)]'

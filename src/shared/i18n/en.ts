@@ -1082,6 +1082,9 @@ export const en: TranslationDict = {
   'settings.appearance.hexAria': 'Hex color code',
   'settings.appearance.contrastTitle': 'Text contrast: {ratio}:1',
   'settings.appearance.previewButton': 'Button',
+  'settings.appearance.sectionAccentTitle': 'Match section & board color',
+  'settings.appearance.sectionAccentDesc':
+    'Inside sections and boards, the workspace adapts to their color while app chrome keeps your global accent',
   'settings.appearance.bgTitle': 'Background & surfaces',
   'settings.appearance.bgDesc': 'Pick a preset palette or tune hue, tint, and depth manually',
   'settings.appearance.resetDefault': 'Reset to default',

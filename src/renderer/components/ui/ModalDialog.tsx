@@ -2,6 +2,7 @@ import React from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { X } from '@phosphor-icons/react';
 import { useI18n } from '@shared/i18n/react';
+import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
 interface ModalDialogProps {
   open: boolean;
@@ -27,11 +28,13 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
   children,
 }) => {
   const { t } = useI18n();
+  const scopedAccentStyle = useScopedAccentStyle();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-[90] bg-[var(--k-bg-backdrop)] backdrop-blur-[6px] transition-opacity duration-160 ease-[var(--k-ease-out)] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup
+          style={scopedAccentStyle}
           className={`fixed left-1/2 ${
             topAligned
               ? 'top-[10vh] translate-y-0 data-[starting-style]:translate-y-1.5 data-[ending-style]:translate-y-1'

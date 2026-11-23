@@ -598,7 +598,7 @@ export const ru = {
   'notes.hub.showList': 'Показать список заметок',
   'notes.hub.stageTitle': 'Пространство для заметок',
   'notes.hub.stageDesc': 'Пиши структурированные документы, надиктовывай мысли голосом с расшифровкой, добавляй чек-листы и оформляй текст кнопкой «Украсить».',
-  'notes.hub.openImports': 'Открыть импорт ({count})',
+  'notes.hub.openImports': 'Все тексты ({count})',
   'note.studio.ai.heading': 'Обработка с ИИ',
   'note.studio.ai.apply': 'Применить',
   'note.studio.ai.applyCount': 'Применить ({count})',
@@ -1080,6 +1080,9 @@ export const ru = {
   'settings.appearance.hexAria': 'Код цвета HEX',
   'settings.appearance.contrastTitle': 'Контраст текста: {ratio}:1',
   'settings.appearance.previewButton': 'Кнопка',
+  'settings.appearance.sectionAccentTitle': 'Акцент по цвету раздела',
+  'settings.appearance.sectionAccentDesc':
+    'Внутри разделов и холстов рабочая область подстраивается под их цвет, а цвет приложения остаётся на каркасе',
   'settings.appearance.bgTitle': 'Цвет фона и поверхностей',
   'settings.appearance.bgDesc': 'Выбери готовую палитру или настрой тон, насыщенность и глубину вручную',
   'settings.appearance.resetDefault': 'Сбросить по умолчанию',

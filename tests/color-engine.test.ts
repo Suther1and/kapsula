@@ -4,6 +4,7 @@ import {
   DARK_BG_PRESETS,
   DEFAULT_APPEARANCE_CONFIG,
   LIGHT_BG_PRESETS,
+  computeScopedAccentTokens,
   computeThemeTokens,
   contrastRatio,
   hexToHsl,
@@ -11,6 +12,7 @@ import {
   normalizeHex,
   relativeLuminance,
 } from '@shared/color-engine';
+import { SECTION_COLOR_PALETTE } from '@shared/constants';
 import type { AppearanceConfig } from '@shared/types';
 
 const SOLID_HEX_RE = /^#[0-9a-f]{6}$/;
@@ -205,6 +207,53 @@ describe('Color Engine (WCAG contrast, full hue sweep, solid opaque HUD)', () =>
             ).toBeGreaterThanOrEqual(4.5);
           }
         }
+      }
+    }
+  });
+
+  it('computes WCAG-safe scoped section & board accents across all 28 palette colors and preserves honest neutral grays', () => {
+    expect(DEFAULT_APPEARANCE_CONFIG.sectionAccentEnabled).toBe(true);
+    expect(computeScopedAccentTokens('dark', 'not-a-hex')).toBeNull();
+
+    for (const mode of ['dark', 'light'] as const) {
+      const baseTokens = computeThemeTokens(mode, {
+        ...DEFAULT_APPEARANCE_CONFIG,
+        bgPreset: mode === 'dark' ? 'obsidian' : 'porcelain',
+      });
+
+      for (const hex of SECTION_COLOR_PALETTE) {
+        const scoped = computeScopedAccentTokens(mode, hex, {
+          ...DEFAULT_APPEARANCE_CONFIG,
+          bgPreset: mode === 'dark' ? 'obsidian' : 'porcelain',
+        });
+        expect(scoped).not.toBeNull();
+        expect(scoped!.accentHex).toMatch(SOLID_HEX_RE);
+        expect(scoped!.accentHover).toMatch(SOLID_HEX_RE);
+        expect(scoped!.cssVars['--k-accent']).toBe(scoped!.accentHex);
+        expect(scoped!.cssVars['--k-ink-on-accent']).toBe(scoped!.inkOnAccent);
+        expect(scoped!.cssVars['--k-caret']).toContain(scoped!.accentHex);
+        expect(contrastRatio(scoped!.accentHex, scoped!.inkOnAccent)).toBeGreaterThanOrEqual(3.5);
+        expect(contrastRatio(scoped!.accentHex, baseTokens.canvasHex)).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(scoped!.accentHex, baseTokens.cssVars['--k-bg-surface-1']!)
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+
+      // Neutral gray sections (#94A3B8 Cool Slate, #A8A29E Warm Stone, #808080 pure gray)
+      // stay genuinely monochrome gray instead of being artificially saturated.
+      for (const neutralHex of ['#94A3B8', '#A8A29E', '#808080']) {
+        const scoped = computeScopedAccentTokens(mode, neutralHex, {
+          ...DEFAULT_APPEARANCE_CONFIG,
+          bgPreset: mode === 'dark' ? 'obsidian' : 'porcelain',
+        });
+        expect(scoped).not.toBeNull();
+        expect(scoped!.isNeutral).toBe(true);
+        const outHsl = hexToHsl(scoped!.accentHex);
+        expect(outHsl.s).toBeLessThanOrEqual(20);
+        if (neutralHex === '#808080') {
+          expect(outHsl.s).toBe(0);
+        }
+        expect(contrastRatio(scoped!.accentHex, scoped!.inkOnAccent)).toBeGreaterThanOrEqual(4.5);
       }
     }
   });

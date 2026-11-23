@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import type { CanvasAnnotation, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { getMediaUrl } from '../../lib/format';
+import { useScopedAccentStyle } from '../../lib/scoped-accent';
 import { CopySlotPill } from '../ui/CopySlotPill';
 
 interface ShotLightboxProps {
@@ -75,6 +76,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
 }) => {
   const { t } = useI18n();
   const prefersReduced = useReducedMotion();
+  const scopedAccentStyle = useScopedAccentStyle();
   const [swatches, setSwatches] = useState<string[]>([]);
   const [annotateMode, setAnnotateMode] = useState(false);
   const [draftPin, setDraftPin] = useState<{ xPct: number; yPct: number; text: string } | null>(null);
@@ -147,6 +149,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
         <motion.div
           role="dialog"
           aria-modal="true"
+          style={scopedAccentStyle}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -209,7 +212,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   onClick={() => setAnnotateMode((v) => !v)}
                   className={`k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[12px] font-medium cursor-pointer ${
                     annotateMode
-                      ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-white'
+                      ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
                       : 'bg-white/10 border-white/15 text-white hover:bg-white/20'
                   }`}
                 >
@@ -301,7 +304,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   onClick={(e) => e.stopPropagation()}
                   className="group/pin absolute -translate-x-1/2 -translate-y-1/2 z-10"
                 >
-                  <div className="w-6 h-6 rounded-full bg-[var(--k-accent)] text-white text-[11px] font-bold flex items-center justify-center shadow-lg ring-2 ring-white">
+                  <div className="w-6 h-6 rounded-full bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[11px] font-bold flex items-center justify-center shadow-lg ring-2 ring-white">
                     {idx + 1}
                   </div>
                   <div className="hidden group-hover/pin:flex items-center gap-2 absolute left-7 top-0 min-w-[160px] max-w-[260px] rounded-xl bg-[#16161c]/95 border border-white/18 px-2.5 py-1.5 text-[12px] text-[#f4f4f6] shadow-xl">
@@ -352,7 +355,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                     <button
                       type="button"
                       onClick={() => void commitDraftPin()}
-                      className="px-2.5 py-1 rounded-md bg-[var(--k-accent)] text-[11px] font-medium text-white cursor-pointer"
+                      className="px-2.5 py-1 rounded-md bg-[var(--k-accent)] text-[11px] font-medium text-[var(--k-ink-on-accent)] cursor-pointer"
                     >
                       {t('common.save')}
                     </button>

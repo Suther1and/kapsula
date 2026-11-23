@@ -3111,6 +3111,9 @@ export class VaultRepository {
       ...(typeof parsed.accentHex === 'string' && parsed.accentHex.trim()
         ? { accentHex: parsed.accentHex.trim() }
         : {}),
+      ...(typeof parsed.sectionAccentEnabled === 'boolean'
+        ? { sectionAccentEnabled: parsed.sectionAccentEnabled }
+        : {}),
       ...(typeof parsed.bgPreset === 'string'
         ? { bgPreset: parsed.bgPreset as AppearanceConfig['bgPreset'] }
         : {}),
