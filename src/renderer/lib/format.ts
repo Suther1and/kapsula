@@ -162,6 +162,7 @@ export function stripMarkdownPreview(raw: string): string {
     )
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/(?:^|\n)\s*---+\s*(?:\n|$)/g, '\n')
+    .replace(/<hr\b[^>]*\/?>/gi, '\n')
     // Strip rich inline formatting tags (color, size, highlight, underline) to clean preview text
     .replace(/<\/?(?:span|mark|u)(?:\s+[^>]*)?>/gi, '')
     .replace(/==([^=\n]+)==/g, '$1')

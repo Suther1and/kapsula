@@ -12,7 +12,13 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
-import Highlight from '@tiptap/extension-highlight';
+import {
+  KapsulaHighlight,
+  KapsulaHorizontalRule,
+  TextColorMark,
+  TextSizeMark,
+} from '@shared/tiptap-rich-marks';
+import { EditorBlockContextMenu } from '../components/editor/EditorBlockContextMenu';
 import { toast } from 'sonner';
 import {
   ArrowSquareOut,
@@ -589,6 +595,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   const hudEditor = useEditor({
     extensions: [
       StarterKit.configure({
+        horizontalRule: false,
         link: {
           openOnClick: false,
           autolink: true,
@@ -597,13 +604,16 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
           },
         },
       }),
+      KapsulaHorizontalRule,
       Markdown,
       TaskList,
       TaskItem.configure({
         nested: true,
       }),
       Typography,
-      Highlight,
+      KapsulaHighlight,
+      TextColorMark,
+      TextSizeMark,
       Placeholder.configure({
         placeholder: () => hudPlaceholderRef.current,
       }),
@@ -2038,6 +2048,19 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                           <div ref={setHudEditorHostEl} className="relative flex-1 min-h-0">
                             <EditorContent editor={hudEditor} className="min-h-full" />
                             <ProseCaretOverlay editor={hudEditor} containerEl={hudEditorHostEl} />
+                            <EditorBlockContextMenu
+                              editor={hudEditor}
+                              containerEl={hudEditorHostEl}
+                              onOpenImageLightbox={(src, alt) =>
+                                openHudLightboxRef.current({
+                                  src,
+                                  alt,
+                                  localFilename: src.startsWith('kapsula-media://local/')
+                                    ? src.slice('kapsula-media://local/'.length)
+                                    : null,
+                                })
+                              }
+                            />
                           </div>
                         </div>
 

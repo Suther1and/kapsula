@@ -8,6 +8,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
 import {
   KapsulaHighlight,
+  KapsulaHorizontalRule,
   TEXT_COLOR_SWATCHES,
   TextColorMark,
   TextSizeMark,
@@ -487,6 +488,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   const extensions = useMemo(
     () => [
       StarterKit.configure({
+        horizontalRule: false,
         link: {
           openOnClick: false,
           autolink: true,
@@ -495,6 +497,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
           },
         },
       }),
+      KapsulaHorizontalRule,
       Markdown,
       TaskList,
       TaskItem.configure({ nested: true }),

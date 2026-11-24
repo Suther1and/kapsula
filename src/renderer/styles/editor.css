@@ -210,10 +210,28 @@
 }
 
 .k-prose mark {
-  background: color-mix(in srgb, var(--k-accent) 22%, transparent);
-  color: var(--k-ink-primary);
-  border-radius: 4px;
-  padding: 0.06em 0.25em;
+  background: color-mix(in srgb, var(--k-accent) 18%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0.03em 0.12em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.k-prose ::selection {
+  background: color-mix(in srgb, var(--k-accent) 16%, transparent);
+  color: inherit;
+}
+
+:root[data-theme="light"] .k-prose ::selection {
+  background: color-mix(in srgb, var(--k-accent) 14%, transparent);
+  color: inherit;
+}
+
+.k-prose mark::selection,
+.k-prose mark *::selection {
+  background: var(--k-mark-selection-bg);
+  color: inherit;
 }
 
 .k-prose u {
@@ -271,9 +289,86 @@
 }
 
 .k-prose hr {
+  position: relative;
   border: none;
-  border-top: 1px solid var(--k-border-hairline);
-  margin: 1.25em 0;
+  height: 22px;
+  margin: 0.65em 0;
+  cursor: pointer;
+  border-radius: 6px;
+  background: transparent;
+  transition: background-color 120ms var(--k-ease-out);
+}
+
+.k-prose hr::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--k-border-strong);
+  transition: background-color 120ms var(--k-ease-out), opacity 120ms var(--k-ease-out);
+}
+
+.k-prose hr[data-k-hr="dashed"]::before {
+  background: transparent;
+  height: 0;
+  border-top: 1.5px dashed var(--k-border-strong);
+}
+
+.k-prose hr[data-k-hr="dots"]::before {
+  display: none;
+}
+
+.k-prose hr[data-k-hr="dots"]::after {
+  content: "•   •   •";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  color: var(--k-ink-muted);
+}
+
+.k-prose hr[data-k-hr="fade"]::before {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--k-border-strong) 20%,
+    var(--k-border-strong) 80%,
+    transparent 100%
+  );
+}
+
+.k-prose hr[data-k-hr="accent"]::before {
+  left: 50%;
+  right: auto;
+  width: 72px;
+  height: 2px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: var(--k-accent);
+  opacity: 0.78;
+}
+
+.k-prose hr:hover {
+  background: color-mix(in srgb, var(--k-bg-surface-2) 72%, transparent);
+}
+
+.k-prose hr.ProseMirror-selectednode,
+.k-prose hr[data-k-ctx-target="true"] {
+  background: var(--k-accent-soft);
+  outline: 1px solid color-mix(in srgb, var(--k-accent) 42%, transparent);
+}
+
+.k-prose [data-k-ctx-target="true"]:not(hr) {
+  outline: 1.5px solid color-mix(in srgb, var(--k-accent) 62%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
 }
 
 /* Lowlight / highlight.js subtle editorial palette */

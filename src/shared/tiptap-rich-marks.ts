@@ -7,6 +7,7 @@ import {
   type RenderContext,
 } from '@tiptap/core';
 import Highlight from '@tiptap/extension-highlight';
+import HorizontalRule from '@tiptap/extension-horizontal-rule';
 
 export type TextColorKey =
   | 'accent'
@@ -347,3 +348,98 @@ export const KapsulaHighlight = Highlight.extend({
     return `==${inner}==`;
   },
 }).configure({ multicolor: true });
+
+export type HorizontalRuleVariant = 'solid' | 'dashed' | 'dots' | 'fade' | 'accent';
+
+export const HR_VARIANTS: ReadonlyArray<{
+  key: HorizontalRuleVariant;
+  labelRu: string;
+  labelEn: string;
+}> = [
+  { key: 'solid', labelRu: 'Тонкая линия', labelEn: 'Thin line' },
+  { key: 'dashed', labelRu: 'Пунктир', labelEn: 'Dashed' },
+  { key: 'dots', labelRu: 'Три точки', labelEn: 'Three dots' },
+  { key: 'fade', labelRu: 'Мягкая линия', labelEn: 'Soft fade' },
+  { key: 'accent', labelRu: 'Акцентная черта', labelEn: 'Accent bar' },
+];
+
+const VALID_HR_VARIANTS = new Set<string>(HR_VARIANTS.map((v) => v.key));
+const HTML_HR_TOKEN_RE = /^<hr(?:\s+data-k-hr="(solid|dashed|dots|fade|accent)")?\s*\/?>[ \t]*(?:\r?\n|$)/i;
+
+export function sanitizeHrVariant(raw: unknown): HorizontalRuleVariant {
+  if (typeof raw === 'string') {
+    const clean = raw.trim().toLowerCase();
+    if (VALID_HR_VARIANTS.has(clean)) return clean as HorizontalRuleVariant;
+  }
+  return 'solid';
+}
+
+/**
+ * Styled horizontal rule supporting 5 visual variants with lossless Markdown round-trip:
+ * default `solid` serializes as standard `---`; custom variants serialize as `<hr data-k-hr="..." />`.
+ */
+export const KapsulaHorizontalRule = HorizontalRule.extend({
+  addAttributes() {
+    return {
+      variant: {
+        default: 'solid',
+        parseHTML: (el) => {
+          if (typeof el === 'string') return 'solid';
+          return sanitizeHrVariant(el.getAttribute('data-k-hr'));
+        },
+        renderHTML: (attrs) => {
+          const variant = sanitizeHrVariant(attrs.variant);
+          if (variant === 'solid') return {};
+          return { 'data-k-hr': variant };
+        },
+      },
+    };
+  },
+
+  markdownTokenName: 'hr',
+
+  markdownTokenizer: {
+    name: 'hr',
+    level: 'block',
+    start: (src: string) => {
+      const htmlIdx = src.indexOf('<hr');
+      const dashMatch = /(?:^|\n)[ \t]*(?:---+|\*\*\*+|___+)[ \t]*(?:\r?\n|$)/.exec(src);
+      const dashIdx = dashMatch ? dashMatch.index + (dashMatch[0].startsWith('\n') ? 1 : 0) : -1;
+      if (htmlIdx === -1) return dashIdx;
+      if (dashIdx === -1) return htmlIdx;
+      return Math.min(htmlIdx, dashIdx);
+    },
+    tokenize(src: string) {
+      const htmlMatch = HTML_HR_TOKEN_RE.exec(src);
+      if (htmlMatch) {
+        return {
+          type: 'hr',
+          raw: htmlMatch[0],
+          variant: sanitizeHrVariant(htmlMatch[1]),
+        };
+      }
+      const mdMatch = /^(?:[ \t]*)(?:(?:-{3,}|\*{3,}|_{3,})[ \t]*)(?:\r?\n|$)/.exec(src);
+      if (mdMatch) {
+        return {
+          type: 'hr',
+          raw: mdMatch[0],
+          variant: 'solid',
+        };
+      }
+      return undefined;
+    },
+  },
+
+  parseMarkdown(token: MarkdownToken, helpers: { createNode: (type: string, attrs?: Record<string, unknown>) => JSONContent }) {
+    const variant = sanitizeHrVariant((token as MarkdownToken & { variant?: string }).variant);
+    return helpers.createNode('horizontalRule', variant !== 'solid' ? { variant } : undefined);
+  },
+
+  renderMarkdown(node: JSONContent) {
+    const variant = sanitizeHrVariant(node.attrs?.variant);
+    if (variant !== 'solid') {
+      return `<hr data-k-hr="${variant}" />`;
+    }
+    return '---';
+  },
+});

@@ -187,6 +187,7 @@ import {
   type PrimaryNavSection,
 } from '../lib/sidebar-prefs';
 import { formatRelativeDate, friendlyErrorMessage, stripMarkdownPreview } from '../lib/format';
+import { usePointerSortableList } from '../lib/use-pointer-sortable';
 
 interface StudioWorkspaceProps {
   settings: SettingsState;
@@ -225,33 +226,8 @@ interface SectionEditorState {
   icon: string;
 }
 
-type DropPosition = 'before' | 'after';
-type SidebarDropTarget<T extends string = string> = { id: T; position: DropPosition };
-
 function hasDragType(e: React.DragEvent, type: string): boolean {
   return Array.from(e.dataTransfer?.types ?? []).includes(type);
-}
-
-function computeDropPosition(e: React.DragEvent<HTMLElement>): DropPosition {
-  const rect = e.currentTarget.getBoundingClientRect();
-  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-}
-
-function reorderByDrop<T>(
-  list: readonly T[],
-  fromIdx: number,
-  toIdx: number,
-  position: DropPosition
-): T[] | null {
-  if (fromIdx === -1 || toIdx === -1) return null;
-  const rawInsert = position === 'before' ? toIdx : toIdx + 1;
-  const insertIdx = fromIdx < rawInsert ? rawInsert - 1 : rawInsert;
-  if (insertIdx === fromIdx) return null;
-  const next = [...list];
-  const [moved] = next.splice(fromIdx, 1);
-  if (moved === undefined) return null;
-  next.splice(insertIdx, 0, moved);
-  return next;
 }
 
 function isSameNav(a: NavView, b: NavView): boolean {
@@ -832,37 +808,62 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     [primaryNavOrder, visiblePrimaryNavSections]
   );
 
-  const handleReorderPrimaryNav = useCallback(
-    (fromId: PrimaryNavSection, toId: PrimaryNavSection, position: DropPosition) => {
-      if (fromId === toId) return;
-      const next = reorderByDrop(
-        primaryNavOrder,
-        primaryNavOrder.indexOf(fromId),
-        primaryNavOrder.indexOf(toId),
-        position
-      );
-      if (!next) return;
-      setPrimaryNavOrder(writePrimaryNavOrder(next));
+  const handleCommitPrimaryNavOrder = useCallback(
+    (nextVisible: PrimaryNavSection[]) => {
+      const visibleSet = new Set(nextVisible);
+      let vi = 0;
+      const merged = primaryNavOrder.map((sec) => (visibleSet.has(sec) ? nextVisible[vi++]! : sec));
+      setPrimaryNavOrder(writePrimaryNavOrder(merged));
     },
     [primaryNavOrder]
   );
 
-  const [dragPrimaryNavId, setDragPrimaryNavId] = useState<PrimaryNavSection | null>(null);
-  const [primaryNavDropTarget, setPrimaryNavDropTarget] =
-    useState<SidebarDropTarget<PrimaryNavSection> | null>(null);
-  const [dragOrbitId, setDragOrbitId] = useState<string | null>(null);
-  const [orbitDropTarget, setOrbitDropTarget] = useState<SidebarDropTarget | null>(null);
-  const [dragBoardId, setDragBoardId] = useState<string | null>(null);
-  const [boardDropTarget, setBoardDropTarget] = useState<SidebarDropTarget | null>(null);
+  const handleCommitOrbitOrder = useCallback(
+    (nextIds: string[]) => {
+      const byId = new Map(orbits.map((o) => [o.id, o]));
+      const next = nextIds.map((id) => byId.get(id)).filter((o): o is OrbitDef => Boolean(o));
+      if (next.length !== orbits.length) return;
+      setOrbits(next);
+      void window.kapsula.reorderOrbits(next.map((o) => o.id));
+    },
+    [orbits]
+  );
+
+  const handleCommitBoardOrder = useCallback(
+    (nextIds: string[]) => {
+      const byId = new Map(boards.map((b) => [b.id, b]));
+      const next = nextIds.map((id) => byId.get(id)).filter((b): b is FocusBoard => Boolean(b));
+      if (next.length !== boards.length) return;
+      setBoards(next);
+      void window.kapsula.reorderFocusBoards(next.map((b) => b.id));
+    },
+    [boards]
+  );
+
+  const orbitIds = useMemo(() => orbits.map((o) => o.id), [orbits]);
+  const boardIds = useMemo(() => boards.map((b) => b.id), [boards]);
+
+  const primaryNavSortable = usePointerSortableList<PrimaryNavSection>({
+    ids: visiblePrimaryNavSections,
+    onCommit: handleCommitPrimaryNavOrder,
+    prefersReducedMotion: Boolean(prefersReduced),
+  });
+
+  const orbitSortable = usePointerSortableList<string>({
+    ids: orbitIds,
+    onCommit: handleCommitOrbitOrder,
+    prefersReducedMotion: Boolean(prefersReduced),
+  });
+
+  const boardSortable = usePointerSortableList<string>({
+    ids: boardIds,
+    onCommit: handleCommitBoardOrder,
+    prefersReducedMotion: Boolean(prefersReduced),
+  });
+
   const [cardDropTargetId, setCardDropTargetId] = useState<string | null>(null);
 
   const clearSidebarDragStates = useCallback(() => {
-    setDragPrimaryNavId(null);
-    setPrimaryNavDropTarget(null);
-    setDragOrbitId(null);
-    setOrbitDropTarget(null);
-    setDragBoardId(null);
-    setBoardDropTarget(null);
     setCardDropTargetId(null);
   }, []);
 
@@ -2632,12 +2633,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   ];
 
   const renderQuickFilterChips = () => (
-    <div className="inline-flex flex-wrap items-center gap-1.5">
+    <div className="inline-flex flex-nowrap items-center gap-1">
       {/* Primary View-Mode Switcher Capsule: Лента | Заметки | Задачи */}
       <div
         role="tablist"
         aria-label={t('workspace.filter.feed')}
-        className="inline-flex items-center p-[2.5px] rounded-full bg-[var(--k-bg-surface-2)]/90 border border-[var(--k-border-hairline)] shrink-0"
+        className="inline-flex items-center p-[2px] rounded-full bg-[var(--k-bg-surface-2)]/90 border border-[var(--k-border-hairline)] shrink-0"
       >
         {primaryModeTabs.map((tab) => {
           const isActive = activePrimaryMode === tab.id;
@@ -2650,7 +2651,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               data-no-press-scale="true"
               data-testid={tab.testId}
               onClick={tab.onClick}
-              className={`relative h-[25px] px-2 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors duration-150 ${
+              className={`relative h-[25px] px-1.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors duration-150 ${
                 isActive
                   ? 'text-[var(--k-accent)]'
                   : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
@@ -2673,7 +2674,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 <span>{tab.label}</span>
                 {tab.badge !== undefined ? (
                   <span
-                    className={`k-tabular text-[10px] px-1.5 py-[0.5px] rounded-full ${
+                    className={`k-tabular text-[10px] px-1 py-[0.5px] rounded-full ${
                       isActive
                         ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                         : 'bg-[var(--k-bg-surface-3)]/80 text-[var(--k-ink-muted)]'
@@ -2698,7 +2699,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             hover
             exitDelay={0}
             className="rounded-full bg-[var(--k-bg-surface-2)]"
-            containerClassName="inline-flex flex-wrap items-center gap-0.5"
+            containerClassName="inline-flex flex-nowrap items-center gap-0.5"
             transition={
               prefersReduced
                 ? { duration: 0 }
@@ -2712,7 +2713,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   data-no-press-scale="true"
                   data-testid={chip.testId}
                   onClick={chip.onClick}
-                  className={`k-interactive relative z-10 h-7 px-2 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                  className={`k-interactive relative z-10 h-7 px-1.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
                     chip.active
                       ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
                       : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] border border-transparent'
@@ -3009,98 +3010,58 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   );
                 }
 
-                const dropPosition =
-                  primaryNavDropTarget?.id === sec && dragPrimaryNavId !== sec
-                    ? primaryNavDropTarget.position
-                    : null;
                 const isCardDropOver = sec === 'notes' && cardDropTargetId === 'nav-notes';
+                const isDraggingNav = primaryNavSortable.draggingId === sec;
 
                 const active = isSameNav(nav, navMeta.navView);
                 return (
-                  <ContextMenuSurface key={sec} entries={navMenu}>
-                    <div className="relative z-[1]">
-                      <SidebarNavButton
-                        active={active}
+                  <div
+                    key={sec}
+                    ref={primaryNavSortable.registerItemRef(sec)}
+                    style={primaryNavSortable.getItemDragStyle(sec, visIdx)}
+                  >
+                    <ContextMenuSurface entries={navMenu}>
+                      <div className="relative z-[1]">
+                        <SidebarNavButton
+                          active={active}
                           compactRail={sidebarRail}
                           icon={navMeta.icon}
                           label={navMeta.label}
                           count={navMeta.count}
                           testId={navMeta.testId}
-                          draggable
-                          isDragging={dragPrimaryNavId === sec}
+                          isDragging={isDraggingNav}
                           isCardDropOver={isCardDropOver}
-                          dropPosition={dropPosition}
-                          onClick={() => navigateTo(navMeta.navView)}
-                          onDragStart={(e) => {
-                            setDragPrimaryNavId(sec);
-                            setPrimaryNavDropTarget(null);
-                            e.dataTransfer.setData('text/kapsula-sidebar-nav', sec);
-                            e.dataTransfer.effectAllowed = 'move';
+                          onPointerDown={(e) => primaryNavSortable.handlePointerDown(sec, e)}
+                          onClick={() => {
+                            if (primaryNavSortable.shouldSuppressClick()) return;
+                            navigateTo(navMeta.navView);
                           }}
                           onDragOver={(e) => {
-                            const isCardDrag =
-                              !dragPrimaryNavId &&
-                              !dragOrbitId &&
-                              !dragBoardId &&
-                              hasDragType(e, 'text/kapsula-item-id');
-                            if (sec === 'notes' && isCardDrag) {
-                              if (!hasDragType(e, 'text/kapsula-item-non-note')) {
-                                e.preventDefault();
-                                e.dataTransfer.dropEffect = 'move';
-                                setCardDropTargetId('nav-notes');
-                                setPrimaryNavDropTarget(null);
-                              }
-                              return;
-                            }
-                            const isNavDrag =
-                              Boolean(dragPrimaryNavId) || hasDragType(e, 'text/kapsula-sidebar-nav');
-                            if (!isNavDrag || isCardDrag) return;
+                            if (sec !== 'notes') return;
+                            if (!hasDragType(e, 'text/kapsula-item-id')) return;
+                            if (hasDragType(e, 'text/kapsula-item-non-note')) return;
                             e.preventDefault();
                             e.dataTransfer.dropEffect = 'move';
-                            if (dragPrimaryNavId === sec) {
-                              setPrimaryNavDropTarget(null);
-                              return;
-                            }
-                            const position = computeDropPosition(e);
-                            setPrimaryNavDropTarget((prev) =>
-                              prev?.id === sec && prev.position === position
-                                ? prev
-                                : { id: sec, position }
-                            );
-                            setCardDropTargetId(null);
+                            setCardDropTargetId('nav-notes');
                           }}
                           onDragLeave={(e) => {
+                            if (sec !== 'notes') return;
                             const nextTarget = e.relatedTarget as Node | null;
                             if (nextTarget && e.currentTarget.contains(nextTarget)) return;
-                            setPrimaryNavDropTarget((prev) => (prev?.id === sec ? null : prev));
-                            if (sec === 'notes') {
-                              setCardDropTargetId((prev) => (prev === 'nav-notes' ? null : prev));
-                            }
+                            setCardDropTargetId((prev) => (prev === 'nav-notes' ? null : prev));
                           }}
                           onDrop={(e) => {
-                            e.preventDefault();
+                            if (sec !== 'notes') return;
                             const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
-                            if (sec === 'notes' && droppedItemId && !dragPrimaryNavId) {
-                              clearSidebarDragStates();
-                              void handleDropItemOnNotes(droppedItemId);
-                              return;
-                            }
-                            const fromId = (dragPrimaryNavId ||
-                              e.dataTransfer.getData('text/kapsula-sidebar-nav')) as
-                              | PrimaryNavSection
-                              | '';
-                            const pos =
-                              primaryNavDropTarget?.id === sec
-                                ? primaryNavDropTarget.position
-                                : computeDropPosition(e);
+                            if (!droppedItemId) return;
+                            e.preventDefault();
                             clearSidebarDragStates();
-                            if (!fromId || fromId === sec) return;
-                            handleReorderPrimaryNav(fromId, sec, pos);
+                            void handleDropItemOnNotes(droppedItemId);
                           }}
-                          onDragEnd={clearSidebarDragStates}
                         />
-                    </div>
-                  </ContextMenuSurface>
+                      </div>
+                    </ContextMenuSurface>
+                  </div>
                 );
               })}
             </div>
@@ -3156,10 +3117,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <div className="flex flex-col gap-1">
                   {orbits.map((orbit, idx) => {
                     const active = nav.type === 'orbit' && nav.orbitId === orbit.id;
-                    const dropPosition =
-                      orbitDropTarget?.id === orbit.id && dragOrbitId !== orbit.id
-                        ? orbitDropTarget.position
-                        : null;
+                    const isDraggingOrbit = orbitSortable.draggingId === orbit.id;
                     const isCardDropOver = cardDropTargetId === `orbit:${orbit.id}`;
                     const orbitMenu: ContextMenuEntry[] = [
                       {
@@ -3205,167 +3163,131 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       },
                     ];
 
-                    const orbitDropStyle =
-                      isCardDropOver && sectionAccentEnabled
+                    const orbitScopedStyle =
+                      (active && workspaceAccentStyle) ||
+                      (isCardDropOver && sectionAccentEnabled
                         ? (computeScopedAccentTokens(
                             settings.theme,
                             orbit.color,
                             appearanceConfig
                           )?.cssVars as React.CSSProperties | undefined)
-                        : undefined;
+                        : undefined);
 
                     return (
-                      <ContextMenuSurface key={orbit.id} entries={orbitMenu}>
-                        <div
-                          draggable
-                          data-testid={`sidebar-orbit-${orbit.id}`}
-                          style={orbitDropStyle}
-                          onDragStart={(e) => {
-                            setDragOrbitId(orbit.id);
-                            setOrbitDropTarget(null);
-                            e.dataTransfer.setData('text/kapsula-sidebar-orbit', orbit.id);
-                            e.dataTransfer.effectAllowed = 'move';
-                          }}
-                          onDragOver={(e) => {
-                            const isCardDrag =
-                              !dragOrbitId &&
-                              !dragPrimaryNavId &&
-                              !dragBoardId &&
-                              hasDragType(e, 'text/kapsula-item-id');
-                            if (isCardDrag) {
+                      <div
+                        key={orbit.id}
+                        ref={orbitSortable.registerItemRef(orbit.id)}
+                        style={orbitSortable.getItemDragStyle(orbit.id, idx)}
+                      >
+                        <ContextMenuSurface entries={orbitMenu}>
+                          <div
+                            data-testid={`sidebar-orbit-${orbit.id}`}
+                            data-dragging={isDraggingOrbit ? 'true' : undefined}
+                            style={orbitScopedStyle}
+                            onPointerDown={(e) => orbitSortable.handlePointerDown(orbit.id, e)}
+                            onDragOver={(e) => {
+                              if (!hasDragType(e, 'text/kapsula-item-id')) return;
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
                               setCardDropTargetId(`orbit:${orbit.id}`);
-                              setOrbitDropTarget(null);
-                              return;
-                            }
-                            const isOrbitDrag =
-                              Boolean(dragOrbitId) || hasDragType(e, 'text/kapsula-sidebar-orbit');
-                            if (!isOrbitDrag) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = 'move';
-                            if (dragOrbitId === orbit.id) {
-                              setOrbitDropTarget(null);
-                              return;
-                            }
-                            const position = computeDropPosition(e);
-                            setOrbitDropTarget((prev) =>
-                              prev?.id === orbit.id && prev.position === position
-                                ? prev
-                                : { id: orbit.id, position }
-                            );
-                            setCardDropTargetId(null);
-                          }}
-                          onDragLeave={(e) => {
-                            const nextTarget = e.relatedTarget as Node | null;
-                            if (nextTarget && e.currentTarget.contains(nextTarget)) return;
-                            setOrbitDropTarget((prev) => (prev?.id === orbit.id ? null : prev));
-                            setCardDropTargetId((prev) =>
-                              prev === `orbit:${orbit.id}` ? null : prev
-                            );
-                          }}
-                          onDrop={async (e) => {
-                            e.preventDefault();
-                            const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
-                            if (droppedItemId && !dragOrbitId) {
+                            }}
+                            onDragLeave={(e) => {
+                              const nextTarget = e.relatedTarget as Node | null;
+                              if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                              setCardDropTargetId((prev) =>
+                                prev === `orbit:${orbit.id}` ? null : prev
+                              );
+                            }}
+                            onDrop={async (e) => {
+                              const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
+                              if (!droppedItemId) return;
+                              e.preventDefault();
                               clearSidebarDragStates();
                               await handleMoveToOrbit(droppedItemId, orbit.id);
-                              return;
-                            }
-                            const fromId =
-                              dragOrbitId || e.dataTransfer.getData('text/kapsula-sidebar-orbit');
-                            const pos =
-                              orbitDropTarget?.id === orbit.id
-                                ? orbitDropTarget.position
-                                : computeDropPosition(e);
-                            clearSidebarDragStates();
-                            if (!fromId || fromId === orbit.id) return;
-                            const next = reorderByDrop(
-                              orbits,
-                              orbits.findIndex((o) => o.id === fromId),
-                              orbits.findIndex((o) => o.id === orbit.id),
-                              pos
-                            );
-                            if (!next) return;
-                            setOrbits(next);
-                            await window.kapsula.reorderOrbits(next.map((o) => o.id));
-                          }}
-                          onDragEnd={clearSidebarDragStates}
-                          onClick={() => navigateTo({ type: 'orbit', orbitId: orbit.id })}
-                          title={sidebarRail ? orbit.name : undefined}
-                          className={`k-interactive group relative z-[1] flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
-                            active
-                              ? 'text-[var(--k-ink-primary)] font-medium'
-                              : isCardDropOver
-                                ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-                                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
-                          } ${dragOrbitId === orbit.id ? 'opacity-45' : ''}`}
-                        >
-                          {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
-                          {active ? (
-                            <motion.span
-                              layoutId="sidebar-active-pill"
-                              transition={
-                                prefersReduced || sidebarDragging
-                                  ? { duration: 0 }
-                                  : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
-                              }
-                              aria-hidden="true"
-                              style={{ ...workspaceAccentStyle, borderRadius: 8 }}
-                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
-                            />
-                          ) : null}
-                          <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
-                            <SectionIcon
-                              name={orbit.icon || 'Folder'}
-                              color={orbit.color}
-                              className="w-[16px] h-[16px]"
-                            />
-                          </span>
-                          <span
-                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                            }`}
-                          >
-                            {orbit.name}
-                          </span>
-
-                          <button
-                            type="button"
-                            tabIndex={sidebarRail ? -1 : 0}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSectionEditor({
-                                kind: 'orbit',
-                                mode: 'edit',
-                                id: orbit.id,
-                                name: orbit.name,
-                                description: orbit.description ?? '',
-                                color: orbit.color,
-                                icon: orbit.icon || 'Folder',
-                              });
                             }}
-                            className={`relative z-10 w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-160 shrink-0 ${
-                              sidebarRail
-                                ? 'opacity-0 pointer-events-none'
-                                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                            onClick={() => {
+                              if (orbitSortable.shouldSuppressClick()) return;
+                              navigateTo({ type: 'orbit', orbitId: orbit.id });
+                            }}
+                            title={sidebarRail ? orbit.name : undefined}
+                            className={`group relative z-[1] flex items-center h-8 px-[8px] rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                              isDraggingOrbit
+                                ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-medium shadow-[0_10px_26px_-6px_rgba(0,0,0,0.48)] ring-1 ring-[var(--k-border-strong)] cursor-grabbing'
+                                : active
+                                  ? 'bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)] font-medium cursor-pointer'
+                                  : isCardDropOver
+                                    ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)] cursor-pointer'
+                                    : orbitSortable.isAnyDragging
+                                      ? 'text-[var(--k-ink-secondary)] cursor-grabbing'
+                                      : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer'
                             }`}
-                            aria-label={t('nav.configureSection')}
                           >
-                            <PencilSimple size={12} />
-                          </button>
+                            <span
+                              aria-hidden="true"
+                              className={`pointer-events-none absolute left-[3px] top-1/2 -translate-y-1/2 w-[2.5px] rounded-full bg-[var(--k-accent)] transition-[height,opacity] duration-150 ease-[var(--k-ease-out)] ${
+                                active && !isDraggingOrbit ? 'h-[14px] opacity-100' : 'h-0 opacity-0'
+                              }`}
+                            />
+                            <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
+                              <SectionIcon
+                                name={orbit.icon || 'Folder'}
+                                color={orbit.color}
+                                className="w-[16px] h-[16px]"
+                              />
+                            </span>
+                            <span
+                              className={`relative z-10 ml-1 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                              }`}
+                            >
+                              {orbit.name}
+                            </span>
 
-                          <span
-                            data-testid={`orbit-count-${orbit.id}`}
-                            aria-hidden={sidebarRail}
-                            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                            }`}
-                          >
-                            <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
-                          </span>
-                        </div>
-                      </ContextMenuSurface>
+                            <div
+                              className={`relative z-10 ml-1 shrink-0 min-w-[20px] h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'opacity-0 pointer-events-none w-0 ml-0 overflow-hidden' : 'opacity-100'
+                              }`}
+                            >
+                              <span
+                                data-testid={`orbit-count-${orbit.id}`}
+                                aria-hidden={sidebarRail}
+                                className={`text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-120 ${
+                                  orbitSortable.isAnyDragging
+                                    ? 'opacity-100'
+                                    : 'group-hover:opacity-0 group-focus-within:opacity-0'
+                                }`}
+                              >
+                                <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
+                              </span>
+                              <button
+                                type="button"
+                                tabIndex={sidebarRail ? -1 : 0}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSectionEditor({
+                                    kind: 'orbit',
+                                    mode: 'edit',
+                                    id: orbit.id,
+                                    name: orbit.name,
+                                    description: orbit.description ?? '',
+                                    color: orbit.color,
+                                    icon: orbit.icon || 'Folder',
+                                  });
+                                }}
+                                className={`absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-120 cursor-pointer ${
+                                  sidebarRail || orbitSortable.isAnyDragging
+                                    ? 'opacity-0 pointer-events-none'
+                                    : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                                }`}
+                                aria-label={t('nav.configureSection')}
+                              >
+                                <PencilSimple size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        </ContextMenuSurface>
+                      </div>
                     );
                   })}
                     </div>
@@ -3427,10 +3349,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <div className="flex flex-col gap-1">
                   {boards.map((board, idx) => {
                     const active = nav.type === 'board' && nav.boardId === board.id;
-                    const dropPosition =
-                      boardDropTarget?.id === board.id && dragBoardId !== board.id
-                        ? boardDropTarget.position
-                        : null;
+                    const isDraggingBoard = boardSortable.draggingId === board.id;
                     const isCardDropOver = cardDropTargetId === `board:${board.id}`;
                     const boardMenu: ContextMenuEntry[] = [
                       {
@@ -3476,168 +3395,131 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       },
                     ];
 
-                    const boardDropStyle =
-                      isCardDropOver && sectionAccentEnabled
+                    const boardScopedStyle =
+                      (active && workspaceAccentStyle) ||
+                      (isCardDropOver && sectionAccentEnabled
                         ? (computeScopedAccentTokens(
                             settings.theme,
                             board.color || SECTION_COLOR_PALETTE[2]!,
                             appearanceConfig
                           )?.cssVars as React.CSSProperties | undefined)
-                        : undefined;
+                        : undefined);
 
                     return (
-                      <ContextMenuSurface key={board.id} entries={boardMenu}>
-                        <div
-                          draggable
-                          data-testid={`sidebar-board-${board.id}`}
-                          style={boardDropStyle}
-                          onDragStart={(e) => {
-                            setDragBoardId(board.id);
-                            setBoardDropTarget(null);
-                            e.dataTransfer.setData('text/kapsula-sidebar-board', board.id);
-                            e.dataTransfer.effectAllowed = 'move';
-                          }}
-                          onDragOver={(e) => {
-                            const isCardDrag =
-                              !dragBoardId &&
-                              !dragOrbitId &&
-                              !dragPrimaryNavId &&
-                              hasDragType(e, 'text/kapsula-item-id');
-                            if (isCardDrag) {
+                      <div
+                        key={board.id}
+                        ref={boardSortable.registerItemRef(board.id)}
+                        style={boardSortable.getItemDragStyle(board.id, idx)}
+                      >
+                        <ContextMenuSurface entries={boardMenu}>
+                          <div
+                            data-testid={`sidebar-board-${board.id}`}
+                            data-dragging={isDraggingBoard ? 'true' : undefined}
+                            style={boardScopedStyle}
+                            onPointerDown={(e) => boardSortable.handlePointerDown(board.id, e)}
+                            onDragOver={(e) => {
+                              if (!hasDragType(e, 'text/kapsula-item-id')) return;
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
                               setCardDropTargetId(`board:${board.id}`);
-                              setBoardDropTarget(null);
-                              return;
-                            }
-                            const isBoardDrag =
-                              Boolean(dragBoardId) || hasDragType(e, 'text/kapsula-sidebar-board');
-                            if (!isBoardDrag) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = 'move';
-                            if (dragBoardId === board.id) {
-                              setBoardDropTarget(null);
-                              return;
-                            }
-                            const position = computeDropPosition(e);
-                            setBoardDropTarget((prev) =>
-                              prev?.id === board.id && prev.position === position
-                                ? prev
-                                : { id: board.id, position }
-                            );
-                            setCardDropTargetId(null);
-                          }}
-                          onDragLeave={(e) => {
-                            const nextTarget = e.relatedTarget as Node | null;
-                            if (nextTarget && e.currentTarget.contains(nextTarget)) return;
-                            setBoardDropTarget((prev) => (prev?.id === board.id ? null : prev));
-                            setCardDropTargetId((prev) =>
-                              prev === `board:${board.id}` ? null : prev
-                            );
-                          }}
-                          onDrop={async (e) => {
-                            e.preventDefault();
-                            const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
-                            if (droppedItemId && !dragBoardId) {
+                            }}
+                            onDragLeave={(e) => {
+                              const nextTarget = e.relatedTarget as Node | null;
+                              if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                              setCardDropTargetId((prev) =>
+                                prev === `board:${board.id}` ? null : prev
+                              );
+                            }}
+                            onDrop={async (e) => {
+                              const droppedItemId = e.dataTransfer.getData('text/kapsula-item-id');
+                              if (!droppedItemId) return;
+                              e.preventDefault();
                               clearSidebarDragStates();
                               await handleMoveToBoard(droppedItemId, board.id);
-                              return;
-                            }
-                            const fromId =
-                              dragBoardId || e.dataTransfer.getData('text/kapsula-sidebar-board');
-                            const pos =
-                              boardDropTarget?.id === board.id
-                                ? boardDropTarget.position
-                                : computeDropPosition(e);
-                            clearSidebarDragStates();
-                            if (!fromId || fromId === board.id) return;
-                            const next = reorderByDrop(
-                              boards,
-                              boards.findIndex((b) => b.id === fromId),
-                              boards.findIndex((b) => b.id === board.id),
-                              pos
-                            );
-                            if (!next) return;
-                            setBoards(next);
-                            await window.kapsula.reorderFocusBoards(next.map((b) => b.id));
-                          }}
-                          onDragEnd={clearSidebarDragStates}
-                          onClick={() => {
-                            setBoardViewOverride(null);
-                            navigateTo({ type: 'board', boardId: board.id });
-                          }}
-                          title={sidebarRail ? board.name : undefined}
-                          className={`k-interactive group relative z-[1] flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
-                            active
-                              ? 'text-[var(--k-ink-primary)] font-medium'
-                              : isCardDropOver
-                                ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-                                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
-                          } ${dragBoardId === board.id ? 'opacity-45' : ''}`}
-                        >
-                          {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
-                          {active ? (
-                            <motion.span
-                              layoutId="sidebar-active-pill"
-                              transition={
-                                prefersReduced || sidebarDragging
-                                  ? { duration: 0 }
-                                  : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
-                              }
-                              aria-hidden="true"
-                              style={{ ...workspaceAccentStyle, borderRadius: 8 }}
-                              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
-                            />
-                          ) : null}
-                          <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
-                            <Swatches
-                              size={16}
-                              weight={active ? 'fill' : 'duotone'}
-                              style={{ color: board.color || SECTION_COLOR_PALETTE[2]! }}
-                            />
-                          </span>
-                          <span
-                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                            }`}
-                          >
-                            {board.name}
-                          </span>
-                          <button
-                            type="button"
-                            tabIndex={sidebarRail ? -1 : 0}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSectionEditor({
-                                kind: 'board',
-                                mode: 'edit',
-                                id: board.id,
-                                name: board.name,
-                                description: board.description ?? '',
-                                color: board.color || SECTION_COLOR_PALETTE[2]!,
-                                icon: board.icon || 'BookmarkSimple',
-                              });
                             }}
-                            className={`relative z-10 w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-160 shrink-0 ${
-                              sidebarRail
-                                ? 'opacity-0 pointer-events-none'
-                                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                            onClick={() => {
+                              if (boardSortable.shouldSuppressClick()) return;
+                              setBoardViewOverride(null);
+                              navigateTo({ type: 'board', boardId: board.id });
+                            }}
+                            title={sidebarRail ? board.name : undefined}
+                            className={`group relative z-[1] flex items-center h-8 px-[8px] rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                              isDraggingBoard
+                                ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-medium shadow-[0_10px_26px_-6px_rgba(0,0,0,0.48)] ring-1 ring-[var(--k-border-strong)] cursor-grabbing'
+                                : active
+                                  ? 'bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)] font-medium cursor-pointer'
+                                  : isCardDropOver
+                                    ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)] cursor-pointer'
+                                    : boardSortable.isAnyDragging
+                                      ? 'text-[var(--k-ink-secondary)] cursor-grabbing'
+                                      : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer'
                             }`}
-                            aria-label={t('nav.configureBoard')}
                           >
-                            <PencilSimple size={12} />
-                          </button>
-                          <span
-                            data-testid={`board-count-${board.id}`}
-                            aria-hidden={sidebarRail}
-                            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                            }`}
-                          >
-                            <NumberFlow value={counts.boards[board.id] ?? 0} />
-                          </span>
-                        </div>
-                      </ContextMenuSurface>
+                            <span
+                              aria-hidden="true"
+                              className={`pointer-events-none absolute left-[3px] top-1/2 -translate-y-1/2 w-[2.5px] rounded-full bg-[var(--k-accent)] transition-[height,opacity] duration-150 ease-[var(--k-ease-out)] ${
+                                active && !isDraggingBoard ? 'h-[14px] opacity-100' : 'h-0 opacity-0'
+                              }`}
+                            />
+                            <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
+                              <Swatches
+                                size={16}
+                                weight={active ? 'fill' : 'duotone'}
+                                style={{ color: board.color || SECTION_COLOR_PALETTE[2]! }}
+                              />
+                            </span>
+                            <span
+                              className={`relative z-10 ml-1 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                              }`}
+                            >
+                              {board.name}
+                            </span>
+                            <div
+                              className={`relative z-10 ml-1 shrink-0 min-w-[20px] h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'opacity-0 pointer-events-none w-0 ml-0 overflow-hidden' : 'opacity-100'
+                              }`}
+                            >
+                              <span
+                                data-testid={`board-count-${board.id}`}
+                                aria-hidden={sidebarRail}
+                                className={`text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-120 ${
+                                  boardSortable.isAnyDragging
+                                    ? 'opacity-100'
+                                    : 'group-hover:opacity-0 group-focus-within:opacity-0'
+                                }`}
+                              >
+                                <NumberFlow value={counts.boards[board.id] ?? 0} />
+                              </span>
+                              <button
+                                type="button"
+                                tabIndex={sidebarRail ? -1 : 0}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSectionEditor({
+                                    kind: 'board',
+                                    mode: 'edit',
+                                    id: board.id,
+                                    name: board.name,
+                                    description: board.description ?? '',
+                                    color: board.color || SECTION_COLOR_PALETTE[2]!,
+                                    icon: board.icon || 'BookmarkSimple',
+                                  });
+                                }}
+                                className={`absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-120 cursor-pointer ${
+                                  sidebarRail || boardSortable.isAnyDragging
+                                    ? 'opacity-0 pointer-events-none'
+                                    : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                                }`}
+                                aria-label={t('nav.configureBoard')}
+                              >
+                                <PencilSimple size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        </ContextMenuSurface>
+                      </div>
                     );
                   })}
                     </div>
@@ -4639,10 +4521,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   />
                 ) : null}
 
-                {/* Unified Single-Row Feed Controls + Spring Filter Pills */}
+                {/* Unified Single-Row Feed Controls — right-anchored controls stay locked in place across sections */}
                 {showFeedToolbar ? (
-                  <div className="flex flex-wrap items-center justify-between gap-2.5">
-                    <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
+                  <div
+                    data-testid="feed-toolbar-row"
+                    className="flex flex-nowrap items-center justify-between gap-2 min-w-0"
+                  >
+                    <div
+                      className="flex flex-nowrap items-center gap-0.5 min-w-0 flex-1 overflow-x-auto k-scroll-hidden py-0.5 -my-0.5"
+                      data-testid="feed-quick-filters"
+                    >
                       {renderQuickFilterChips()}
 
                       {selectableVisibleIds.length > 0 ? (
@@ -4655,7 +4543,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               setSelectedIds(selectableVisibleIds);
                             }
                           }}
-                          className="k-interactive text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer ml-1.5 px-1.5"
+                          className="k-interactive text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer ml-0.5 px-1.5 whitespace-nowrap shrink-0"
                         >
                           {selectedIds.length === selectableVisibleIds.length
                             ? t('workspace.selectToggleOff')
@@ -4667,11 +4555,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     </div>
 
                     <div
-                      className={`flex items-center gap-2 shrink-0 transition-opacity duration-140 ${
+                      data-testid="feed-toolbar-controls"
+                      className={`flex items-center gap-1.5 shrink-0 ml-auto transition-opacity duration-140 ${
                         assistantOpen ? 'max-[1680px]:opacity-0 max-[1680px]:pointer-events-none' : 'opacity-100'
                       }`}
                     >
-                      <span className="text-[11.5px] text-[var(--k-ink-muted)] k-tabular hidden sm:inline">
+                      <span
+                        data-testid="feed-visible-count"
+                        className="min-w-[22px] text-right text-[11.5px] text-[var(--k-ink-muted)] k-tabular hidden sm:inline-block shrink-0"
+                      >
                         <NumberFlow value={visibleItems.length} />
                       </span>
 
@@ -4760,7 +4652,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         ]}
                         size="sm"
                         align="end"
-                        className="w-[136px]"
+                        className="w-[122px]"
                         data-testid="feed-sort-select"
                       />
 
@@ -5252,14 +5144,19 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       : { opacity: 0, transform: 'translate3d(-50%, 14px, 0)' }
                   }
                   transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                  className="k-popover-card fixed bottom-5 left-1/2 z-40 max-w-[calc(100vw-24px)] overflow-x-auto k-scroll-hidden flex flex-nowrap items-center gap-1.5 px-3 py-2"
+                  className="fixed bottom-5 left-1/2 z-40 max-w-[calc(100vw-24px)] overflow-x-auto k-scroll-hidden flex flex-nowrap items-center gap-1 px-2.5 py-1.5 rounded-[14px] bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] shadow-[0_14px_34px_-10px_rgba(0,0,0,0.48)]"
                 >
-                  <span className="inline-flex items-center gap-1.5 px-1.5 text-[12.5px] font-semibold whitespace-nowrap shrink-0 k-tabular">
+                  <span className="inline-flex items-center gap-1.5 pl-1.5 pr-1 text-[12px] font-medium text-[var(--k-ink-secondary)] whitespace-nowrap shrink-0 k-tabular">
                     <span>{t('workspace.bulk.selected')}</span>
-                    <span data-testid="bulk-selected-count">{selectedIds.length}</span>
+                    <span
+                      data-testid="bulk-selected-count"
+                      className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-[6px] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-semibold text-[11.5px]"
+                    >
+                      {selectedIds.length}
+                    </span>
                   </span>
 
-                  <div className="w-px h-5 bg-[var(--k-border-hairline)] shrink-0" />
+                  <div className="w-px h-4 mx-0.5 bg-[var(--k-border-hairline)] shrink-0" />
 
                   {selectedIds.length >= 2 ? (
                     <button
@@ -5269,7 +5166,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         setSynthesizeSeedIds(null);
                         setSynthesizeOpen(true);
                       }}
-                      className="k-interactive h-8 px-3 rounded-[9px] bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 hover:bg-[var(--k-accent-hover)] cursor-pointer"
+                      className="k-interactive h-8 px-3 rounded-[9px] bg-[var(--k-accent-soft)] border border-[var(--k-accent)]/35 text-[var(--k-accent)] hover:bg-[var(--k-accent)] hover:text-[var(--k-ink-on-accent)] hover:border-transparent text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <Sparkle size={14} weight="fill" className="shrink-0" />
                       <span>{t('workspace.bulk.synthesize')}</span>
@@ -5286,7 +5183,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       <button
                         type="button"
                         data-no-press-scale="true"
-                        className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                        className="k-interactive h-8 px-2.5 rounded-[9px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <SquaresFour size={14} className="shrink-0" />
                         <span>{t('workspace.bulk.toSection')}</span>
@@ -5322,7 +5219,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => void handleBulkPin(true)}
-                    className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    className="k-interactive h-8 px-2.5 rounded-[9px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <PushPin size={14} className="shrink-0" />
                     <span>{t('workspace.bulk.pin')}</span>
@@ -5337,7 +5234,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         type="button"
                         data-testid="bulk-mute-btn"
                         onClick={() => void handleBulkMute(!allSelectedMuted)}
-                        className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                        className="k-interactive h-8 px-2.5 rounded-[9px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <EyeSlash size={14} weight={allSelectedMuted ? 'fill' : 'regular'} className="shrink-0" />
                         <span>
@@ -5347,10 +5244,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     );
                   })()}
 
+                  <div className="w-px h-4 mx-0.5 bg-[var(--k-border-hairline)] shrink-0" />
+
                   <button
                     type="button"
                     onClick={() => void handleBulkDelete()}
-                    className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Trash size={14} className="shrink-0" />
                     <span>{t('common.delete')}</span>
@@ -5359,7 +5258,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedIds([])}
-                    className="k-icon-toggle w-7 h-7 rounded-[7px] flex items-center justify-center shrink-0 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                    className="k-icon-toggle w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                     aria-label={t('workspace.bulk.clear')}
                   >
                     <X size={14} />
@@ -5979,18 +5878,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   );
 };
 
-const SidebarDropLine: React.FC<{ position: DropPosition }> = ({ position }) => (
-  <span
-    data-testid="sidebar-drop-line"
-    aria-hidden="true"
-    className={`pointer-events-none absolute left-2 right-2 h-[2px] rounded-full bg-[var(--k-accent)] z-30 ${
-      position === 'before' ? '-top-[2px]' : '-bottom-[2px]'
-    }`}
-  >
-    <span className="absolute -left-[3px] -top-[2px] w-[6px] h-[6px] rounded-full bg-[var(--k-accent)]" />
-  </span>
-);
-
 interface SidebarNavButtonProps {
   active: boolean;
   compactRail?: boolean;
@@ -5998,16 +5885,13 @@ interface SidebarNavButtonProps {
   label: string;
   count: number;
   testId?: string;
-  draggable?: boolean;
   isDragging?: boolean;
   isCardDropOver?: boolean;
-  dropPosition?: DropPosition | null;
   onClick: () => void;
-  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragLeave?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }
 
 const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
@@ -6017,28 +5901,25 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
   label,
   count,
   testId,
-  draggable = false,
   isDragging = false,
   isCardDropOver = false,
-  dropPosition = null,
   onClick,
-  onDragStart,
+  onPointerDown,
   onDragOver,
   onDragLeave,
   onDrop,
-  onDragEnd,
 }) => {
-  const prefersReduced = useReducedMotion();
   const [hovered, setHovered] = useState(false);
   return (
-    <TooltipHint label={label} disabled={!compactRail} side="right">
+    <TooltipHint label={label} disabled={!compactRail || isDragging} side="right">
       <div
         role="button"
         tabIndex={0}
-        draggable={draggable}
         data-testid={testId}
+        data-dragging={isDragging ? 'true' : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onPointerDown={onPointerDown}
         onClick={onClick}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -6047,39 +5928,31 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
             onClick();
           }
         }}
-        onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        onDragEnd={onDragEnd}
-        className={`group k-interactive relative z-[1] w-full flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
-          active
-            ? 'text-[var(--k-ink-primary)] font-medium'
-            : isCardDropOver
-              ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)]'
-              : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
-        } ${isDragging ? 'opacity-45' : ''}`}
+        className={`group relative z-[1] w-full flex items-center h-8 px-[8px] rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+          isDragging
+            ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-medium shadow-[0_10px_26px_-6px_rgba(0,0,0,0.48)] ring-1 ring-[var(--k-border-strong)] cursor-grabbing'
+            : active
+              ? 'bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)] font-medium cursor-pointer'
+              : isCardDropOver
+                ? 'bg-[var(--k-accent-soft)]/80 text-[var(--k-ink-primary)] cursor-pointer'
+                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer'
+        }`}
       >
-        <HoverIconProvider hovered={hovered}>
-          {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
-          {active ? (
-            <motion.span
-              layoutId="sidebar-active-pill"
-              transition={
-                prefersReduced
-                  ? { duration: 0 }
-                  : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
-              }
-              aria-hidden="true"
-              style={{ borderRadius: 8 }}
-              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
-            />
-          ) : null}
+        <HoverIconProvider hovered={hovered && !isDragging}>
+          <span
+            aria-hidden="true"
+            className={`pointer-events-none absolute left-[3px] top-1/2 -translate-y-1/2 w-[2.5px] rounded-full bg-[var(--k-accent)] transition-[height,opacity] duration-150 ease-[var(--k-ease-out)] ${
+              active && !isDragging ? 'h-[14px] opacity-100' : 'h-0 opacity-0'
+            }`}
+          />
           <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center text-[var(--k-accent)]/85">
             {icon}
           </span>
           <span
-            className={`relative z-10 ml-1.5 flex-1 min-w-0 text-left truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            className={`relative z-10 ml-1 flex-1 min-w-0 text-left truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               compactRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
             }`}
           >
@@ -6088,8 +5961,8 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
           <span
             data-count={count}
             aria-hidden={compactRail}
-            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              compactRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            className={`relative z-10 ml-1 shrink-0 min-w-[20px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              compactRail ? 'opacity-0 pointer-events-none w-0 ml-0 overflow-hidden' : 'opacity-100'
             }`}
           >
             <NumberFlow value={count} />

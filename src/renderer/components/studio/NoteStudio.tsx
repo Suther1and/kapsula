@@ -71,6 +71,7 @@ import { isMacPlatform } from '@shared/shortcuts';
 import { extractWikiLinkTitles } from '@shared/task-helpers';
 import {
   KapsulaHighlight,
+  KapsulaHorizontalRule,
   TEXT_COLOR_SWATCHES,
   TextColorMark,
   TextSizeMark,
@@ -88,6 +89,7 @@ import {
 import { playTactileTick } from '../../lib/tactileSound';
 import { ShotLightbox } from '../cards/ShotLightbox';
 import { BlockInsertGutter } from '../editor/BlockInsertGutter';
+import { EditorBlockContextMenu } from '../editor/EditorBlockContextMenu';
 import {
   KapsulaImage,
   extractImageFilesFromDataTransfer,
@@ -194,6 +196,7 @@ function deriveTitleFromBody(md: string, fallbackTitle: string): string {
         .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, '$2')
         .replace(/\[\[([^\]\n]+)\]\]/g, '$1')
         .replace(/<\/?(?:span|mark|u)(?:\s+[^>]*)?>/gi, '')
+        .replace(/<hr\b[^>]*\/?>/gi, '')
         .replace(/==([^=\n]+)==/g, '$1')
         .replace(/^#{1,6}\s+/, '')
         .replace(/^[-*]\s+\[[ xX]\]\s+/, '')
@@ -571,6 +574,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        horizontalRule: false,
         link: {
           openOnClick: false,
           autolink: true,
@@ -579,6 +583,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           },
         },
       }),
+      KapsulaHorizontalRule,
       Markdown,
       TaskList,
       TaskItem.configure({
@@ -3030,6 +3035,19 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             />
             <EditorContent editor={editor} />
             <ProseCaretOverlay editor={editor} containerEl={editorBoundaryEl} />
+            <EditorBlockContextMenu
+              editor={editor}
+              containerEl={editorBoundaryEl}
+              onOpenImageLightbox={(src, alt) =>
+                openInlineImageLightboxRef.current({
+                  src,
+                  alt,
+                  localFilename: src.startsWith('kapsula-media://local/')
+                    ? src.slice('kapsula-media://local/'.length)
+                    : null,
+                })
+              }
+            />
           </div>
 
           {/* Backlinks & Similar Notes — Clearly Separated */}
