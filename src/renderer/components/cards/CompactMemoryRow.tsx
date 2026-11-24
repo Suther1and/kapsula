@@ -2,6 +2,7 @@ import React from 'react';
 import {
   ArrowSquareOut,
   Code,
+  EyeSlash,
   FileText,
   GlobeSimple,
   ImageSquare,
@@ -9,7 +10,6 @@ import {
   NotePencil,
   PushPin,
   ShieldCheck,
-  SpeakerSlash,
   VideoCamera,
 } from '@phosphor-icons/react';
 import type { OrbitDef, VaultItem } from '@shared/types';
@@ -184,7 +184,7 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
           </span>
         ) : null}
         {item.isMuted ? (
-          <SpeakerSlash weight="fill" className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
+          <EyeSlash weight="fill" className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
         ) : null}
         {item.isPinned ? (
           <PushPin weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />

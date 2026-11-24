@@ -702,39 +702,40 @@ export function computeThemeTokens(
     const profile =
       glassPreset === 'subtle'
         ? {
-            blur: '12px',
-            sat: '125%',
-            surfA: mode === 'dark' ? 0.8 : 0.78,
-            railA: mode === 'dark' ? 0.74 : 0.72,
-            headA: mode === 'dark' ? 0.76 : 0.74,
+            blur: '14px',
+            sat: '130%',
+            canvasA: mode === 'dark' ? 0.78 : 0.82,
+            surfA: mode === 'dark' ? 0.76 : 0.78,
+            railA: mode === 'dark' ? 0.64 : 0.68,
+            headA: mode === 'dark' ? 0.66 : 0.7,
             specA: mode === 'dark' ? 0.08 : 0.65,
           }
         : glassPreset === 'frosted'
           ? {
               blur: '22px',
               sat: '145%',
-              surfA: mode === 'dark' ? 0.68 : 0.66,
-              railA: mode === 'dark' ? 0.6 : 0.58,
-              headA: mode === 'dark' ? 0.62 : 0.6,
+              canvasA: mode === 'dark' ? 0.56 : 0.64,
+              surfA: mode === 'dark' ? 0.66 : 0.68,
+              railA: mode === 'dark' ? 0.48 : 0.54,
+              headA: mode === 'dark' ? 0.5 : 0.56,
               specA: mode === 'dark' ? 0.12 : 0.8,
             }
           : {
               blur: '30px',
-              sat: '175%',
-              surfA: mode === 'dark' ? 0.54 : 0.52,
-              railA: mode === 'dark' ? 0.46 : 0.44,
-              headA: mode === 'dark' ? 0.48 : 0.46,
-              specA: mode === 'dark' ? 0.18 : 0.92,
+              sat: '165%',
+              canvasA: mode === 'dark' ? 0.36 : 0.46,
+              surfA: mode === 'dark' ? 0.54 : 0.56,
+              railA: mode === 'dark' ? 0.34 : 0.4,
+              headA: mode === 'dark' ? 0.36 : 0.42,
+              specA: mode === 'dark' ? 0.16 : 0.9,
             };
     cssVars['--k-glass-blur'] = profile.blur;
     cssVars['--k-glass-sat'] = profile.sat;
+    cssVars['--k-glass-canvas'] = hexToRgba(surfaces.canvas, profile.canvasA);
     cssVars['--k-glass-surface'] = hexToRgba(surfaces.surface1, profile.surfA);
     cssVars['--k-glass-rail'] = hexToRgba(surfaces.rail, profile.railA);
     cssVars['--k-glass-header'] = hexToRgba(surfaces.canvas, profile.headA);
-    cssVars['--k-glass-specular'] =
-      mode === 'dark'
-        ? `rgba(255, 255, 255, ${profile.specA})`
-        : `rgba(255, 255, 255, ${profile.specA})`;
+    cssVars['--k-glass-specular'] = `rgba(255, 255, 255, ${profile.specA})`;
   }
 
   return {

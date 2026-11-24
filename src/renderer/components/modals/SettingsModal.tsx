@@ -975,9 +975,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <SegmentedControl<GlassPreset>
                     value={appearance.glassPreset ?? 'off'}
-                    onChange={(glassPreset) =>
-                      applyAppearanceChange({ ...appearance, glassPreset }, { immediate: true })
-                    }
+                    onChange={(glassPreset) => {
+                      const prevPreset = appearance.glassPreset ?? 'off';
+                      const curNative = appearance.glassNativeMaterial ?? 'none';
+                      // When turning glass ON from OFF while native material is still 'none',
+                      // automatically engage OS translucency so the window immediately becomes truly translucent.
+                      const nextNative: NativeWindowMaterial =
+                        glassPreset === 'off'
+                          ? curNative
+                          : prevPreset === 'off' && curNative === 'none'
+                            ? glassPreset === 'subtle'
+                              ? 'mica'
+                              : 'acrylic'
+                            : curNative;
+                      applyAppearanceChange(
+                        { ...appearance, glassPreset, glassNativeMaterial: nextNative },
+                        { immediate: true }
+                      );
+                    }}
                     options={[
                       { value: 'off', label: t('settings.appearance.glassOff') },
                       { value: 'subtle', label: t('settings.appearance.glassSubtle') },

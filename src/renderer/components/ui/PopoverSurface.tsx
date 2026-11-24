@@ -1,5 +1,5 @@
 import React from 'react';
-import { Popover } from '@animate-ui/react/primitives/base-ui/popover';
+import { Popover } from '@base-ui/react/popover';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
 interface PopoverSurfaceProps {
@@ -10,6 +10,8 @@ interface PopoverSurfaceProps {
   align?: 'start' | 'center' | 'end';
   side?: 'top' | 'bottom' | 'left' | 'right';
   widthClass?: string;
+  /** Keep keyboard/editor focus untouched when opening/closing (critical for editor format pickers). */
+  preserveFocus?: boolean;
 }
 
 export const PopoverSurface: React.FC<PopoverSurfaceProps> = ({
@@ -20,6 +22,7 @@ export const PopoverSurface: React.FC<PopoverSurfaceProps> = ({
   align = 'start',
   side = 'bottom',
   widthClass = 'w-72',
+  preserveFocus = false,
 }) => {
   const scopedAccentStyle = useScopedAccentStyle();
   return (
@@ -35,10 +38,10 @@ export const PopoverSurface: React.FC<PopoverSurfaceProps> = ({
         >
           <Popover.Popup
             data-k-popup="true"
-            transition={{ type: 'spring', stiffness: 620, damping: 38, mass: 0.55 }}
-            exitTransition={{ duration: 0.09 }}
+            initialFocus={preserveFocus ? false : undefined}
+            finalFocus={preserveFocus ? false : undefined}
             style={scopedAccentStyle}
-            className={`${widthClass} rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-3.5 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none`}
+            className={`${widthClass} k-popover-card k-popover-slide p-3.5 text-[var(--k-ink-primary)] outline-none`}
           >
             {children}
           </Popover.Popup>

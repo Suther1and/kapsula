@@ -250,7 +250,12 @@ export function applyAppearanceToDocument(
   }
   root.setAttribute('data-accent', config.accentMode === 'preset' ? config.accentPreset : 'custom');
   root.setAttribute('data-density', config.density);
-  root.setAttribute('data-glass', config.glassPreset ?? 'off');
+  const glassPreset = config.glassPreset ?? 'off';
+  root.setAttribute('data-glass', glassPreset);
+  root.setAttribute(
+    'data-glass-native',
+    glassPreset !== 'off' ? (config.glassNativeMaterial ?? 'none') : 'none'
+  );
 
   const tokens = computeThemeTokens(theme, config);
   const nextVarKeys = Object.keys(tokens.cssVars);

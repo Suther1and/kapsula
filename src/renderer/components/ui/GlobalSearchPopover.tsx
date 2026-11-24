@@ -17,7 +17,12 @@ import {
   Sparkle,
 } from '@phosphor-icons/react';
 import type { CalendarEvent, OrbitDef, VaultItem, VaultTaskEntry } from '@shared/types';
-import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import {
+  extractMatchedSnippet,
+  matchesBilingualHaystack,
+  scoreBilingualFields,
+  splitHighlightSegments,
+} from '@shared/bilingual-search';
 import { cleanBrokenTextArtifacts, truncateAtWordBoundary } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
 import { isMacPlatform } from '@shared/shortcuts';
@@ -73,6 +78,27 @@ function renderItemIcon(item: VaultItem) {
       return <NotePencil weight="duotone" className="w-4 h-4 text-[var(--k-ink-secondary)]" />;
   }
 }
+
+const HighlightedText: React.FC<{ text: string; query: string }> = ({ text, query }) => {
+  if (!query.trim()) return <>{text}</>;
+  const segments = splitHighlightSegments(text, query);
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.hit ? (
+          <mark
+            key={i}
+            className="bg-[var(--k-accent-soft)] text-[var(--k-accent)] rounded-[3px] px-[1.5px] font-semibold"
+          >
+            {seg.text}
+          </mark>
+        ) : (
+          <React.Fragment key={i}>{seg.text}</React.Fragment>
+        )
+      )}
+    </>
+  );
+};
 
 export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
   open,
@@ -135,31 +161,54 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     const out: SearchEntry[] = [];
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
 
-    const matchedItems = (q
-      ? items.filter((item) => {
-          if (serverSet && serverSet.has(item.id)) return true;
-          const hay = [
-            item.title,
-            item.summary,
-            item.body,
-            item.ocrText,
-            item.url,
-            item.domain,
-            item.tags.join(' '),
-            item.secretMeta?.service,
-            item.secretMeta?.loginHint,
-          ]
-            .filter(Boolean)
-            .join('\n');
-          return matchesBilingualHaystack(hay, q);
-        })
+    const scoredItems = q
+      ? items
+          .map((item) => {
+            const orbitName = item.orbit ? orbitMap.get(item.orbit)?.name : undefined;
+            const localScore = scoreBilingualFields(
+              {
+                title: item.title,
+                tags: item.tags,
+                orbitName,
+                domain: item.domain,
+                dnaLabel: getDnaHumanLabel(item, locale),
+                summary: item.summary,
+                body: item.body,
+                ocrText: item.ocrText,
+                url: item.url,
+                extra: [
+                  item.secretMeta?.service,
+                  item.secretMeta?.loginHint,
+                  item.secretMeta?.cardBrand,
+                  item.isMuted ? 'muted' : '',
+                  item.isPinned ? 'pinned' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' '),
+                isPinned: item.isPinned,
+                updatedAt: item.contentUpdatedAt || item.createdAt,
+              },
+              q
+            );
+            const serverBonus = serverSet && serverSet.has(item.id) ? 24 : 0;
+            const score = localScore > 0 ? localScore + serverBonus : serverBonus;
+            return { item, score };
+          })
+          .filter((entry) => entry.score > 0)
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              (b.item.contentUpdatedAt || b.item.createdAt) -
+                (a.item.contentUpdatedAt || a.item.createdAt)
+          )
+          .slice(0, 7)
+          .map((e) => e.item)
       : items
-    )
-      .slice()
-      .sort((a, b) => (b.contentUpdatedAt || b.createdAt) - (a.contentUpdatedAt || a.createdAt))
-      .slice(0, q ? 7 : 5);
+          .slice()
+          .sort((a, b) => (b.contentUpdatedAt || b.createdAt) - (a.contentUpdatedAt || a.createdAt))
+          .slice(0, 5);
 
-    for (const item of matchedItems) {
+    for (const item of scoredItems) {
       out.push({ kind: 'item', id: `item-${item.id}`, item });
     }
 
@@ -189,7 +238,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     }
 
     return out;
-  }, [open, q, items, calendarEvents, tasks, serverSearchIds, commands]);
+  }, [open, q, items, calendarEvents, tasks, serverSearchIds, commands, orbitMap, locale]);
 
   useEffect(() => {
     setActiveIdx(0);
@@ -242,22 +291,21 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(0, -6px, 0) scale(0.985)' }
+                : { opacity: 0, y: -5 }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
-                : { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' }
+                : { opacity: 1, y: 0 }
             }
             exit={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(0, -4px, 0) scale(0.985)' }
+                : { opacity: 0, y: -3 }
             }
-            transition={{ type: 'spring', stiffness: 520, damping: 36, mass: 0.7 }}
-            style={{ transformOrigin: 'top center' }}
+            transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
             onMouseDown={(e) => e.preventDefault()}
-            className="pointer-events-auto rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl overflow-hidden"
+            className="k-popover-card pointer-events-auto overflow-hidden"
           >
             <div ref={listRef} className="max-h-[400px] overflow-y-auto p-1.5">
               {entries.length === 0 ? (
@@ -290,13 +338,16 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                       const thumb = it.dna !== 'secret' ? getMediaUrl(it.thumbPath || it.imagePath) : null;
                       const orbit = it.orbit ? orbitMap.get(it.orbit) : undefined;
                       const title = cleanBrokenTextArtifacts(it.title || getDnaHumanLabel(it, locale), true);
+                      const cleanBodyText = cleanBrokenTextArtifacts(
+                        stripMarkdownPreview(it.body || it.summary || it.ocrText || it.url || ''),
+                        true
+                      );
                       const sub =
                         it.dna === 'secret'
                           ? it.secretMeta?.loginHint || t('dna.vaultRecord')
-                          : truncateAtWordBoundary(
-                              cleanBrokenTextArtifacts(stripMarkdownPreview(it.summary || it.body || it.url || ''), true),
-                              70
-                            );
+                          : q
+                            ? extractMatchedSnippet(cleanBodyText, q, 78)
+                            : truncateAtWordBoundary(cleanBodyText, 72);
                       return (
                         <HighlightItem key={entry.id} value={entry.id}>
                           <button
@@ -316,9 +367,13 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                               )}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <div className="text-[13px] font-medium truncate">{title}</div>
+                              <div className="text-[13px] font-medium truncate">
+                                <HighlightedText text={title} query={q} />
+                              </div>
                               {sub ? (
-                                <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{sub}</div>
+                                <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
+                                  <HighlightedText text={sub} query={q} />
+                                </div>
                               ) : null}
                             </div>
                             {orbit ? (

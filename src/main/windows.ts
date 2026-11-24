@@ -443,7 +443,7 @@ export class WindowManager {
 
   public setVaultBackgroundColor(hex: string): void {
     if (!this.vault || this.vault.isDestroyed()) return;
-    if (!/^#[0-9a-f]{6}$/i.test(hex)) return;
+    if (!/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(hex)) return;
     try {
       this.vault.setBackgroundColor(hex);
     } catch {
@@ -454,26 +454,48 @@ export class WindowManager {
   /**
    * Applies optional OS translucency ONLY to the main Vault window.
    * Quick Launch HUD stays strictly solid (opaque) at all times.
+   *
+   * On Windows 11 (DWM Mica/Acrylic) and macOS (NSVisualEffectView vibrancy),
+   * Chromium paints an opaque backing store unless `setBackgroundColor('#00000000')`
+   * is applied alongside the native material.
    */
-  public setVaultGlassMaterial(material: 'none' | 'mica' | 'acrylic', enabled: boolean): void {
+  public setVaultGlassMaterial(
+    material: 'none' | 'mica' | 'acrylic',
+    enabled: boolean,
+    opaqueFallbackHex?: string
+  ): void {
     if (!this.vault || this.vault.isDestroyed()) return;
     const win = this.vault as BrowserWindow & {
       setBackgroundMaterial?: (mat: 'auto' | 'none' | 'mica' | 'acrylic' | 'tabbed') => void;
     };
+    const activeNative = enabled && material !== 'none';
     try {
+      if (activeNative) {
+        this.vault.setBackgroundColor('#00000000');
+      }
       if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
-        win.setBackgroundMaterial(enabled && material !== 'none' ? material : 'none');
+        win.setBackgroundMaterial(activeNative ? material : 'none');
       } else if (process.platform === 'darwin' && typeof this.vault.setVibrancy === 'function') {
         this.vault.setVibrancy(
-          enabled && material !== 'none'
+          activeNative
             ? material === 'acrylic'
               ? 'hud'
               : 'under-window'
             : null
         );
       }
+      if (!activeNative && opaqueFallbackHex && /^#[0-9a-f]{6}$/i.test(opaqueFallbackHex)) {
+        this.vault.setBackgroundColor(opaqueFallbackHex);
+      }
     } catch {
       // ignore OS material errors on older Windows builds or headless CI
+      if (opaqueFallbackHex && /^#[0-9a-f]{6}$/i.test(opaqueFallbackHex)) {
+        try {
+          this.vault.setBackgroundColor(opaqueFallbackHex);
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 

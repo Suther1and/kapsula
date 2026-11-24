@@ -70,7 +70,10 @@ export function extractImageFilesFromDataTransfer(
     const isImage =
       file.type.startsWith('image/') || (!file.type && IMAGE_EXT_RE.test(file.name || ''));
     if (!isImage) return;
-    const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+    // Omit `lastModified`: on Windows/Chromium clipboard pastes `dt.items[i].getAsFile()`
+    // and `dt.files[i]` generate fresh `Date.now()` timestamps for the same pasted screenshot,
+    // which previously caused duplicate insertion whenever the millisecond ticked between reads.
+    const key = `${file.name}:${file.size}:${file.type}`;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     files.push(file);
@@ -84,13 +87,17 @@ export function extractImageFilesFromDataTransfer(
       }
     }
   }
-  if (dt.files && dt.files.length > 0) {
+  // Only fall back to `dt.files` when `dt.items` yielded no images, because both lists
+  // expose the same clipboard/drop payload and reading both duplicates unnamed pastes.
+  if (files.length === 0 && dt.files && dt.files.length > 0) {
     for (let i = 0; i < dt.files.length; i += 1) {
       pushUnique(dt.files[i]);
     }
   }
   return files;
 }
+
+const recentImageInserts = new WeakMap<Editor, { sig: string; at: number }>();
 
 export async function saveAndInsertImageFiles(
   editor: Editor,
@@ -102,6 +109,14 @@ export async function saveAndInsertImageFiles(
   }
 ): Promise<number> {
   if (!files.length) return 0;
+  const sig = files.map((f) => `${f.name}:${f.size}:${f.type}`).join('|');
+  const prev = recentImageInserts.get(editor);
+  const now = Date.now();
+  if (prev && prev.sig === sig && now - prev.at < 450) {
+    return 0;
+  }
+  recentImageInserts.set(editor, { sig, at: now });
+
   opts?.onBeforeSave?.();
   const insertedNodes: Array<{ src: string; alt: string }> = [];
   const domLocale = getDomLocale();
@@ -129,16 +144,15 @@ export async function saveAndInsertImageFiles(
     }
 
     if (insertedNodes.length > 0 && !editor.isDestroyed) {
-      const content: JSONContent | JSONContent[] =
-        insertedNodes.length === 1
-          ? {
-              type: 'kapsulaImage',
-              attrs: insertedNodes[0]!,
-            }
-          : insertedNodes.map((img) => ({
-              type: 'paragraph',
-              content: [{ type: 'kapsulaImage', attrs: img }],
-            }));
+      // Place each inserted image in its own clean paragraph followed by an empty paragraph
+      // so images never share a `<p>` with typed prose via `<br>` (keeps gutter `+` accurate).
+      const content: JSONContent[] = [
+        ...insertedNodes.map((img) => ({
+          type: 'paragraph',
+          content: [{ type: 'kapsulaImage', attrs: img }],
+        })),
+        { type: 'paragraph' },
+      ];
 
       if (typeof opts?.insertPos === 'number' && Number.isFinite(opts.insertPos)) {
         const clampedPos = Math.max(0, Math.min(opts.insertPos, editor.state.doc.content.size));

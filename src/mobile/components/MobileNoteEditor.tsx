@@ -6,7 +6,12 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
-import { KapsulaHighlight, TextColorMark, TextSizeMark } from '@shared/tiptap-rich-marks';
+import {
+  KapsulaHighlight,
+  TEXT_COLOR_SWATCHES,
+  TextColorMark,
+  TextSizeMark,
+} from '@shared/tiptap-rich-marks';
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
@@ -623,6 +628,8 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     }
   }, [editor, locale]);
 
+  const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
+
   const activeFormat = useEditorState({
     editor,
     selector: ({ editor: ed }) => ({
@@ -632,6 +639,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       bold: Boolean(ed?.isActive('bold')),
       italic: Boolean(ed?.isActive('italic')),
       highlight: Boolean(ed?.isActive('highlight')),
+      textColor: (ed?.getAttributes('textColor')?.color as string | null) ?? null,
       taskList: Boolean(ed?.isActive('taskList')),
       bulletList: Boolean(ed?.isActive('bulletList')),
       blockquote: Boolean(ed?.isActive('blockquote')),
@@ -1674,7 +1682,63 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         </div>
       ) : null}
 
-      {/* Formatting Toolbar with Undo / Redo & Inline Photo */}
+      {/* Inline Text Color Swatches Row (toggled from toolbar `A` button) */}
+      {editor && colorPaletteOpen ? (
+        <div
+          data-testid="mobile-text-color-bar"
+          className="flex items-center gap-1.5 px-3 py-1.5 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-x-auto k-no-scrollbar shrink-0"
+        >
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              mobileBridge.haptic('light');
+              editor.chain().focus().unsetTextColor().run();
+              setColorPaletteOpen(false);
+            }}
+            aria-label={t('editor.defaultColor')}
+            className={`k-tap h-7 px-2 rounded-lg border text-[11px] font-medium shrink-0 ${
+              !activeFormat?.textColor
+                ? 'border-[var(--k-accent)] bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]'
+            }`}
+          >
+            Aa
+          </button>
+          {TEXT_COLOR_SWATCHES.map((sw) => {
+            const active = activeFormat?.textColor === sw.key;
+            return (
+              <button
+                key={sw.key}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  mobileBridge.haptic('light');
+                  if (active) {
+                    editor.chain().focus().unsetTextColor().run();
+                  } else {
+                    editor.chain().focus().setTextColor(sw.key).run();
+                  }
+                  setColorPaletteOpen(false);
+                }}
+                aria-label={locale === 'en' ? sw.labelEn : sw.labelRu}
+                className={`k-tap w-7 h-7 rounded-lg flex items-center justify-center border shrink-0 ${
+                  active
+                    ? 'border-[var(--k-ink-primary)] bg-[var(--k-bg-surface-2)]'
+                    : 'border-transparent hover:bg-[var(--k-bg-surface-2)]'
+                }`}
+              >
+                <span
+                  className="w-4 h-4 rounded-full ring-1 ring-black/15"
+                  style={{ backgroundColor: sw.dot }}
+                />
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {/* Formatting Toolbar with Undo / Redo, Text Color & Inline Photo */}
       {editor ? (
         <div
           ref={toolbarRef}
@@ -1687,6 +1751,47 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
               <React.Fragment key={btn.label}>
                 {idx === 2 ? (
                   <span className="w-[1px] h-5 bg-[var(--k-border-hairline)] mx-1 shrink-0" />
+                ) : null}
+                {idx === 5 ? (
+                  <button
+                    type="button"
+                    data-testid="note-toolbar-text-color"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      mobileBridge.haptic('light');
+                      setColorPaletteOpen((v) => !v);
+                    }}
+                    aria-label={t('editor.toolTextColor')}
+                    aria-pressed={colorPaletteOpen || Boolean(activeFormat?.textColor)}
+                    className={`k-tap inline-flex flex-col items-center justify-center w-9 h-9 rounded-xl shrink-0 transition-colors ${
+                      colorPaletteOpen || activeFormat?.textColor
+                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-ink-primary)]'
+                        : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                    }`}
+                  >
+                    <span
+                      className="text-[13px] font-bold leading-none"
+                      style={
+                        activeFormat?.textColor
+                          ? {
+                              color:
+                                TEXT_COLOR_SWATCHES.find((s) => s.key === activeFormat.textColor)?.dot ??
+                                'var(--k-accent)',
+                            }
+                          : undefined
+                      }
+                    >
+                      A
+                    </span>
+                    <span
+                      className="w-4 h-[3px] rounded-full mt-0.5"
+                      style={{
+                        background:
+                          TEXT_COLOR_SWATCHES.find((s) => s.key === activeFormat?.textColor)?.dot ??
+                          'linear-gradient(90deg, #ef4444 0%, #f59e0b 33%, #22c55e 66%, #3b82f6 100%)',
+                      }}
+                    />
+                  </button>
                 ) : null}
                 <button
                   type="button"

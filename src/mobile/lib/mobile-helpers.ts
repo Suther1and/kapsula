@@ -1,4 +1,4 @@
-import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import { scoreBilingualFields } from '@shared/bilingual-search';
 import { matchesRecurrenceOnLocalDay } from '@shared/calendar-recurrence';
 import type { AppLocale } from '@shared/i18n/core';
 import { isMediaItem as sharedIsMediaItem } from '@shared/item-helpers';
@@ -25,26 +25,36 @@ export function filterItemsByQuery(items: VaultItem[], rawQuery: string): VaultI
   const q = rawQuery.trim();
   if (!q) return items;
 
-  return items.filter((item) => {
-    const hay = [
-      item.title,
-      item.body,
-      item.summary,
-      item.url,
-      item.domain,
-      item.platform,
-      item.ocrText,
-      item.secretMeta?.service,
-      item.secretMeta?.loginHint,
-      item.secretMeta?.last4,
-      item.mediaMeta?.transcript,
-      ...(item.tags ?? []),
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return matchesBilingualHaystack(hay, q);
-  });
+  return items
+    .map((item) => ({
+      item,
+      score: scoreBilingualFields(
+        {
+          title: item.title,
+          tags: item.tags,
+          domain: item.domain,
+          summary: item.summary,
+          body: item.body,
+          ocrText: item.ocrText,
+          url: item.url,
+          extra: [
+            item.platform,
+            item.secretMeta?.service,
+            item.secretMeta?.loginHint,
+            item.secretMeta?.last4,
+            item.mediaMeta?.transcript,
+          ]
+            .filter(Boolean)
+            .join(' '),
+          isPinned: item.isPinned,
+          updatedAt: item.contentUpdatedAt || item.createdAt,
+        },
+        q
+      ),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.item);
 }
 
 export function isMediaItem(item: VaultItem): boolean {

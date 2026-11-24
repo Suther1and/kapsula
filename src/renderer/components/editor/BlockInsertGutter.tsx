@@ -8,18 +8,12 @@ import {
   Code,
   ImageSquare,
   Lightbulb,
-  ListBullets,
-  ListNumbers,
   Microphone,
   Minus,
   Plus,
-  Quotes,
   RocketLaunch,
   Sparkle,
   SunHorizon,
-  TextHOne,
-  TextHThree,
-  TextHTwo,
   UsersThree,
 } from '@phosphor-icons/react';
 import type { NoteTemplate } from '@shared/note-templates';
@@ -68,36 +62,6 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         {t('note.studio.insertHeading')}
       </div>
 
-      <div className="grid grid-cols-3 gap-1 px-1 pb-1">
-        <button
-          type="button"
-          onClick={() => runAndClose(() => editor.chain().focus().toggleHeading({ level: 1 }).run())}
-          className="k-interactive flex items-center justify-center h-7 rounded-lg bg-[var(--k-bg-surface-2)]/70 hover:bg-[var(--k-bg-surface-3)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-          title={t('note.studio.toolbar.h1')}
-          aria-label={t('note.studio.toolbar.h1')}
-        >
-          <TextHOne weight="bold" className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => runAndClose(() => editor.chain().focus().toggleHeading({ level: 2 }).run())}
-          className="k-interactive flex items-center justify-center h-7 rounded-lg bg-[var(--k-bg-surface-2)]/70 hover:bg-[var(--k-bg-surface-3)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-          title={t('note.studio.toolbar.h2')}
-          aria-label={t('note.studio.toolbar.h2')}
-        >
-          <TextHTwo weight="bold" className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => runAndClose(() => editor.chain().focus().toggleHeading({ level: 3 }).run())}
-          className="k-interactive flex items-center justify-center h-7 rounded-lg bg-[var(--k-bg-surface-2)]/70 hover:bg-[var(--k-bg-surface-3)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-          title={t('note.studio.toolbar.h3')}
-          aria-label={t('note.studio.toolbar.h3')}
-        >
-          <TextHThree weight="bold" className="w-4 h-4" />
-        </button>
-      </div>
-
       <button
         type="button"
         data-testid="studio-insert-image-btn"
@@ -107,9 +71,9 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
       >
         <span className="inline-flex items-center gap-2">
           {insertingImage ? (
-            <CircleNotch weight="bold" className="w-3.5 h-3.5 animate-spin text-[var(--k-accent)]" />
+            <CircleNotch weight="bold" className="w-3.5 h-3.5 animate-spin text-[var(--k-accent)] shrink-0" />
           ) : (
-            <ImageSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+            <ImageSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
           )}
           <span>{t('note.studio.insert.photo')}</span>
         </span>
@@ -123,35 +87,8 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         onClick={() => runAndClose(() => editor.chain().focus().toggleTaskList().run())}
         className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
       >
-        <CheckSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+        <CheckSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
         <span>{t('note.studio.insert.checklist')}</span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => runAndClose(() => editor.chain().focus().toggleBulletList().run())}
-        className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-      >
-        <ListBullets className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-        <span>{t('note.studio.insert.list')}</span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => runAndClose(() => editor.chain().focus().toggleOrderedList().run())}
-        className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-      >
-        <ListNumbers className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-        <span>{t('note.studio.toolbar.orderedList')}</span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => runAndClose(() => editor.chain().focus().toggleBlockquote().run())}
-        className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-      >
-        <Quotes className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-        <span>{t('note.studio.insert.quote')}</span>
       </button>
 
       <button
@@ -159,7 +96,7 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         onClick={() => runAndClose(() => editor.chain().focus().toggleCodeBlock().run())}
         className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
       >
-        <Code className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+        <Code className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
         <span>{t('note.studio.insert.code')}</span>
       </button>
 
@@ -168,7 +105,7 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         onClick={() => runAndClose(() => editor.chain().focus().setHorizontalRule().run())}
         className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
       >
-        <Minus className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+        <Minus className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
         <span>{t('note.studio.cmd.hr.label')}</span>
       </button>
 
@@ -177,7 +114,7 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         onClick={() => runAndClose(onStartDictation)}
         className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
       >
-        <Microphone className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+        <Microphone className="w-3.5 h-3.5 text-[var(--k-ink-secondary)] shrink-0" />
         <span>{t('note.studio.insert.voice')}</span>
       </button>
 
@@ -187,12 +124,12 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
           onClick={() => runAndClose(onOpenAiMenu)}
           className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-accent-soft)] text-[var(--k-accent)] text-left cursor-pointer"
         >
-          <Sparkle weight="fill" className="w-3.5 h-3.5" />
+          <Sparkle weight="fill" className="w-3.5 h-3.5 shrink-0" />
           <span>{t('note.studio.cmd.ai.label')}</span>
         </button>
       ) : null}
 
-      <div className="h-px bg-[var(--k-border-hairline)] my-1" />
+      <div className="h-px bg-[var(--k-border-hairline)] my-1.5" />
       <div className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
         {t('note.studio.templates')}
       </div>
@@ -213,7 +150,7 @@ export const InsertMenuContent: React.FC<InsertMenuContentProps> = ({
         })}
       </div>
 
-      <div className="px-2 pt-1 text-[10.5px] text-[var(--k-ink-muted)] border-t border-[var(--k-border-hairline)]">
+      <div className="px-2 pt-1.5 text-[10.5px] text-[var(--k-ink-muted)] border-t border-[var(--k-border-hairline)]">
         {t('note.studio.slashHint')}
       </div>
     </div>
@@ -233,8 +170,9 @@ interface BlockInsertGutterProps {
 
 /**
  * Notion-style cursor & hover-following `+` block insert button sitting in the
- * left gutter of the active prose line. Always follows where the user writes or
- * hovers — never forces scrolling back to the top to insert blocks or media.
+ * left gutter of the active prose line. Always follows the exact visual line
+ * (even inside paragraphs containing inline block images) and freezes while the
+ * pointer moves horizontally toward the `+` button so it never runs away.
  */
 export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
   editor,
@@ -256,21 +194,39 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
   );
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const gutterWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const computePosTop = useCallback(
+    (pos: number): number | null => {
+      if (!editor || editor.isDestroyed || !containerEl) return null;
+      try {
+        const clampedPos = Math.max(0, Math.min(pos, editor.state.doc.content.size));
+        const coords = editor.view.coordsAtPos(clampedPos);
+        const box = containerEl.getBoundingClientRect();
+        if (box.height <= 0) return null;
+        // If `coords` spans a tall inline image figure (> 56px), pin near its top row
+        // rather than floating awkwardly in mid-air; for normal prose lines, center vertically.
+        const lineHeight = Math.max(0, coords.bottom - coords.top);
+        const anchorY =
+          lineHeight > 56
+            ? coords.top - box.top + 14
+            : (coords.top + coords.bottom) / 2 - box.top;
+        return Math.max(0, Math.min(Math.max(0, box.height - 26), Math.round(anchorY - 13)));
+      } catch {
+        return null;
+      }
+    },
+    [editor, containerEl]
+  );
 
   const syncToCaret = useCallback(() => {
     if (!editor || editor.isDestroyed || !containerEl) return;
-    try {
-      const { from } = editor.state.selection;
-      const coords = editor.view.coordsAtPos(from);
-      const box = containerEl.getBoundingClientRect();
-      const lineMid = (coords.top + coords.bottom) / 2 - box.top;
-      const clamped = Math.max(0, Math.min(Math.max(0, box.height - 26), Math.round(lineMid - 13)));
-      setTopPx(clamped);
+    const y = computePosTop(editor.state.selection.from);
+    if (y !== null) {
+      setTopPx(y);
       setVisible(true);
-    } catch {
-      // ignore invalid pos during rapid switches
     }
-  }, [editor, containerEl]);
+  }, [editor, containerEl, computePosTop]);
 
   useEffect(() => {
     if (!editor || !containerEl) return;
@@ -279,44 +235,84 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
     editor.on('selectionUpdate', onSelection);
     editor.on('focus', onFocus);
     editor.on('update', onSelection);
-    // Initial gentle alignment to first line
+
+    // Re-align after inline images finish loading or container height changes
+    const onMediaLoad = () => syncToCaret();
+    containerEl.addEventListener('load', onMediaLoad, true);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => syncToCaret());
+      ro.observe(containerEl);
+    }
+
     const raf = window.requestAnimationFrame(syncToCaret);
     return () => {
       window.cancelAnimationFrame(raf);
+      ro?.disconnect();
+      containerEl.removeEventListener('load', onMediaLoad, true);
       editor.off('selectionUpdate', onSelection);
       editor.off('focus', onFocus);
       editor.off('update', onSelection);
     };
   }, [editor, containerEl, syncToCaret]);
 
-  // Also track mouse hover over prose blocks so clicking `+` next to any paragraph works effortlessly
+  // Track mouse hover over exact visual lines (not just top-level `<p>` boxes, which break
+  // whenever a paragraph contains an inline block image above a line of text).
   useEffect(() => {
-    if (!containerEl) return;
+    if (!containerEl || !editor) return;
     const onMouseMove = (e: MouseEvent) => {
-      if (menuOpen) return;
-      const proseRoot = containerEl.querySelector('.ProseMirror');
+      if (menuOpen || editor.isDestroyed) return;
+      const targetNode = e.target as Node | null;
+      if (gutterWrapRef.current?.contains(targetNode)) return;
+
+      const proseRoot = containerEl.querySelector('.ProseMirror') as HTMLElement | null;
       if (!proseRoot) return;
+      const proseRect = proseRoot.getBoundingClientRect();
+      // Keep the `+` button steady while the pointer travels left into the gutter zone
+      if (e.clientX < proseRect.left - 2) return;
+
+      // If pointer is directly inside an inline image figure, align to the image figure top
+      const imgFig = (targetNode instanceof Element ? targetNode : targetNode?.parentElement)?.closest(
+        '.k-inline-image-figure'
+      );
+      if (imgFig) {
+        const box = containerEl.getBoundingClientRect();
+        const figRect = imgFig.getBoundingClientRect();
+        const y = Math.max(0, Math.min(Math.max(0, box.height - 26), Math.round(figRect.top - box.top + 8)));
+        setTopPx(y);
+        setVisible(true);
+        return;
+      }
+
+      // Resolve the exact ProseMirror line at pointer Y so text lines below an inline image
+      // align directly next to the text instead of jumping up to the image.
+      const probeX = Math.max(proseRect.left + 8, Math.min(e.clientX, proseRect.right - 8));
+      const hit = editor.view.posAtCoords({ left: probeX, top: e.clientY });
+      if (hit && typeof hit.pos === 'number') {
+        const y = computePosTop(hit.pos);
+        if (y !== null) {
+          setTopPx(y);
+          setVisible(true);
+          return;
+        }
+      }
+
+      // Fallback for empty lines / margins between top-level blocks
       const box = containerEl.getBoundingClientRect();
       const children = Array.from(proseRoot.children) as HTMLElement[];
-      if (children.length === 0) return;
-      let target: HTMLElement | null = null;
       for (const child of children) {
         const rect = child.getBoundingClientRect();
         if (e.clientY >= rect.top - 4 && e.clientY <= rect.bottom + 4) {
-          target = child;
-          break;
+          const y = Math.max(0, Math.min(Math.max(0, box.height - 26), Math.round(rect.top - box.top)));
+          setTopPx(y);
+          setVisible(true);
+          return;
         }
       }
-      if (!target) return;
-      const rect = target.getBoundingClientRect();
-      const lineOffset = Math.min(13, rect.height / 2);
-      const y = Math.max(0, Math.round(rect.top - box.top + lineOffset - 13));
-      setTopPx(y);
-      setVisible(true);
     };
     containerEl.addEventListener('mousemove', onMouseMove);
     return () => containerEl.removeEventListener('mousemove', onMouseMove);
-  }, [containerEl, menuOpen]);
+  }, [containerEl, editor, menuOpen, computePosTop]);
 
   // Close popover on outside click / Esc
   useEffect(() => {
@@ -348,8 +344,8 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
     }
     const btnRect = buttonRef.current?.getBoundingClientRect();
     if (btnRect) {
-      const menuW = 246;
-      const estimatedH = 380;
+      const menuW = 242;
+      const estimatedH = 310;
       const spaceBelow = window.innerHeight - btnRect.bottom - 14;
       const flipUp = spaceBelow < estimatedH && btnRect.top > spaceBelow;
       const left = Math.max(12, Math.min(window.innerWidth - menuW - 12, btnRect.left));
@@ -364,6 +360,7 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
   return (
     <>
       <div
+        ref={gutterWrapRef}
         style={{ transform: `translate3d(0, ${topPx}px, 0)` }}
         className={`hidden sm:flex items-center justify-center absolute -left-9 top-0 z-10 transition-[transform,opacity] duration-120 ease-out ${
           visible || menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
@@ -372,6 +369,7 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
         <button
           ref={buttonRef}
           type="button"
+          data-no-press-scale="true"
           data-testid="studio-gutter-insert-btn"
           aria-label={t('note.studio.gutterInsertHint')}
           title={t('note.studio.gutterInsertHint')}
@@ -405,17 +403,17 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, scale: 0.96, y: menuAnchor.flipUp ? 4 : -4 }
+                      : { opacity: 0, y: menuAnchor.flipUp ? 5 : -5 }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1 }
-                      : { opacity: 1, scale: 1, y: 0 }
+                      : { opacity: 1, y: 0 }
                   }
                   exit={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, scale: 0.97, y: menuAnchor.flipUp ? 3 : -3 }
+                      : { opacity: 0, y: menuAnchor.flipUp ? 3 : -3 }
                   }
                   transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
                   style={{
@@ -423,10 +421,9 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
                     ...(menuAnchor.flipUp
                       ? { bottom: `${window.innerHeight - menuAnchor.top}px` }
                       : { top: `${menuAnchor.top}px` }),
-                    width: '246px',
-                    transformOrigin: menuAnchor.flipUp ? 'bottom left' : 'top left',
+                    width: '242px',
                   }}
-                  className="fixed z-[136] max-h-[72vh] overflow-y-auto rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-2 text-[var(--k-ink-primary)] shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
+                  className="k-popover-card fixed z-[136] max-h-[72vh] overflow-y-auto p-2 text-[var(--k-ink-primary)]"
                 >
                   <InsertMenuContent
                     editor={editor}

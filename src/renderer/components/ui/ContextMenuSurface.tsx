@@ -110,7 +110,7 @@ const MenuEntryList: React.FC<{
                     <ContextMenu.Popup
                       data-k-popup="true"
                       style={scopedAccentStyle}
-                      className="k-menu-motion min-w-[180px] max-w-[260px] max-h-[300px] overflow-y-auto rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
+                      className="k-popover-card k-menu-motion min-w-[180px] max-w-[260px] max-h-[300px] overflow-y-auto p-1.5 outline-none"
                     >
                       <MenuEntryList entries={entry.items} scopedAccentStyle={scopedAccentStyle} />
                     </ContextMenu.Popup>
@@ -211,7 +211,7 @@ export const ContextMenuSurface: React.FC<ContextMenuSurfaceProps> = ({
             data-k-popup="true"
             style={scopedAccentStyle}
             data-testid="context-menu-popup"
-            className="k-menu-motion min-w-[205px] max-w-[280px] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
+            className="k-popover-card k-menu-motion min-w-[205px] max-w-[280px] p-1.5 outline-none"
           >
             {hasOpened ? (
               <MenuEntryList entries={resolvedEntries} scopedAccentStyle={scopedAccentStyle} />

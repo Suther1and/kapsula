@@ -210,6 +210,7 @@ export const en: TranslationDict = {
   'workspace.pasteFromClipboardShort': 'Paste clipboard',
   'workspace.quickLaunchHint': 'Quick Launch ({shortcut})',
   'workspace.filter.all': 'All',
+  'workspace.filter.feed': 'Feed',
   'workspace.filter.unassigned': 'Unsorted',
   'workspace.filter.links': 'Links',
   'workspace.filter.notes': 'Notes',

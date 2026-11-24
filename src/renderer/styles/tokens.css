@@ -226,8 +226,8 @@
 }
 
 :root {
-  --k-font-display: 'Onest Variable', 'Onest', 'Inter Variable', 'Inter', system-ui, sans-serif;
-  --k-font-sans: 'Inter Variable', 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --k-font-display: 'Unbounded Variable', 'Unbounded', 'Manrope Variable', 'Manrope', system-ui, sans-serif;
+  --k-font-sans: 'Manrope Variable', 'Manrope', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --k-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
 
   --k-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -428,21 +428,125 @@ textarea::-webkit-scrollbar-thumb:active,
   transition-timing-function: var(--k-ease-out);
 }
 
-button.k-interactive:not(:disabled):active,
-[data-pressable="true"]:active {
+button.k-interactive:not(:disabled):not([aria-haspopup]):not([data-no-press-scale="true"]):not([data-popup-open]):active,
+[data-pressable="true"]:not([aria-haspopup]):not([data-no-press-scale="true"]):active {
   scale: 0.972;
+}
+
+/* Crisp tactile icon toggles (Star, Mute/EyeSlash, Pin, toolbar icons):
+   never squish the button box; animate color/bg smoothly and give only the SVG glyph a subtle pop. */
+.k-icon-toggle {
+  transition-property: background-color, border-color, color, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: var(--k-ease-out);
+}
+
+.k-icon-toggle > svg {
+  transition: transform 140ms var(--k-ease-out), opacity 140ms var(--k-ease-out);
+  transform-origin: center;
+}
+
+.k-icon-toggle:active > svg {
+  transform: scale(0.88);
+}
+
+@keyframes k-icon-pop {
+  0% {
+    transform: scale(0.84);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.k-icon-pop {
+  animation: k-icon-pop 210ms var(--k-ease-spring);
+}
+
+/* Elevated Popover / Dropdown / Context Menu Card Surface (Raycast / macOS-grade depth & rim light) */
+.k-popover-card {
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--k-bg-surface-2) 92%, #ffffff 3%) 0%,
+    color-mix(in srgb, var(--k-bg-surface-1) 97%, #000000 3%) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--k-ink-primary) 13%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 48px -12px rgba(0, 0, 0, 0.72),
+    0 6px 18px -4px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+:root[data-theme="light"] .k-popover-card {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.99) 0%,
+    rgba(248, 249, 252, 0.97) 100%
+  );
+  border: 1px solid rgba(15, 23, 42, 0.11);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 18px 42px -12px rgba(15, 23, 42, 0.16),
+    0 4px 12px -2px rgba(15, 23, 42, 0.07),
+    0 0 0 0.5px rgba(15, 23, 42, 0.04);
+}
+
+/* Pure translation + opacity popover transition (zero scale subpixel jitter on icons inside) */
+.k-popover-slide {
+  transition-property: opacity, transform;
+  transition-duration: 135ms;
+  transition-timing-function: var(--k-ease-out);
+  will-change: opacity, transform;
+}
+
+.k-popover-slide[data-starting-style] {
+  opacity: 0;
+  transform: translate3d(0, -5px, 0);
+}
+
+.k-popover-slide[data-side="top"][data-starting-style] {
+  opacity: 0;
+  transform: translate3d(0, 5px, 0);
+}
+
+.k-popover-slide[data-side="left"][data-starting-style] {
+  opacity: 0;
+  transform: translate3d(5px, 0, 0);
+}
+
+.k-popover-slide[data-side="right"][data-starting-style] {
+  opacity: 0;
+  transform: translate3d(-5px, 0, 0);
+}
+
+.k-popover-slide[data-ending-style] {
+  opacity: 0;
+  transform: translate3d(0, -3px, 0);
+  transition-duration: 85ms;
+}
+
+.k-popover-slide[data-side="top"][data-ending-style] {
+  opacity: 0;
+  transform: translate3d(0, 3px, 0);
 }
 
 .k-popup-motion {
   transform-origin: var(--transform-origin, top center);
-  transition-property: opacity, transform, scale, translate;
-  transition-duration: 145ms;
+  transition-property: opacity, transform, translate;
+  transition-duration: 135ms;
   transition-timing-function: var(--k-ease-out);
 }
 
 .k-popup-motion[data-starting-style] {
   opacity: 0;
-  scale: 0.97;
+  translate: 0 -4px;
 }
 
 .k-popup-motion[data-side="bottom"][data-starting-style] {
@@ -455,25 +559,30 @@ button.k-interactive:not(:disabled):active,
 
 .k-popup-motion[data-ending-style] {
   opacity: 0;
-  scale: 0.975;
+  transition-duration: 85ms;
 }
 
 .k-menu-motion {
-  transform-origin: var(--transform-origin, top left);
   transition-property: opacity, transform;
-  transition-duration: 105ms;
+  transition-duration: 120ms;
   transition-timing-function: var(--k-ease-out);
+  will-change: opacity, transform;
 }
 
 .k-menu-motion[data-starting-style] {
   opacity: 0;
-  transform: scale(0.955) translateY(-3px);
+  transform: translate3d(0, -4px, 0);
+}
+
+.k-menu-motion[data-side="top"][data-starting-style] {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
 }
 
 .k-menu-motion[data-ending-style] {
   opacity: 0;
-  transform: scale(0.975);
-  transition-duration: 70ms;
+  transform: translate3d(0, -2px, 0);
+  transition-duration: 75ms;
 }
 
 .k-card-surface {
@@ -692,16 +801,47 @@ html.k-theme-switching *::after {
 }
 
 /* ==================== Opt-in Glassmorphism (`data-glass` !== "off") ==================== */
+/* Neutral smoky ambient haze ONLY when using UI-only glass (`data-glass-native="none"`).
+   Never uses global `--k-accent` so it never clashes with section accent colors.
+   When native OS translucency (Mica / Acrylic / macOS Vibrancy) is active, the real desktop
+   bleeds through and this artificial gradient is disabled completely. */
 .k-glass-mesh {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(62% 52% at 14% 12%, color-mix(in srgb, var(--k-accent) 16%, transparent) 0%, transparent 70%),
-    radial-gradient(48% 46% at 86% 18%, color-mix(in srgb, var(--k-accent) 9%, var(--k-bg-surface-3) 14%) 0%, transparent 72%),
-    radial-gradient(54% 48% at 52% 94%, color-mix(in srgb, var(--k-bg-surface-2) 32%, transparent) 0%, transparent 74%);
+    radial-gradient(64% 52% at 16% 12%, rgba(255, 255, 255, 0.045) 0%, transparent 70%),
+    radial-gradient(50% 46% at 86% 18%, rgba(255, 255, 255, 0.03) 0%, transparent 72%),
+    radial-gradient(56% 48% at 52% 94%, color-mix(in srgb, var(--k-bg-surface-2) 28%, transparent) 0%, transparent 74%);
   opacity: 0.9;
+}
+
+:root[data-theme="light"] .k-glass-mesh {
+  background:
+    radial-gradient(64% 52% at 16% 12%, rgba(15, 23, 42, 0.035) 0%, transparent 70%),
+    radial-gradient(50% 46% at 86% 18%, rgba(15, 23, 42, 0.025) 0%, transparent 72%),
+    radial-gradient(56% 48% at 52% 94%, rgba(255, 255, 255, 0.5) 0%, transparent 74%);
+}
+
+:root[data-glass-native="mica"] body.k-surface-vault,
+:root[data-glass-native="acrylic"] body.k-surface-vault {
+  background: transparent !important;
+}
+
+:root[data-glass-native="mica"] .k-glass-mesh,
+:root[data-glass-native="acrylic"] .k-glass-mesh {
+  display: none !important;
+}
+
+:root[data-glass-native="mica"] [data-testid="studio-workspace"],
+:root[data-glass-native="acrylic"] [data-testid="studio-workspace"] {
+  background-color: var(--k-glass-canvas, transparent) !important;
+}
+
+:root[data-glass-native="mica"] [data-testid="studio-workspace"] main,
+:root[data-glass-native="acrylic"] [data-testid="studio-workspace"] main {
+  background-color: transparent !important;
 }
 
 :root[data-glass="subtle"] [data-testid="workspace-sidebar"],

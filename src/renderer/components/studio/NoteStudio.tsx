@@ -25,6 +25,7 @@ import {
   Code,
   Copy,
   DotsThree,
+  EyeSlash,
   FileText,
   FolderOpen,
   Highlighter,
@@ -40,7 +41,6 @@ import {
   NotePencil,
   Quotes,
   RocketLaunch,
-  SpeakerSlash,
   Sparkle,
   Star,
   SunHorizon,
@@ -355,6 +355,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [draftOrbit, setDraftOrbit] = useState<string>(item.orbit || '');
   const [draftBoardId, setDraftBoardId] = useState<string | null>(item.focusBoardId ?? null);
   const [draftRemindAt, setDraftRemindAt] = useState<number | null>(item.remindAt ?? null);
+  const [optimisticPinned, setOptimisticPinned] = useState<boolean>(Boolean(item.isPinned));
+  const [optimisticMuted, setOptimisticMuted] = useState<boolean>(Boolean(item.isMuted));
+  useEffect(() => {
+    setOptimisticPinned(Boolean(item.isPinned));
+    setOptimisticMuted(Boolean(item.isMuted));
+  }, [item.id, item.isPinned, item.isMuted]);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [persistingSlow, setPersistingSlow] = useState(false);
   const slowPersistTimerRef = useRef<number | null>(null);
@@ -1992,18 +1998,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
                   : t('note.studio.statusNew')}
           </span>
-
-          {!isDraft && item.isMuted ? (
-            <button
-              type="button"
-              onClick={() => void applyMetaPatch({ isMuted: false })}
-              title={t('cards.unmuteHint')}
-              className="k-interactive hidden @[560px]:inline-flex items-center gap-1 h-6 px-2 rounded-full border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/75 text-[11px] font-medium text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
-            >
-              <SpeakerSlash weight="fill" className="w-3 h-3" />
-              <span>{t('cards.mutedBadge')}</span>
-            </button>
-          ) : null}
         </div>
 
         {/* Right: Focused, Uncluttered Action Group (Zero Duplicate Controls) */}
@@ -2128,32 +2122,52 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             <>
               <button
                 type="button"
+                data-no-press-scale="true"
+                data-active={optimisticPinned ? 'true' : 'false'}
                 data-testid="studio-favorite-btn"
-                onClick={() => void applyMetaPatch({ isPinned: !item.isPinned })}
-                aria-label={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
-                title={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
-                className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
-                  item.isPinned
+                onClick={() => {
+                  const next = !optimisticPinned;
+                  setOptimisticPinned(next);
+                  void applyMetaPatch({ isPinned: next });
+                }}
+                aria-label={optimisticPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
+                title={optimisticPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
+                className={`k-icon-toggle k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
+                  optimisticPinned
                     ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                     : 'text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
                 }`}
               >
-                <Star weight={item.isPinned ? 'fill' : 'regular'} className="w-4 h-4" />
+                <Star
+                  key={optimisticPinned ? 'star-on' : 'star-off'}
+                  weight={optimisticPinned ? 'fill' : 'regular'}
+                  className={`w-4 h-4 ${optimisticPinned ? 'k-icon-pop' : ''}`}
+                />
               </button>
 
               <button
                 type="button"
+                data-no-press-scale="true"
+                data-active={optimisticMuted ? 'true' : 'false'}
                 data-testid="studio-mute-btn"
-                onClick={() => void applyMetaPatch({ isMuted: !item.isMuted })}
-                aria-label={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
-                title={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
-                className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
-                  item.isMuted
+                onClick={() => {
+                  const next = !optimisticMuted;
+                  setOptimisticMuted(next);
+                  void applyMetaPatch({ isMuted: next });
+                }}
+                aria-label={optimisticMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                title={optimisticMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                className={`k-icon-toggle k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
+                  optimisticMuted
                     ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                     : 'text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
                 }`}
               >
-                <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-4 h-4" />
+                <EyeSlash
+                  key={optimisticMuted ? 'mute-on' : 'mute-off'}
+                  weight={optimisticMuted ? 'fill' : 'regular'}
+                  className={`w-4 h-4 ${optimisticMuted ? 'k-icon-pop' : ''}`}
+                />
               </button>
             </>
           ) : null}
@@ -2881,8 +2895,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
+                    data-no-press-scale="true"
                     title={t('note.studio.toolbar.textColor')}
                     aria-label={t('note.studio.toolbar.textColor')}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setBubbleColorOpen((v) => !v)}
                     className={`k-interactive inline-flex flex-col items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.textColor || bubbleColorOpen
@@ -2890,23 +2906,37 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                         : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
                     }`}
                   >
-                    <span className="text-[12px] font-bold leading-none">A</span>
                     <span
-                      className="w-3 h-[2px] rounded-full mt-0.5"
+                      className="text-[12px] font-bold leading-none"
+                      style={
+                        toolbarState?.textColor
+                          ? {
+                              color:
+                                TEXT_COLOR_SWATCHES.find((s) => s.key === toolbarState?.textColor)?.dot ??
+                                'var(--k-accent)',
+                            }
+                          : undefined
+                      }
+                    >
+                      A
+                    </span>
+                    <span
+                      className="w-3.5 h-[2.5px] rounded-full mt-0.5"
                       style={{
-                        backgroundColor:
+                        background:
                           TEXT_COLOR_SWATCHES.find((s) => s.key === toolbarState?.textColor)?.dot ??
-                          'var(--k-accent)',
+                          'linear-gradient(90deg, #ef4444 0%, #f59e0b 33%, #22c55e 66%, #3b82f6 100%)',
                       }}
                     />
                   </button>
                   {bubbleColorOpen ? (
                     <div className="flex items-center gap-0.5 px-1 border-l border-[var(--k-border-hairline)]">
-                      {TEXT_COLOR_SWATCHES.slice(0, 6).map((sw) => (
+                      {TEXT_COLOR_SWATCHES.map((sw) => (
                         <button
                           key={sw.key}
                           type="button"
                           title={locale === 'en' ? sw.labelEn : sw.labelRu}
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
                             if (toolbarState?.textColor === sw.key) {
                               editor.chain().focus().unsetTextColor().run();
@@ -2915,7 +2945,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                             }
                             setBubbleColorOpen(false);
                           }}
-                          className="k-interactive w-5 h-5 rounded-md flex items-center justify-center hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                          className={`k-interactive w-5 h-5 rounded-md flex items-center justify-center hover:bg-[var(--k-bg-surface-2)] cursor-pointer ${
+                            toolbarState?.textColor === sw.key ? 'ring-1 ring-[var(--k-ink-primary)]' : ''
+                          }`}
                         >
                           <span
                             className="w-3 h-3 rounded-full ring-1 ring-black/15"
@@ -2927,6 +2959,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                         <button
                           type="button"
                           title={t('note.studio.toolbar.defaultColor')}
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
                             editor.chain().focus().unsetTextColor().run();
                             setBubbleColorOpen(false);
@@ -3094,21 +3127,21 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, -4px, 0) scale(0.97)' }
+                      : { opacity: 0, y: -4 }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1 }
-                      : { opacity: 1, transform: 'translate3d(0px, 0, 0) scale(1)' }
+                      : { opacity: 1, y: 0 }
                   }
                   exit={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, -3px, 0) scale(0.97)' }
+                      : { opacity: 0, y: -3 }
                   }
-                  transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+                  transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
                   style={portalPlacement.style}
-                  className="fixed z-[135] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
+                  className="k-popover-card fixed z-[135] p-1.5"
                 >
                   <div className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                     {t('note.studio.commandsAndTemplates')}
@@ -3177,21 +3210,21 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, -4px, 0) scale(0.97)' }
+                      : { opacity: 0, y: -4 }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1 }
-                      : { opacity: 1, transform: 'translate3d(0px, 0, 0) scale(1)' }
+                      : { opacity: 1, y: 0 }
                   }
                   exit={
                     prefersReduced
                       ? { opacity: 0 }
-                      : { opacity: 0, transform: 'translate3d(0, -3px, 0) scale(0.97)' }
+                      : { opacity: 0, y: -3 }
                   }
-                  transition={{ duration: 0.13, ease: [0.23, 1, 0.32, 1] }}
+                  transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
                   style={portalPlacement.style}
-                  className="fixed z-[135] rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl"
+                  className="k-popover-card fixed z-[135] p-1.5"
                 >
                   <div className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                     {t('note.studio.linkWithNote')}

@@ -123,12 +123,15 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
           onOpenChange={setInsertOpen}
           side="top"
           align="start"
-          widthClass="w-[246px] !p-2"
+          preserveFocus
+          widthClass="w-[242px] !p-2"
           trigger={
             <button
               type="button"
+              data-no-press-scale="true"
               data-testid="studio-insert-menu-btn"
               title={t('note.studio.insertTitle')}
+              onMouseDown={(e) => e.preventDefault()}
               className="k-interactive inline-flex items-center gap-1 h-7 px-2 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/75 hover:bg-[var(--k-bg-surface-2)] hover:border-[var(--k-border-strong)] text-[12px] font-medium text-[var(--k-ink-primary)] cursor-pointer shrink-0 mr-1"
             >
               {insertingImage ? (
@@ -136,7 +139,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
               ) : (
                 <Plus weight="bold" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
               )}
-              <span className="hidden @[560px]:inline">{t('note.studio.insertShort')}</span>
+              <span className="hidden @[560px]:inline whitespace-nowrap">{t('note.studio.insertShort')}</span>
             </button>
           }
         >
@@ -158,28 +161,36 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
           onOpenChange={setSizeOpen}
           side="top"
           align="start"
-          widthClass="w-[192px] !p-1.5"
+          preserveFocus
+          widthClass="w-[196px] !p-1.5"
           trigger={
             <button
               type="button"
+              data-no-press-scale="true"
               data-testid="format-size-btn"
               title={t('note.studio.toolbar.textSize')}
               onMouseDown={(e) => e.preventDefault()}
-              className={`k-interactive inline-flex items-center gap-1 h-7 px-2 rounded-lg text-[12px] font-medium cursor-pointer shrink-0 ${
-                state?.h1 || state?.h2 || state?.h3 || state?.textSize
+              className={`k-interactive inline-flex items-center gap-1 h-7 px-2 rounded-lg text-[12px] font-medium cursor-pointer shrink-0 whitespace-nowrap ${
+                sizeOpen || state?.h1 || state?.h2 || state?.h3 || state?.textSize
                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
               }`}
             >
               <TextAa weight="bold" className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden @[480px]:inline max-w-[78px] truncate">{activeSizeLabel}</span>
-              <CaretDown weight="bold" className="w-2.5 h-2.5 opacity-70 shrink-0" />
+              <CaretDown
+                weight="bold"
+                className={`w-2.5 h-2.5 opacity-70 shrink-0 transition-transform duration-150 ${
+                  sizeOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
           }
         >
           <div className="space-y-0.5">
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().setParagraph().unsetTextSize().run();
@@ -193,6 +204,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().setParagraph().setTextSize('sm').run();
@@ -206,6 +218,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().setParagraph().setTextSize('lg').run();
@@ -222,6 +235,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
 
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().unsetTextSize().toggleHeading({ level: 1 }).run();
@@ -233,6 +247,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().unsetTextSize().toggleHeading({ level: 2 }).run();
@@ -244,6 +259,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setSizeOpen(false);
                 editor.chain().focus().unsetTextSize().toggleHeading({ level: 3 }).run();
@@ -323,24 +339,35 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
           onOpenChange={setColorOpen}
           side="top"
           align="center"
-          widthClass="w-[208px] !p-2"
+          preserveFocus
+          widthClass="w-[216px] !p-2.5"
           trigger={
             <button
               type="button"
+              data-no-press-scale="true"
               data-testid="format-color-btn"
               title={t('note.studio.toolbar.textColor')}
               aria-label={t('note.studio.toolbar.textColor')}
               onMouseDown={(e) => e.preventDefault()}
               className={`k-interactive relative inline-flex flex-col items-center justify-center h-7 w-7 rounded-lg cursor-pointer shrink-0 ${
-                state?.textColor
+                colorOpen || state?.textColor
                   ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)]'
                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
               }`}
             >
-              <span className="text-[12.5px] font-bold leading-none">A</span>
               <span
-                className="w-3.5 h-[2.5px] rounded-full mt-0.5"
-                style={{ backgroundColor: activeTextSwatch?.dot ?? 'var(--k-ink-muted)' }}
+                className="text-[12.5px] font-bold leading-none"
+                style={activeTextSwatch ? { color: activeTextSwatch.dot } : undefined}
+              >
+                A
+              </span>
+              <span
+                className="w-3.5 h-[3px] rounded-full mt-0.5"
+                style={{
+                  background:
+                    activeTextSwatch?.dot ??
+                    'linear-gradient(90deg, #ef4444 0%, #f59e0b 33%, #22c55e 66%, #3b82f6 100%)',
+                }}
               />
             </button>
           }
@@ -353,6 +380,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
               {state?.textColor ? (
                 <button
                   type="button"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setColorOpen(false);
                     editor.chain().focus().unsetTextColor().run();
@@ -372,6 +400,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
                     type="button"
                     data-testid={`format-color-${swatch.key}`}
                     title={locale === 'en' ? swatch.labelEn : swatch.labelRu}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setColorOpen(false);
                       if (active) {
@@ -403,16 +432,18 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
           onOpenChange={setBgOpen}
           side="top"
           align="center"
-          widthClass="w-[196px] !p-2"
+          preserveFocus
+          widthClass="w-[204px] !p-2.5"
           trigger={
             <button
               type="button"
+              data-no-press-scale="true"
               data-testid="format-highlight-btn"
               title={t('note.studio.toolbar.highlight')}
               aria-label={t('note.studio.toolbar.highlight')}
               onMouseDown={(e) => e.preventDefault()}
               className={`k-interactive relative inline-flex flex-col items-center justify-center h-7 w-7 rounded-lg cursor-pointer shrink-0 ${
-                state?.highlight
+                bgOpen || state?.highlight
                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
               }`}
@@ -435,6 +466,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
               {state?.highlight ? (
                 <button
                   type="button"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setBgOpen(false);
                     editor.chain().focus().unsetHighlight().run();
@@ -454,6 +486,7 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
                     type="button"
                     data-testid={`format-highlight-${swatch.key}`}
                     title={locale === 'en' ? swatch.labelEn : swatch.labelRu}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setBgOpen(false);
                       if (active) {
@@ -536,11 +569,12 @@ export const NoteFormatDock: React.FC<NoteFormatDockProps> = ({
           trigger={
             <button
               type="button"
+              data-no-press-scale="true"
               data-testid="format-link-btn"
               title={t('note.studio.toolbar.link')}
               aria-label={t('note.studio.toolbar.link')}
               onMouseDown={(e) => e.preventDefault()}
-              className={btnClass(state?.link)}
+              className={btnClass(linkOpen || state?.link)}
             >
               <LinkSimple weight="bold" className="w-3.5 h-3.5" />
             </button>

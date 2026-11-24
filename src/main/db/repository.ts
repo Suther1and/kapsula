@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { detectPlatformIntent, expandBilingualQuery } from '@shared/bilingual-search';
+import {
+  detectPlatformIntent,
+  expandBilingualQuery,
+  scoreBilingualFields,
+} from '@shared/bilingual-search';
 import { DEFAULT_APPEARANCE_CONFIG } from '@shared/color-engine';
 import {
   DEFAULT_MONTHLY_CAP_USD,
@@ -1905,6 +1909,46 @@ export class VaultRepository {
 
       if (allTokensMatch) {
         scored.push({ item, score });
+      }
+    }
+
+    // 4. Typo-tolerant & section-aware fuzzy fallback when exact FTS/LIKE yielded few hits
+    if (scored.length < 8 && searchRaw.length >= 4) {
+      const seenScoredIds = new Set(scored.map((e) => e.item.id));
+      const orbitMap = new Map(this.listOrbits().map((o) => [o.id, o.name]));
+      const recentRows = this.db
+        .prepare(`SELECT i.* FROM items i WHERE ${baseConditions.join(' AND ')} ${orderBy} LIMIT 320`)
+        .all(...baseParams) as unknown as ItemRow[];
+      for (const row of recentRows) {
+        if (seenScoredIds.has(row.id)) continue;
+        const item = mapRowToItem(row);
+        const fuzzyScore = scoreBilingualFields(
+          {
+            title: item.title,
+            tags: item.tags,
+            orbitName: item.orbit ? orbitMap.get(item.orbit) : undefined,
+            domain: item.domain,
+            summary: item.summary,
+            body: item.body,
+            ocrText: item.ocrText,
+            url: item.url,
+            extra: [
+              item.secretMeta?.service,
+              item.secretMeta?.loginHint,
+              item.mediaMeta?.transcript,
+              item.mediaMeta?.fileName,
+            ]
+              .filter(Boolean)
+              .join(' '),
+            isPinned: item.isPinned,
+            updatedAt: item.contentUpdatedAt || item.createdAt,
+          },
+          searchRaw
+        );
+        if (fuzzyScore > 0) {
+          seenScoredIds.add(item.id);
+          scored.push({ item, score: Math.round(fuzzyScore * 0.65) });
+        }
       }
     }
 

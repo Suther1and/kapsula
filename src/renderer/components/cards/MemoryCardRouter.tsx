@@ -6,6 +6,7 @@ import {
   CheckSquareOffset,
   Copy,
   Eye,
+  EyeSlash,
   Files,
   FileText,
   FolderSimple,
@@ -13,7 +14,6 @@ import {
   PencilSimple,
   Plus,
   PushPin,
-  SpeakerSlash,
   Swatches,
   Trash,
 } from '@phosphor-icons/react';
@@ -136,7 +136,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
               type: 'item' as const,
               id: 'mute',
               label: item.isMuted ? t('cards.ctx.unmute') : t('cards.ctx.mute'),
-              icon: <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
+              icon: <EyeSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
               onSelect: () => onToggleMute(item),
             },
           ]
@@ -568,7 +568,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
               }`}
             >
               {item.isMuted ? (
-                <SpeakerSlash
+                <EyeSlash
                   weight="fill"
                   className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0"
                   aria-label={t('cards.mutedBadge')}
@@ -602,32 +602,47 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
                 {onToggleMute ? (
                   <button
                     type="button"
+                    data-no-press-scale="true"
                     data-testid={`card-mute-btn-${item.id}`}
                     title={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
                     aria-label={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
                     onClick={() => onToggleMute(item)}
-                    className={`k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full cursor-pointer ${
+                    className={`k-icon-toggle inline-flex items-center justify-center w-5 h-5 rounded-full cursor-pointer ${
                       item.isMuted
                         ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]'
                         : 'text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)]'
                     }`}
                   >
-                    <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-3 h-3" />
+                    <EyeSlash
+                      key={item.isMuted ? 'card-mute-on' : 'card-mute-off'}
+                      weight={item.isMuted ? 'fill' : 'regular'}
+                      className={`w-3 h-3 ${item.isMuted ? 'k-icon-pop' : ''}`}
+                    />
                   </button>
                 ) : null}
                 <button
                   type="button"
+                  data-no-press-scale="true"
                   title={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
                   onClick={() => onTogglePin(item)}
-                  className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
+                  className={`k-icon-toggle inline-flex items-center justify-center w-5 h-5 rounded-full cursor-pointer ${
+                    item.isPinned
+                      ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]'
+                      : 'text-[var(--k-ink-muted)] hover:text-[var(--k-accent)] hover:bg-[var(--k-bg-surface-3)]'
+                  }`}
                 >
-                  <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3 h-3" />
+                  <PushPin
+                    key={item.isPinned ? 'card-pin-on' : 'card-pin-off'}
+                    weight={item.isPinned ? 'fill' : 'regular'}
+                    className={`w-3 h-3 ${item.isPinned ? 'k-icon-pop' : ''}`}
+                  />
                 </button>
                 <button
                   type="button"
+                  data-no-press-scale="true"
                   title={t('common.delete')}
                   onClick={() => onDelete(item.id)}
-                  className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
+                  className="k-icon-toggle inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-danger)] hover:bg-[var(--k-danger-soft)] cursor-pointer"
                 >
                   <Trash className="w-3 h-3" />
                 </button>

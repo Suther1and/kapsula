@@ -17,7 +17,7 @@ import {
   Paperclip,
   Plus,
   PushPin,
-  SpeakerSlash,
+  EyeSlash,
   Swatches,
   Trash,
   X,
@@ -349,7 +349,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     {
       id: 'mute',
       label: item.isMuted ? t('common.unmute') : t('common.mute'),
-      icon: <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-5 h-5" />,
+      icon: <EyeSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-5 h-5" />,
       accent: Boolean(item.isMuted),
       onSelect: () => {
         void onUpdateItem(item.id, { isMuted: !item.isMuted });
@@ -775,7 +775,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               </span>
               <span className="inline-flex items-center gap-1 shrink-0">
                 {item.isMuted ? (
-                  <SpeakerSlash weight="fill" className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0" />
+                  <EyeSlash weight="fill" className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0" />
                 ) : null}
                 {item.isPinned && !hasVisual ? (
                   <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)] shrink-0" />
@@ -982,7 +982,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
               }`}
             >
-              <SpeakerSlash weight={muteFilter === 'muted' ? 'fill' : 'regular'} className="w-3.5 h-3.5" />
+              <EyeSlash weight={muteFilter === 'muted' ? 'fill' : 'regular'} className="w-3.5 h-3.5" />
               <span>
                 {muteFilter === 'all'
                   ? t('feed.muteAll')

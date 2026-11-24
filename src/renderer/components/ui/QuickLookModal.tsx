@@ -91,15 +91,41 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
           key="quick-look-root"
           data-testid="quick-look-modal"
           style={scopedAccentStyle}
-          initial={{ opacity: 0 }}
+          initial={{ opacity: 1 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
+          exit={{ opacity: 1 }}
+          transition={{ duration: 0.16 }}
           className="fixed inset-0 z-[105] flex items-center justify-center p-6"
         >
-          <div
+          <motion.div
             onClick={onClose}
-            className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]"
+            initial={
+              prefersReduced
+                ? { opacity: 0 }
+                : {
+                    backgroundColor: 'rgba(0, 0, 0, 0)',
+                    backdropFilter: 'blur(0px)',
+                  }
+            }
+            animate={
+              prefersReduced
+                ? { opacity: 1 }
+                : {
+                    backgroundColor: 'var(--k-bg-backdrop)',
+                    backdropFilter: 'blur(6px)',
+                    transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                  }
+            }
+            exit={
+              prefersReduced
+                ? { opacity: 0, transition: { duration: 0.12 } }
+                : {
+                    backgroundColor: 'rgba(0, 0, 0, 0)',
+                    backdropFilter: 'blur(0px)',
+                    transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
+                  }
+            }
+            className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
           />
 
           {/* Prev / Next floating arrows */}
@@ -130,16 +156,24 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, scale: 0.965, y: 8 }
+                : {
+                    opacity: 0,
+                    transform: 'perspective(1100px) translate3d(0, 12px, 0) rotateX(-5deg) scale(0.96)',
+                  }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
                 : {
                     opacity: 1,
-                    scale: 1,
-                    y: 0,
-                    transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+                    transform: 'perspective(1100px) translate3d(0, 0px, 0) rotateX(0deg) scale(1)',
+                    transition: {
+                      type: 'spring',
+                      stiffness: 500,
+                      damping: 34,
+                      mass: 0.66,
+                      opacity: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
+                    },
                   }
             }
             exit={
@@ -147,11 +181,11 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                 ? { opacity: 0 }
                 : {
                     opacity: 0,
-                    scale: 0.975,
-                    y: 5,
-                    transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
+                    transform: 'perspective(1100px) translate3d(0, 6px, 0) rotateX(-2.5deg) scale(0.975)',
+                    transition: { duration: 0.13, ease: [0.32, 0.72, 0, 1] },
                   }
             }
+            style={{ transformOrigin: '50% 24%' }}
             className="relative z-10 w-full max-w-[780px] max-h-[84vh] rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden text-[var(--k-ink-primary)]"
           >
             {/* Clean Top Bar */}

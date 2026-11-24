@@ -695,9 +695,9 @@ if (!singleInstanceLock) {
     const applyWindowBackground = () => {
       const cur = getSettingsState();
       const tokens = computeThemeTokens(cur.theme, cur.appearance);
-      windows?.setVaultBackgroundColor(tokens.canvasHex);
       const glassOn = Boolean(cur.appearance?.glassPreset && cur.appearance.glassPreset !== 'off');
-      windows?.setVaultGlassMaterial(cur.appearance?.glassNativeMaterial ?? 'none', glassOn);
+      const material = cur.appearance?.glassNativeMaterial ?? 'none';
+      windows?.setVaultGlassMaterial(material, glassOn, tokens.canvasHex);
     };
 
     windows.createAll();

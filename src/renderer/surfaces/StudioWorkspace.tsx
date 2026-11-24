@@ -34,7 +34,6 @@ import {
   PencilSimple,
   Plus,
   PushPin,
-  SpeakerSlash,
   Sparkle,
   Square,
   SquaresFour,
@@ -58,11 +57,12 @@ import type {
 } from '@shared/types';
 import { SECTION_COLOR_PALETTE, SECTION_ICON_CHOICES } from '@shared/constants';
 import { useI18n } from '@shared/i18n/react';
-import { matchesBilingualHaystack } from '@shared/bilingual-search';
+import { scoreBilingualFields } from '@shared/bilingual-search';
 import { truncateAtWordBoundary } from '@shared/html-entities';
 import { isDedicatedNote, isMediaItem } from '@shared/item-helpers';
 import { formatShortcutCompact, isMacPlatform } from '@shared/shortcuts';
 import { toggleMarkdownTaskInBody } from '@shared/task-helpers';
+import { getDnaHumanLabel } from '../lib/format';
 import { playTactileTick } from '../lib/tactileSound';
 import { KapsulaEmblem } from '../components/ui/KapsulaEmblem';
 import { GlobalSearchPopover } from '../components/ui/GlobalSearchPopover';
@@ -1554,6 +1554,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           : items;
     const q = searchQuery.trim();
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
+    const scoreMap = q ? new Map<string, number>() : null;
+    const orbitNameMap = q ? new Map(orbits.map((o) => [o.id, o.name])) : null;
+    const boardNameMap = q ? new Map(boards.map((b) => [b.id, b.name])) : null;
 
     const filtered = base.filter((item) => {
       if (nav.type === 'flow') {
@@ -1603,22 +1606,37 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
 
       if (q) {
-        if (serverSet && serverSet.has(item.id)) return true;
-        const haystack = [
-          item.title,
-          item.summary,
-          item.body,
-          item.ocrText,
-          item.url,
-          item.domain,
-          item.tags.join(' '),
-          item.secretMeta?.service,
-          item.secretMeta?.loginHint,
-          item.secretMeta?.cardBrand,
-        ]
-          .filter(Boolean)
-          .join('\n');
-        return matchesBilingualHaystack(haystack, q);
+        const localScore = scoreBilingualFields(
+          {
+            title: item.title,
+            tags: item.tags,
+            orbitName: item.orbit ? orbitNameMap?.get(item.orbit) : undefined,
+            boardName: item.focusBoardId ? boardNameMap?.get(item.focusBoardId) : undefined,
+            domain: item.domain,
+            dnaLabel: getDnaHumanLabel(item, locale),
+            summary: item.summary,
+            body: item.body,
+            ocrText: item.ocrText,
+            url: item.url,
+            extra: [
+              item.secretMeta?.service,
+              item.secretMeta?.loginHint,
+              item.secretMeta?.cardBrand,
+              item.mediaMeta?.transcript,
+              item.isMuted ? 'muted' : '',
+              item.isPinned ? 'pinned' : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+            isPinned: item.isPinned,
+            updatedAt: item.contentUpdatedAt || item.createdAt,
+          },
+          q
+        );
+        const serverHit = Boolean(serverSet && serverSet.has(item.id));
+        const totalScore = localScore > 0 ? localScore + (serverHit ? 24 : 0) : serverHit ? 24 : 0;
+        if (totalScore <= 0) return false;
+        scoreMap?.set(item.id, totalScore);
       }
 
       return true;
@@ -1626,6 +1644,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
     const sorted = [...filtered];
     sorted.sort((a, b) => {
+      if (scoreMap) {
+        const diff = (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0);
+        if (Math.abs(diff) >= 1) return diff;
+      }
       if (sortOrder === 'flow') {
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
         return getChronologyTime(b) - getChronologyTime(a);
@@ -1669,6 +1691,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     secretKindFilter,
     sortOrder,
     dateLocale,
+    orbits,
+    boards,
+    locale,
   ]);
 
   const activeNavTitle = useMemo(() => {
@@ -2492,7 +2517,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return selectedItems;
   }, [items, selectedItems, synthesizeSeedIds]);
 
-  const feedQuickFilterChips: Array<{
+  const activePrimaryMode: 'feed' | 'note' | 'task' =
+    filterDnaQuick === 'note' ? 'note' : filterDnaQuick === 'task' ? 'task' : 'feed';
+
+  const feedSecondaryFilterChips: Array<{
     id: string;
     testId?: string;
     label: string;
@@ -2500,21 +2528,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     active: boolean;
     onClick: () => void;
   }> = [
-    {
-      id: 'all',
-      label: t('workspace.filter.all'),
-      active:
-        filterDnaQuick === 'all' &&
-        !filterUnsortedOnly &&
-        !filterMediaOnly &&
-        !filterPinnedOnly,
-      onClick: () => {
-        setFilterDnaQuick('all');
-        setFilterUnsortedOnly(false);
-        setFilterMediaOnly(false);
-        setFilterPinnedOnly(false);
-      },
-    },
     ...(nav.type === 'flow' && counts.unsorted > 0
       ? [
           {
@@ -2538,46 +2551,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       onClick: () => setFilterDnaQuick((v) => (v === 'link' ? 'all' : 'link')),
     },
     {
-      id: 'note',
-      testId: 'quick-filter-note',
-      label: t('workspace.filter.notes'),
-      badge: scopedDedicatedNotesCount > 0 ? scopedDedicatedNotesCount : undefined,
-      active: filterDnaQuick === 'note',
-      onClick: () => {
-        if (filterDnaQuick === 'note') {
-          setFilterDnaQuick('all');
-        } else {
-          setFilterDnaQuick('note');
-          setFilterPinnedOnly(false);
-          setFilterUnsortedOnly(false);
-          setFilterMediaOnly(false);
-          setSelectedIds([]);
-        }
-      },
-    },
-    {
-      id: 'task',
-      testId: 'quick-filter-task',
-      label: t('workspace.filter.tasks'),
-      badge: scopedOpenTasksCount > 0 ? scopedOpenTasksCount : undefined,
-      active: filterDnaQuick === 'task',
-      onClick: () => {
-        if (filterDnaQuick === 'task') {
-          setFilterDnaQuick('all');
-        } else {
-          setFilterDnaQuick('task');
-          setFilterPinnedOnly(false);
-          setFilterUnsortedOnly(false);
-          setFilterMediaOnly(false);
-          setSelectedIds([]);
-          void window.kapsula
-            .listTasks()
-            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-            .catch(() => {});
-        }
-      },
-    },
-    {
       id: 'voice',
       testId: 'quick-filter-voice',
       label: t('workspace.filter.voice'),
@@ -2596,40 +2569,166 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     },
   ];
 
+  const primaryModeTabs: Array<{
+    id: 'feed' | 'note' | 'task';
+    testId?: string;
+    label: string;
+    badge?: number;
+    icon: React.ReactNode;
+    onClick: () => void;
+  }> = [
+    {
+      id: 'feed',
+      testId: 'quick-mode-feed',
+      label: t('workspace.filter.feed'),
+      icon: <Stack className="w-3.5 h-3.5 shrink-0" weight={activePrimaryMode === 'feed' ? 'fill' : 'regular'} />,
+      onClick: () => {
+        setFilterDnaQuick('all');
+        setFilterUnsortedOnly(false);
+        setFilterMediaOnly(false);
+        setFilterPinnedOnly(false);
+      },
+    },
+    {
+      id: 'note',
+      testId: 'quick-filter-note',
+      label: t('workspace.filter.notes'),
+      badge: scopedDedicatedNotesCount > 0 ? scopedDedicatedNotesCount : undefined,
+      icon: <NotePencil className="w-3.5 h-3.5 shrink-0" weight={activePrimaryMode === 'note' ? 'fill' : 'regular'} />,
+      onClick: () => {
+        if (filterDnaQuick === 'note') {
+          setFilterDnaQuick('all');
+        } else {
+          setFilterDnaQuick('note');
+          setFilterPinnedOnly(false);
+          setFilterUnsortedOnly(false);
+          setFilterMediaOnly(false);
+          setSelectedIds([]);
+        }
+      },
+    },
+    {
+      id: 'task',
+      testId: 'quick-filter-task',
+      label: t('workspace.filter.tasks'),
+      badge: scopedOpenTasksCount > 0 ? scopedOpenTasksCount : undefined,
+      icon: <ListBullets className="w-3.5 h-3.5 shrink-0" weight={activePrimaryMode === 'task' ? 'bold' : 'regular'} />,
+      onClick: () => {
+        if (filterDnaQuick === 'task') {
+          setFilterDnaQuick('all');
+        } else {
+          setFilterDnaQuick('task');
+          setFilterPinnedOnly(false);
+          setFilterUnsortedOnly(false);
+          setFilterMediaOnly(false);
+          setSelectedIds([]);
+          void window.kapsula
+            .listTasks()
+            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+            .catch(() => {});
+        }
+      },
+    },
+  ];
+
   const renderQuickFilterChips = () => (
-    <Highlight
-      mode="parent"
-      controlledItems
-      hover
-      exitDelay={0}
-      className="rounded-full bg-[var(--k-bg-surface-2)]"
-      containerClassName="inline-flex flex-wrap items-center gap-1"
-      transition={
-        prefersReduced
-          ? { duration: 0 }
-          : { type: 'spring', stiffness: 760, damping: 44, mass: 0.42 }
-      }
-    >
-      {feedQuickFilterChips.map((chip) => (
-        <HighlightItem key={chip.id} value={chip.id} disabled={chip.active}>
-          <button
-            type="button"
-            data-testid={chip.testId}
-            onClick={chip.onClick}
-            className={`k-interactive relative z-10 h-7 px-2.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 ${
-              chip.active
-                ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
-                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] border border-transparent'
-            }`}
+    <div className="inline-flex flex-wrap items-center gap-1.5">
+      {/* Primary View-Mode Switcher Capsule: Лента | Заметки | Задачи */}
+      <div
+        role="tablist"
+        aria-label={t('workspace.filter.feed')}
+        className="inline-flex items-center p-[2.5px] rounded-full bg-[var(--k-bg-surface-2)]/90 border border-[var(--k-border-hairline)] shrink-0"
+      >
+        {primaryModeTabs.map((tab) => {
+          const isActive = activePrimaryMode === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              data-no-press-scale="true"
+              data-testid={tab.testId}
+              onClick={tab.onClick}
+              className={`relative h-[25px] px-2 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors duration-150 ${
+                isActive
+                  ? 'text-[var(--k-accent)]'
+                  : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+              }`}
+            >
+              {isActive ? (
+                <motion.span
+                  layoutId="workspace-mode-pill"
+                  transition={
+                    prefersReduced
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 580, damping: 38, mass: 0.55 }
+                  }
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 rounded-full bg-[var(--k-bg-surface-1)] border border-[var(--k-accent)]/35 shadow-[0_1px_3px_rgba(0,0,0,0.18)]"
+                />
+              ) : null}
+              <span className="relative z-10 inline-flex items-center gap-1">
+                {tab.icon}
+                <span>{tab.label}</span>
+                {tab.badge !== undefined ? (
+                  <span
+                    className={`k-tabular text-[10px] px-1.5 py-[0.5px] rounded-full ${
+                      isActive
+                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                        : 'bg-[var(--k-bg-surface-3)]/80 text-[var(--k-ink-muted)]'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Lightweight Feed Filters (only shown while viewing Feed mode) */}
+      {activePrimaryMode === 'feed' ? (
+        <>
+          <span aria-hidden="true" className="w-px h-4 bg-[var(--k-border-hairline)] hidden sm:inline-block shrink-0" />
+          <Highlight
+            mode="parent"
+            controlledItems
+            hover
+            exitDelay={0}
+            className="rounded-full bg-[var(--k-bg-surface-2)]"
+            containerClassName="inline-flex flex-wrap items-center gap-0.5"
+            transition={
+              prefersReduced
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 760, damping: 44, mass: 0.42 }
+            }
           >
-            <span>{chip.label}</span>
-            {chip.badge !== undefined ? (
-              <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
-            ) : null}
-          </button>
-        </HighlightItem>
-      ))}
-    </Highlight>
+            {feedSecondaryFilterChips.map((chip) => (
+              <HighlightItem key={chip.id} value={chip.id} disabled={chip.active}>
+                <button
+                  type="button"
+                  data-no-press-scale="true"
+                  data-testid={chip.testId}
+                  onClick={chip.onClick}
+                  className={`k-interactive relative z-10 h-7 px-2 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                    chip.active
+                      ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] border border-[var(--k-accent)]/35'
+                      : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] border border-transparent'
+                  }`}
+                >
+                  <span>{chip.label}</span>
+                  {chip.badge !== undefined ? (
+                    <span className="k-tabular opacity-75 text-[10.5px]">{chip.badge}</span>
+                  ) : null}
+                </button>
+              </HighlightItem>
+            ))}
+          </Highlight>
+        </>
+      ) : null}
+    </div>
   );
 
   const renderNotesHubView = ({
@@ -2761,7 +2860,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ? { duration: 0 }
             : prefersReduced
               ? { duration: 0.08 }
-              : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }
+              : { duration: 0.27, ease: [0.22, 1, 0.36, 1] }
         }
         style={{ pointerEvents: sidebarOpen ? 'auto' : 'none' }}
         className={`relative z-[2] shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
@@ -3010,14 +3109,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <div className="flex-1 min-h-0 overflow-y-auto k-scroll-hidden space-y-4">
               {/* Sections (Orbits) */}
               <div className="space-y-1">
-                {!sidebarRail ? (
-                  <div className="flex items-center justify-between px-2 py-1">
-                    <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+                <div className="relative">
+                  <div
+                    aria-hidden={sidebarRail}
+                    className={`flex items-center justify-between px-2 overflow-hidden transition-[max-height,opacity,padding] duration-240 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      sidebarRail
+                        ? 'max-h-0 py-0 opacity-0 pointer-events-none'
+                        : 'max-h-8 py-1 opacity-100'
+                    }`}
+                  >
+                    <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)] whitespace-nowrap">
                       {t('nav.sections')}
                     </span>
-                    <TooltipHint label={t('nav.newSection')}>
+                    <TooltipHint label={t('nav.newSection')} disabled={sidebarRail}>
                       <button
                         type="button"
+                        tabIndex={sidebarRail ? -1 : 0}
                         data-testid="add-orbit-btn"
                         onClick={() =>
                           setSectionEditor({
@@ -3029,16 +3136,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             icon: 'Folder',
                           })
                         }
-                        className="k-interactive -mr-[4px] w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        className="k-interactive -mr-[4px] w-5 h-5 rounded-[6px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
                         aria-label={t('nav.createSection')}
                       >
                         <Plus size={13} weight="bold" />
                       </button>
                     </TooltipHint>
                   </div>
-                ) : (
-                  <div className="my-1 mx-2 h-px bg-[var(--k-border-hairline)]/70" />
-                )}
+                  <div
+                    aria-hidden={!sidebarRail}
+                    className={`mx-2 h-px bg-[var(--k-border-hairline)]/70 transition-[opacity,margin] duration-240 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      sidebarRail ? 'opacity-100 my-1' : 'opacity-0 my-0 pointer-events-none'
+                    }`}
+                  />
+                </div>
 
                 <div data-testid="sidebar-orbits-list">
                   {orbits.length > 0 ? (
@@ -3212,43 +3323,47 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             />
                           </span>
                           <span
-                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-150 ${
+                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                               sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
                             }`}
                           >
                             {orbit.name}
                           </span>
 
-                          {!sidebarRail ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSectionEditor({
-                                    kind: 'orbit',
-                                    mode: 'edit',
-                                    id: orbit.id,
-                                    name: orbit.name,
-                                    description: orbit.description ?? '',
-                                    color: orbit.color,
-                                    icon: orbit.icon || 'Folder',
-                                  });
-                                }}
-                                className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                                aria-label={t('nav.configureSection')}
-                              >
-                                <PencilSimple size={12} />
-                              </button>
+                          <button
+                            type="button"
+                            tabIndex={sidebarRail ? -1 : 0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSectionEditor({
+                                kind: 'orbit',
+                                mode: 'edit',
+                                id: orbit.id,
+                                name: orbit.name,
+                                description: orbit.description ?? '',
+                                color: orbit.color,
+                                icon: orbit.icon || 'Folder',
+                              });
+                            }}
+                            className={`relative z-10 w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-160 shrink-0 ${
+                              sidebarRail
+                                ? 'opacity-0 pointer-events-none'
+                                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                            }`}
+                            aria-label={t('nav.configureSection')}
+                          >
+                            <PencilSimple size={12} />
+                          </button>
 
-                              <span
-                                data-testid={`orbit-count-${orbit.id}`}
-                                className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
-                              >
-                                <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
-                              </span>
-                            </>
-                          ) : null}
+                          <span
+                            data-testid={`orbit-count-${orbit.id}`}
+                            aria-hidden={sidebarRail}
+                            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                            }`}
+                          >
+                            <NumberFlow value={counts.orbits[orbit.id] ?? 0} />
+                          </span>
                         </div>
                       </ContextMenuSurface>
                     );
@@ -3482,41 +3597,45 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             />
                           </span>
                           <span
-                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-150 ${
+                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                               sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
                             }`}
                           >
                             {board.name}
                           </span>
-                          {!sidebarRail ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSectionEditor({
-                                    kind: 'board',
-                                    mode: 'edit',
-                                    id: board.id,
-                                    name: board.name,
-                                    description: board.description ?? '',
-                                    color: board.color || SECTION_COLOR_PALETTE[2]!,
-                                    icon: board.icon || 'BookmarkSimple',
-                                  });
-                                }}
-                                className="relative z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity shrink-0"
-                                aria-label={t('nav.configureBoard')}
-                              >
-                                <PencilSimple size={12} />
-                              </button>
-                              <span
-                                data-testid={`board-count-${board.id}`}
-                                className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
-                              >
-                                <NumberFlow value={counts.boards[board.id] ?? 0} />
-                              </span>
-                            </>
-                          ) : null}
+                          <button
+                            type="button"
+                            tabIndex={sidebarRail ? -1 : 0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSectionEditor({
+                                kind: 'board',
+                                mode: 'edit',
+                                id: board.id,
+                                name: board.name,
+                                description: board.description ?? '',
+                                color: board.color || SECTION_COLOR_PALETTE[2]!,
+                                icon: board.icon || 'BookmarkSimple',
+                              });
+                            }}
+                            className={`relative z-10 w-5 h-5 mr-1 rounded-[5px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] transition-opacity duration-160 shrink-0 ${
+                              sidebarRail
+                                ? 'opacity-0 pointer-events-none'
+                                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                            }`}
+                            aria-label={t('nav.configureBoard')}
+                          >
+                            <PencilSimple size={12} />
+                          </button>
+                          <span
+                            data-testid={`board-count-${board.id}`}
+                            aria-hidden={sidebarRail}
+                            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                            }`}
+                          >
+                            <NumberFlow value={counts.boards[board.id] ?? 0} />
+                          </span>
                         </div>
                       </ContextMenuSurface>
                     );
@@ -4578,7 +4697,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)]'
                             }`}
                           >
-                            <SpeakerSlash
+                            <EyeSlash
                               weight={filterMuteMode === 'muted' ? 'fill' : 'regular'}
                               className="w-3.5 h-3.5 shrink-0"
                             />
@@ -5120,27 +5239,27 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0, transform: 'translate3d(-50%, 0px, 0)' }
-                      : { opacity: 0, transform: 'translate3d(-50%, 18px, 0) scale(0.97)' }
+                      : { opacity: 0, transform: 'translate3d(-50%, 16px, 0)' }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1, transform: 'translate3d(-50%, 0px, 0)' }
-                      : { opacity: 1, transform: 'translate3d(-50%, 0px, 0) scale(1)' }
+                      : { opacity: 1, transform: 'translate3d(-50%, 0px, 0)' }
                   }
                   exit={
                     prefersReduced
                       ? { opacity: 0, transform: 'translate3d(-50%, 0px, 0)' }
-                      : { opacity: 0, transform: 'translate3d(-50%, 16px, 0) scale(0.97)' }
+                      : { opacity: 0, transform: 'translate3d(-50%, 14px, 0)' }
                   }
-                  transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
-                  className="fixed bottom-5 left-1/2 z-40 flex items-center gap-2 px-3.5 py-2 rounded-[14px] bg-[var(--k-bg-elevated)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] backdrop-blur-xl"
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  className="k-popover-card fixed bottom-5 left-1/2 z-40 max-w-[calc(100vw-24px)] overflow-x-auto k-scroll-hidden flex flex-nowrap items-center gap-1.5 px-3 py-2"
                 >
                   <span className="inline-flex items-center gap-1.5 px-1.5 text-[12.5px] font-semibold whitespace-nowrap shrink-0 k-tabular">
                     <span>{t('workspace.bulk.selected')}</span>
                     <span data-testid="bulk-selected-count">{selectedIds.length}</span>
                   </span>
 
-                  <div className="w-px h-5 bg-[var(--k-border-hairline)]" />
+                  <div className="w-px h-5 bg-[var(--k-border-hairline)] shrink-0" />
 
                   {selectedIds.length >= 2 ? (
                     <button
@@ -5150,9 +5269,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         setSynthesizeSeedIds(null);
                         setSynthesizeOpen(true);
                       }}
-                      className="k-interactive h-8 px-2.5 rounded-[8px] bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium flex items-center gap-1.5 hover:bg-[var(--k-accent-hover)] cursor-pointer"
+                      className="k-interactive h-8 px-3 rounded-[9px] bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 hover:bg-[var(--k-accent-hover)] cursor-pointer"
                     >
-                      <Sparkle size={14} weight="fill" />
+                      <Sparkle size={14} weight="fill" className="shrink-0" />
                       <span>{t('workspace.bulk.synthesize')}</span>
                     </button>
                   ) : null}
@@ -5166,9 +5285,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     trigger={
                       <button
                         type="button"
-                        className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium flex items-center gap-1.5 cursor-pointer"
+                        data-no-press-scale="true"
+                        className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <SquaresFour size={14} />
+                        <SquaresFour size={14} className="shrink-0" />
                         <span>{t('workspace.bulk.toSection')}</span>
                       </button>
                     }
@@ -5202,9 +5322,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => void handleBulkPin(true)}
-                    className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] flex items-center gap-1 cursor-pointer"
+                    className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <PushPin size={14} />
+                    <PushPin size={14} className="shrink-0" />
                     <span>{t('workspace.bulk.pin')}</span>
                   </button>
 
@@ -5217,9 +5337,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         type="button"
                         data-testid="bulk-mute-btn"
                         onClick={() => void handleBulkMute(!allSelectedMuted)}
-                        className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] flex items-center gap-1 cursor-pointer"
+                        className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <SpeakerSlash size={14} weight={allSelectedMuted ? 'fill' : 'regular'} />
+                        <EyeSlash size={14} weight={allSelectedMuted ? 'fill' : 'regular'} className="shrink-0" />
                         <span>
                           {t(allSelectedMuted ? 'workspace.bulk.unmute' : 'workspace.bulk.mute')}
                         </span>
@@ -5230,16 +5350,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => void handleBulkDelete()}
-                    className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12.5px] flex items-center gap-1 cursor-pointer"
+                    className="k-interactive h-8 px-2.5 rounded-[9px] hover:bg-[var(--k-danger-soft)] text-[var(--k-danger)] text-[12.5px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <Trash size={14} />
+                    <Trash size={14} className="shrink-0" />
                     <span>{t('common.delete')}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setSelectedIds([])}
-                    className="k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                    className="k-icon-toggle w-7 h-7 rounded-[7px] flex items-center justify-center shrink-0 text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
                     aria-label={t('workspace.bulk.clear')}
                   >
                     <X size={14} />
@@ -5250,93 +5370,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           </main>
             </ContextMenuSurface>
           </div>
-
-          {/* Variant B — Serene Centered Wide Peek Modal over softly dimmed & blurred feed */}
-          <AnimatePresence>
-            {isNoteDocumentOpen && activeItem ? (
-              <motion.div
-                key="studio-document-modal-root"
-                data-testid="studio-document-modal-root"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                className="k-no-drag fixed inset-0 z-40 flex items-center justify-center p-5 sm:p-6"
-              >
-                <div
-                  data-testid="studio-document-backdrop"
-                  onClick={closeStudioCleanly}
-                  className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]"
-                />
-
-                <motion.div
-                  key="studio-document-canvas"
-                  data-testid="studio-document-canvas"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label={activeItem.title || t('dna.note')}
-                  initial={
-                    prefersReduced
-                      ? { opacity: 0 }
-                      : { opacity: 0, scale: 0.965, y: 10 }
-                  }
-                  animate={
-                    prefersReduced
-                      ? { opacity: 1 }
-                      : {
-                          opacity: 1,
-                          scale: 1,
-                          y: 0,
-                          transition: { duration: 0.19, ease: [0.22, 1, 0.36, 1] },
-                        }
-                  }
-                  exit={
-                    prefersReduced
-                      ? { opacity: 0 }
-                      : {
-                          opacity: 0,
-                          scale: 0.975,
-                          y: 6,
-                          transition: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
-                        }
-                  }
-                  onClick={(e) => e.stopPropagation()}
-                  className={`relative z-10 rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] overflow-hidden flex flex-col will-change-transform transition-[width,height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                    studioExpandedModal
-                      ? 'w-[min(1180px,96vw)] h-[min(93vh,960px)]'
-                      : 'w-[min(860px,93vw)] h-[min(86vh,860px)]'
-                  }`}
-                >
-                  <Suspense fallback={null}>
-                    <NoteStudio
-                      item={activeItem}
-                      isDraft={studioDraftMode}
-                      orbits={orbits}
-                      focusBoards={boards}
-                      allItemsForLinks={items}
-                      availableTags={allVaultTags}
-                      soundEnabled={soundEnabled}
-                      layoutMode="center"
-                      presentation="modal"
-                      expandedModal={studioExpandedModal}
-                      onToggleExpandedModal={() => setStudioExpandedModal((v) => !v)}
-                      onItemUpdated={handleStudioItemUpdated}
-                      onDraftPersisted={handleStudioDraftPersisted}
-                      onCancelDraft={handleStudioCancelDraft}
-                      onSelectRelatedItem={handleStudioSelectRelated}
-                      onDelete={async (id) => {
-                        await handleDeleteItem(id);
-                        setStudioOpen(false);
-                      }}
-                      onOpenShotLightbox={(shot) => setLightboxItem(shot)}
-                      onRegisterClose={handleRegisterStudioClose}
-                      onClose={handleStudioClose}
-                    />
-                  </Suspense>
-                </motion.div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
         </div>
         </ScopedAccentContext.Provider>
 
@@ -5359,6 +5392,130 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         ) : null}
       </div>
 
+      {/* Variant B — Serene Centered Wide Peek Modal rendered at top z-50 over full window (never clipped by sidebar) */}
+      <ScopedAccentContext.Provider value={workspaceAccentStyle}>
+        <AnimatePresence>
+          {isNoteDocumentOpen && activeItem ? (
+            <motion.div
+              key="studio-document-modal-root"
+              data-testid="studio-document-modal-root"
+              style={workspaceAccentStyle}
+              initial={{ opacity: 1 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 1 }}
+              transition={{ duration: 0.17 }}
+              className="k-no-drag fixed inset-0 z-50 flex items-center justify-center p-5 sm:p-6"
+            >
+              <motion.div
+                data-testid="studio-document-backdrop"
+                onClick={closeStudioCleanly}
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                      }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : {
+                        backgroundColor: 'var(--k-bg-backdrop)',
+                        backdropFilter: 'blur(6px)',
+                        transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0, transition: { duration: 0.12 } }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                        transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] },
+                      }
+                }
+                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
+              />
+
+              <motion.div
+                key="studio-document-canvas"
+                data-testid="studio-document-canvas"
+                role="dialog"
+                aria-modal="true"
+                aria-label={activeItem.title || t('dna.note')}
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        opacity: 0,
+                        transform: 'perspective(1100px) translate3d(0, 14px, 0) rotateX(-5.5deg) scale(0.955)',
+                      }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1, transition: { duration: 0.12 } }
+                    : {
+                        opacity: 1,
+                        transform: 'perspective(1100px) translate3d(0, 0px, 0) rotateX(0deg) scale(1)',
+                        transition: {
+                          type: 'spring',
+                          stiffness: 490,
+                          damping: 34,
+                          mass: 0.68,
+                          opacity: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
+                        },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0, transition: { duration: 0.1 } }
+                    : {
+                        opacity: 0,
+                        transform: 'perspective(1100px) translate3d(0, 8px, 0) rotateX(-3deg) scale(0.97)',
+                        transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
+                      }
+                }
+                onClick={(e) => e.stopPropagation()}
+                style={{ transformOrigin: '50% 24%' }}
+                className={`relative z-10 rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] overflow-hidden flex flex-col will-change-transform transition-[width,height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  studioExpandedModal
+                    ? 'w-[min(1180px,96vw)] h-[min(93vh,960px)]'
+                    : 'w-[min(860px,93vw)] h-[min(86vh,860px)]'
+                }`}
+              >
+                <Suspense fallback={null}>
+                  <NoteStudio
+                    item={activeItem}
+                    isDraft={studioDraftMode}
+                    orbits={orbits}
+                    focusBoards={boards}
+                    allItemsForLinks={items}
+                    availableTags={allVaultTags}
+                    soundEnabled={soundEnabled}
+                    layoutMode="center"
+                    presentation="modal"
+                    expandedModal={studioExpandedModal}
+                    onToggleExpandedModal={() => setStudioExpandedModal((v) => !v)}
+                    onItemUpdated={handleStudioItemUpdated}
+                    onDraftPersisted={handleStudioDraftPersisted}
+                    onCancelDraft={handleStudioCancelDraft}
+                    onSelectRelatedItem={handleStudioSelectRelated}
+                    onDelete={async (id) => {
+                      await handleDeleteItem(id);
+                      setStudioOpen(false);
+                    }}
+                    onOpenShotLightbox={(shot) => setLightboxItem(shot)}
+                    onRegisterClose={handleRegisterStudioClose}
+                    onClose={handleStudioClose}
+                  />
+                </Suspense>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+      </ScopedAccentContext.Provider>
+
       {/* Right Inspector Sheet for Vault Secrets only */}
       <ScopedAccentContext.Provider value={workspaceAccentStyle}>
         <AnimatePresence>
@@ -5366,15 +5523,41 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <motion.div
               key="studio-secret-sheet-root"
               style={workspaceAccentStyle}
-              initial={{ opacity: 0 }}
+              initial={{ opacity: 1 }}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+              exit={{ opacity: 1 }}
+              transition={{ duration: 0.16 }}
               className="fixed inset-0 z-50 flex justify-end"
             >
-              <div
+              <motion.div
                 onClick={closeStudioCleanly}
-                className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]"
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                      }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : {
+                        backgroundColor: 'var(--k-bg-backdrop)',
+                        backdropFilter: 'blur(4px)',
+                        transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0, transition: { duration: 0.12 } }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                        transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
+                      }
+                }
+                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]' : ''}`}
               />
 
               <motion.div
@@ -5896,20 +6079,21 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
             {icon}
           </span>
           <span
-            className={`relative z-10 ml-1.5 flex-1 min-w-0 text-left truncate text-[13px] transition-opacity duration-150 ${
+            className={`relative z-10 ml-1.5 flex-1 min-w-0 text-left truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               compactRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
             }`}
           >
             {label}
           </span>
-          {!compactRail ? (
-            <span
-              data-count={count}
-              className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
-            >
-              <NumberFlow value={count} />
-            </span>
-          ) : null}
+          <span
+            data-count={count}
+            aria-hidden={compactRail}
+            className={`relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)] transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              compactRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            }`}
+          >
+            <NumberFlow value={count} />
+          </span>
         </HoverIconProvider>
       </div>
     </TooltipHint>

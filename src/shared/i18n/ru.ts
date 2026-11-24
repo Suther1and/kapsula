@@ -208,6 +208,7 @@ export const ru = {
   'workspace.pasteFromClipboardShort': 'Вставить из буфера',
   'workspace.quickLaunchHint': 'Быстрая строка ({shortcut})',
   'workspace.filter.all': 'Все',
+  'workspace.filter.feed': 'Лента',
   'workspace.filter.unassigned': 'Без раздела',
   'workspace.filter.links': 'Ссылки',
   'workspace.filter.notes': 'Заметки',

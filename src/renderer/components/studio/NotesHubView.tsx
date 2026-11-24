@@ -12,7 +12,7 @@ import {
   Plus,
   PushPin,
   SidebarSimple,
-  SpeakerSlash,
+  EyeSlash,
   Swatches,
   Trash,
   X,
@@ -235,7 +235,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
               type: 'item' as const,
               id: 'mute',
               label: note.isMuted ? t('cards.ctx.unmute') : t('cards.ctx.mute'),
-              icon: <SpeakerSlash weight={note.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
+              icon: <EyeSlash weight={note.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
               onSelect: () => onToggleMute(note),
             },
           ]
@@ -371,7 +371,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
           <div className="relative z-10 flex flex-col gap-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               {note.isMuted ? (
-                <SpeakerSlash
+                <EyeSlash
                   weight="fill"
                   className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0"
                 />

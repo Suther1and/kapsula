@@ -58,6 +58,7 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
       }}
     >
       <Select.Trigger
+        data-no-press-scale="true"
         data-testid={testId}
         className={`group k-interactive k-focus-ring inline-flex items-center justify-between gap-2 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] cursor-pointer select-none ${
           size === 'sm' ? 'h-8 px-2.5 text-[12px]' : 'h-9 px-3 text-[13px]'
@@ -90,7 +91,7 @@ export const SelectMenu: React.FC<SelectMenuProps> = ({
             data-k-popup="true"
             style={scopedAccentStyle}
             data-testid={testId ? `${testId}-popup` : 'select-menu-popup'}
-            className="k-menu-motion min-w-[max(180px,var(--anchor-width))] max-w-[290px] max-h-[280px] overflow-y-auto rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-elevated)] p-1.5 shadow-[var(--k-shadow-popover)] backdrop-blur-xl outline-none"
+            className="k-popover-card k-menu-motion min-w-[max(180px,var(--anchor-width))] max-w-[290px] max-h-[280px] overflow-y-auto p-1.5 outline-none"
           >
             <LayoutGroup id={listLayoutId}>
               <Select.List

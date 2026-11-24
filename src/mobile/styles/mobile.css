@@ -64,7 +64,7 @@
     overscroll-behavior: none;
     background: var(--k-bg-canvas);
     color: var(--k-ink-primary);
-    font-family: 'Onest Variable', 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Manrope Variable', 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
     user-select: none;
@@ -107,6 +107,12 @@
 
 .k-mono {
   font-family: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+h1,
+h2,
+.k-display {
+  font-family: 'Unbounded Variable', 'Unbounded', 'Manrope Variable', sans-serif;
 }
 
 .k-scroll {
