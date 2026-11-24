@@ -1,9 +1,14 @@
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { isPrivateOrLocalHostname } from '@shared/url-safety';
 import { parseHtmlDocument } from './html-cleaner';
 import { isSafeResolvedHost, readUpToBytes, safeFetchWithRedirects } from './unfurler';
-import { MAX_VIDEO_FILE_BYTES, type VideoCacheManager } from './video-cache';
+import {
+  MAX_VIDEO_FILE_BYTES,
+  MIN_VIDEO_FILE_BYTES,
+  type VideoCacheManager,
+} from './video-cache';
 
 export type SocialVideoPlatform =
   | 'youtube'
@@ -183,35 +188,79 @@ export function extractVideoUrlFromHtml(
   return { videoUrl: null, isLoginWall };
 }
 
-async function readBinaryStrictCap(resp: Response, maxBytes: number): Promise<Buffer | null> {
+export async function streamResponseToTempFile(
+  resp: Response,
+  tmpPath: string,
+  maxBytes: number
+): Promise<{ byteLength: number; sha256Hex: string } | null> {
   if (!resp.body) {
-    const ab = await resp.arrayBuffer();
-    if (ab.byteLength > maxBytes) return null;
-    return Buffer.from(ab);
+    try {
+      const ab = await resp.arrayBuffer();
+      if (ab.byteLength < MIN_VIDEO_FILE_BYTES || ab.byteLength > maxBytes) {
+        return null;
+      }
+      const buf = Buffer.from(ab);
+      await fs.promises.writeFile(tmpPath, buf, { mode: 0o600 });
+      const sha256Hex = crypto.createHash('sha256').update(buf).digest('hex');
+      return { byteLength: buf.byteLength, sha256Hex };
+    } catch {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+      return null;
+    }
   }
+
   const reader = resp.body.getReader();
-  const chunks: Buffer[] = [];
+  const hash = crypto.createHash('sha256');
+  let fh: fs.promises.FileHandle | null = null;
   let total = 0;
+  let committed = false;
+
   try {
+    fh = await fs.promises.open(tmpPath, 'w', 0o600);
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > maxBytes) {
-          await reader.cancel().catch(() => {});
-          return null;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      const chunk = Buffer.isBuffer(value)
+        ? value
+        : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+      hash.update(chunk);
+      let offset = 0;
+      while (offset < chunk.length) {
+        const { bytesWritten } = await fh.write(chunk, offset, chunk.length - offset);
+        if (bytesWritten <= 0) {
+          throw new Error('Short write while streaming video');
         }
-        chunks.push(Buffer.from(value));
+        offset += bytesWritten;
       }
     }
-    return Buffer.concat(chunks, total);
+    if (total < MIN_VIDEO_FILE_BYTES) {
+      return null;
+    }
+    committed = true;
+    return {
+      byteLength: total,
+      sha256Hex: hash.digest('hex'),
+    };
   } catch {
+    await reader.cancel().catch(() => {});
     return null;
+  } finally {
+    if (fh) {
+      await fh.close().catch(() => {});
+    }
+    if (!committed) {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+    }
   }
 }
 
-async function downloadStreamIntoCache(
+export async function downloadStreamIntoCache(
   videoUrl: string,
   stem: string,
   videoCache: VideoCacheManager
@@ -227,7 +276,10 @@ async function downloadStreamIntoCache(
       timeoutMs: 22_000,
       maxHops: 4,
     });
-    if (!fetched || !fetched.resp.ok) return null;
+    if (!fetched || !fetched.resp.ok) {
+      await fetched?.resp.body?.cancel().catch(() => {});
+      return null;
+    }
     const ct = (fetched.resp.headers.get('content-type') || '').toLowerCase();
     if (
       ct &&
@@ -235,15 +287,28 @@ async function downloadStreamIntoCache(
       !ct.includes('application/octet-stream') &&
       !ct.includes('binary/octet-stream')
     ) {
+      await fetched.resp.body?.cancel().catch(() => {});
       return null;
     }
     const clHeader = Number(fetched.resp.headers.get('content-length') || 0);
-    if (clHeader > MAX_VIDEO_FILE_BYTES) return null;
+    if (clHeader > MAX_VIDEO_FILE_BYTES) {
+      await fetched.resp.body?.cancel().catch(() => {});
+      return null;
+    }
 
-    const buf = await readBinaryStrictCap(fetched.resp, MAX_VIDEO_FILE_BYTES);
-    if (!buf) return null;
-    const ext: '.mp4' | '.webm' = ct.includes('webm') || /\.webm(?:[?#]|$)/i.test(videoUrl) ? '.webm' : '.mp4';
-    return videoCache.putBuffer(buf, stem, ext);
+    const ext: '.mp4' | '.webm' =
+      ct.includes('webm') || /\.webm(?:[?#]|$)/i.test(videoUrl) ? '.webm' : '.mp4';
+    await videoCache.ensureDirAsync();
+    const tmpPath = videoCache.createTempFilePath(ext);
+    const streamed = await streamResponseToTempFile(fetched.resp, tmpPath, MAX_VIDEO_FILE_BYTES);
+    if (!streamed) return null;
+    return await videoCache.putFileFromTemp(
+      tmpPath,
+      streamed.sha256Hex,
+      streamed.byteLength,
+      stem,
+      ext
+    );
   } catch {
     return null;
   }

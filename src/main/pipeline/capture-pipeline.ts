@@ -287,9 +287,9 @@ export class CapturePipeline {
     const current = this.deps.repo.getItemById(itemId);
     if (!current || !current.url || current.dna !== 'link') return current ?? null;
     if (current.mediaMeta?.cachedVideoFile) {
-      const check = this.videoCache.resolveSafePath(current.mediaMeta.cachedVideoFile);
+      const check = await this.videoCache.resolveSafePathAsync(current.mediaMeta.cachedVideoFile);
       if (check.ok) {
-        this.videoCache.touch(current.mediaMeta.cachedVideoFile);
+        await this.videoCache.touchAsync(current.mediaMeta.cachedVideoFile);
         return current;
       }
     }
@@ -333,6 +333,7 @@ export class CapturePipeline {
     filePath?: string;
     mimeType?: string;
     fileName?: string;
+    generateThumb?: boolean;
   }): Promise<SaveNoteImageResult> {
     let buf: Buffer | null = null;
     let ext = '.png';
@@ -423,13 +424,15 @@ export class CapturePipeline {
     }
 
     let thumbFilename: string | undefined;
-    try {
-      const thumbRes = generateThumbnailAndAnalyze(buf, this.mediaDir, stem);
-      if (thumbRes.thumbPath) {
-        thumbFilename = thumbRes.thumbPath;
+    if (input.generateThumb) {
+      try {
+        const thumbRes = generateThumbnailAndAnalyze(buf, this.mediaDir, stem);
+        if (thumbRes.thumbPath) {
+          thumbFilename = thumbRes.thumbPath;
+        }
+      } catch {
+        // Optional thumbnail — never block inline image insertion
       }
-    } catch {
-      // Optional thumbnail — never block inline image insertion
     }
 
     return {
@@ -440,15 +443,26 @@ export class CapturePipeline {
   }
 
   public cleanupUnreferencedMedia(filenames: Array<string | null | undefined>): void {
+    const unlinkIfUnreferenced = (candidate: string) => {
+      if (this.deps.repo.countItemsByMediaRef(candidate) === 0) {
+        const abs = path.join(this.mediaDir, candidate);
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+          fs.unlinkSync(abs);
+        }
+      }
+    };
+
     for (const raw of filenames) {
       if (!raw) continue;
       const safe = path.basename(raw);
       if (!safe || safe === '.') continue;
       try {
-        if (this.deps.repo.countItemsByMediaRef(safe) === 0) {
-          const abs = path.join(this.mediaDir, safe);
-          if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-            fs.unlinkSync(abs);
+        unlinkIfUnreferenced(safe);
+        if (!safe.startsWith('thumb_')) {
+          const stem = path.basename(safe, path.extname(safe));
+          if (stem) {
+            unlinkIfUnreferenced(`thumb_${stem}.jpg`);
+            unlinkIfUnreferenced(`thumb_${stem}.png`);
           }
         }
       } catch {
@@ -1071,6 +1085,7 @@ export class CapturePipeline {
           base64: Buffer.from(att.data).toString('base64'),
           mimeType: att.contentType,
           fileName: att.filename,
+          generateThumb: savedImages.length === 0,
         });
         savedImages.push({
           filename: att.filename,
@@ -1226,21 +1241,10 @@ export class CapturePipeline {
 
       const secretImgAsset = await this.storeImageAsset(input);
       const payloadToEncrypt = { ...secretCheck.payload };
-      if (secretImgAsset.filename && secretImgAsset.absPath) {
-        let ocrSecretText = '';
-        if (config.enableAutoOcr && !input.isDemo) {
-          const ocr = await defaultLocalOcrAdapter.extractText(
-            secretImgAsset.absPath,
-            this.deps.dataDir
-          );
-          ocrSecretText = ocr.text;
-        }
-        if (!payloadToEncrypt.secretValue) {
-          payloadToEncrypt.secretValue =
-            ocrSecretText || (isEn ? '[Screenshot in Vault]' : '[Скриншот в Сейфе]');
-        } else if (ocrSecretText) {
-          payloadToEncrypt.notes = [payloadToEncrypt.notes, ocrSecretText].filter(Boolean).join('\n\n');
-        }
+      const hasSecretImg = Boolean(secretImgAsset.filename && secretImgAsset.absPath);
+      const deferSecretOcr = hasSecretImg && config.enableAutoOcr && !input.isDemo;
+      if (hasSecretImg && !payloadToEncrypt.secretValue) {
+        payloadToEncrypt.secretValue = isEn ? '[Screenshot in Vault]' : '[Скриншот в Сейфе]';
       }
 
       const encrypted = this.deps.cryptoVault.encryptSecret(payloadToEncrypt);
@@ -1286,12 +1290,34 @@ export class CapturePipeline {
         remindAt: input.remindAt ?? null,
         isDemo: input.isDemo ?? false,
         createdAt: input.createdAt,
+        skipSyncDirty: deferSecretOcr,
       });
-      if (secretImgAsset.filename) {
+      if (!deferSecretOcr && secretImgAsset.filename) {
         this.cleanupUnreferencedMedia([secretImgAsset.filename]);
       }
       if (created.remindAt) this.deps.onReminderChanged?.();
       this.deps.onItemUpserted?.(created);
+      if (deferSecretOcr && secretImgAsset.absPath) {
+        const hasExplicitOrbit = Boolean(explicitOrbit);
+        const skipAutoCalendar = Boolean(input.skipAutoCalendar);
+        const task = this.runWithBgSlot(() =>
+          this.runBackgroundEnrichment(
+            created.id,
+            secretImgAsset.absPath,
+            mode,
+            false,
+            hasExplicitOrbit,
+            skipAutoCalendar,
+            false,
+            true
+          )
+        )
+          .catch(() => {})
+          .finally(() => {
+            this.inFlight.delete(task);
+          });
+        this.inFlight.add(task);
+      }
       return created;
     }
 
@@ -1300,84 +1326,16 @@ export class CapturePipeline {
     const hashSource = `${rawText}|${input.url ?? ''}|${imgAsset.sha}`;
     const contentHash = crypto.createHash('sha256').update(hashSource).digest('hex');
 
-    // 1.5. Pre-persist OCR Secret Shield check for screenshots (prevents OCR-before-Sync race
-    // where a plaintext bank-card/password screenshot could be synced before OCR scrubs it).
-    let preScannedOcrText = '';
-    let ocrPreScanned = false;
+    // 1.5. Defer sync_dirty until background OCR Secret Shield screens direct screenshots
+    // (non-blocking capture: never blocks the main thread waiting up to 4s on cold WinRT OCR).
+    const preScannedOcrText = '';
+    const ocrPreScanned = false;
     const isDirectScreenshot =
       hasImage &&
       Boolean(imgAsset.absPath) &&
       config.enableAutoOcr &&
       !input.isDemo &&
       (!(source === 'browser_ext' && Boolean(input.url)) || Boolean(input.imageBase64));
-
-    if (isDirectScreenshot && imgAsset.absPath) {
-      const preOcr = await Promise.race([
-        defaultLocalOcrAdapter.extractText(imgAsset.absPath, this.deps.dataDir).catch(() => null),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
-      ]);
-      if (preOcr) {
-        ocrPreScanned = true;
-        preScannedOcrText = preOcr.text || '';
-        if (preScannedOcrText) {
-          const ocrSecret = analyzeForSecret(preScannedOcrText, { locale });
-          if (ocrSecret.isSecret && ocrSecret.payload && ocrSecret.meta) {
-            if (this.deps.cryptoVault.isLocked()) {
-              // Fail closed: remove our temporary copy inside media/ without persisting plaintext secret
-              this.cleanupUnreferencedMedia([imgAsset.filename]);
-              throw new Error(
-                isEn
-                  ? 'Vault is locked by master PIN — sensitive data detected in screenshot. Unlock Vault and try saving again'
-                  : 'Сейф заблокирован мастер-кодом — на скриншоте найдены конфиденциальные данные. Разблокируй Сейф и повтори сохранение'
-              );
-            }
-            const encrypted = this.deps.cryptoVault.encryptSecret(ocrSecret.payload);
-            const isBankCard = ocrSecret.meta.kind === 'bank_card';
-            const secretTitle = isBankCard
-              ? ocrSecret.meta.last4
-                ? `${ocrSecret.meta.service} · •••• ${ocrSecret.meta.last4}`
-                : ocrSecret.meta.service
-              : `${ocrSecret.meta.service} · ${isEn ? 'Access' : 'Доступ'}`;
-            const targetSecretOrbit = this.resolveSecretOrbitId(ocrSecret.meta.kind, explicitOrbit);
-            const createdSecret = this.deps.repo.createItem({
-              dna: 'secret',
-              orbit: targetSecretOrbit,
-              modeCaptured: mode,
-              focusBoardId:
-                input.focusBoardId ?? (mode === 'focus' ? config.activeFocusBoardId : null),
-              title: safeExplicitTitle || secretTitle,
-              body: '',
-              summary: isEn ? 'Detected in screenshot · hidden in Vault' : 'Найдено на скриншоте · скрыто в Сейфе',
-              imagePath: null,
-              thumbPath: null,
-              ogImageUrl: null,
-              ocrText: '',
-              extractedActions: [],
-              encryptedPayload: encrypted,
-              secretMeta: ocrSecret.meta,
-              tags: [
-                ...new Set([
-                  ...(input.tags ?? []),
-                  isBankCard ? (isEn ? 'card' : 'карта') : isEn ? 'vault' : 'сейф',
-                ]),
-              ].slice(0, 4),
-              source,
-              externalId: input.externalId ?? null,
-              contentHash: crypto.randomUUID(),
-              aiStatus: 'skipped_secret',
-              remindAt: input.remindAt ?? null,
-              isDemo: input.isDemo ?? false,
-              createdAt: input.createdAt,
-            });
-            // Delete temporary plaintext screenshot copy only after encrypted secret is safely persisted
-            this.cleanupUnreferencedMedia([imgAsset.filename]);
-            if (createdSecret.remindAt) this.deps.onReminderChanged?.();
-            this.deps.onItemUpserted?.(createdSecret);
-            return createdSecret;
-          }
-        }
-      }
-    }
 
     // 2. Clean pasted/clipped web text & HTML (never mutating secrets, which already returned above)
     let inputBaseUrl: URL | undefined;
@@ -1694,14 +1652,75 @@ export class CapturePipeline {
     ocrAlreadyScanned = false,
     deferSyncDirtyUntilOcr = false
   ): Promise<void> {
+    const tempSecretImgName =
+      imgAbsPath && path.dirname(path.resolve(imgAbsPath)) === path.resolve(this.mediaDir)
+        ? path.basename(imgAbsPath)
+        : null;
+
     const current = this.deps.repo.getItemById(itemId);
-    if (
-      !current ||
-      current.dna === 'secret' ||
-      current.dna === 'voice' ||
-      current.dna === 'doc' ||
-      mode === 'ghost'
-    ) {
+    if (!current) {
+      if (tempSecretImgName) {
+        this.cleanupUnreferencedMedia([tempSecretImgName]);
+      }
+      return;
+    }
+
+    if (current.dna === 'secret') {
+      try {
+        const cfg = this.deps.getConfig();
+        let extractedOcrText = '';
+        if (imgAbsPath && cfg.enableAutoOcr && !ocrAlreadyScanned) {
+          try {
+            const ocr = await defaultLocalOcrAdapter.extractText(imgAbsPath, this.deps.dataDir);
+            extractedOcrText = ocr.text;
+          } catch {
+            extractedOcrText = '';
+          }
+        }
+        const latestSecret = this.deps.repo.getItemById(itemId);
+        if (!latestSecret || latestSecret.dna !== 'secret') {
+          return;
+        }
+        // Fail closed: if Vault locked while OCR ran, never store plaintext or mark dirty
+        if (this.deps.cryptoVault.isLocked()) {
+          return;
+        }
+        if (extractedOcrText) {
+          const rawEnc = this.deps.repo.getRawEncryptedPayload(itemId);
+          if (rawEnc) {
+            const prevPayload = this.deps.cryptoVault.decryptSecret(rawEnc);
+            const nextPayload = { ...prevPayload };
+            if (
+              !nextPayload.secretValue ||
+              nextPayload.secretValue === '[Скриншот в Сейфе]' ||
+              nextPayload.secretValue === '[Screenshot in Vault]'
+            ) {
+              nextPayload.secretValue = extractedOcrText;
+            } else {
+              nextPayload.notes = [nextPayload.notes, extractedOcrText].filter(Boolean).join('\n\n');
+            }
+            const reEncrypted = this.deps.cryptoVault.encryptSecret(nextPayload);
+            const updatedSecret = this.deps.repo.updateItem(
+              itemId,
+              { encryptedPayload: reEncrypted, ocrText: '' },
+              { skipAutoRevision: true }
+            );
+            if (updatedSecret) this.deps.onItemUpserted?.(updatedSecret);
+          } else if (deferSyncDirtyUntilOcr) {
+            this.deps.repo.markItemDirty(itemId);
+          }
+        } else if (deferSyncDirtyUntilOcr) {
+          this.deps.repo.markItemDirty(itemId);
+        }
+      } finally {
+        if (tempSecretImgName) {
+          this.cleanupUnreferencedMedia([tempSecretImgName]);
+        }
+      }
+      return;
+    }
+
+    if (current.dna === 'voice' || current.dna === 'doc') {
       return;
     }
 
@@ -1746,6 +1765,7 @@ export class CapturePipeline {
     // before Vision upload or deferred Sync enqueue, even when enableAutoOcr is disabled).
     let ocrScreenedClean = ocrAlreadyScanned;
     const mayAttemptCloudVision =
+      mode !== 'ghost' &&
       Boolean(this.deps.prepareVisionImage) &&
       config.aiProvider !== 'local' &&
       Boolean(config.apiKey || config.googleAiKey || config.openRouterKey || config.cloudProxy);
@@ -1834,6 +1854,22 @@ export class CapturePipeline {
       if (deferSyncDirtyUntilOcr && ocrScreenedClean) {
         this.deps.repo.markItemDirty(itemId);
       }
+    }
+
+    if (mode === 'ghost') {
+      if (ocrText !== current.ocrText || current.aiStatus === 'pending') {
+        const ghostUpdated = this.deps.repo.updateItem(
+          itemId,
+          {
+            ocrText,
+            aiStatus: current.aiStatus === 'pending' ? 'local' : current.aiStatus,
+            extractedActions: actions,
+          },
+          { skipAutoRevision: true }
+        );
+        if (ghostUpdated) this.deps.onItemUpserted?.(ghostUpdated);
+      }
+      return;
     }
 
     // B. Deep multi-platform link unfurl (`t.me`, `x.com`, `youtube`, `github`, `instagram`, articles)
@@ -1945,7 +1981,7 @@ export class CapturePipeline {
       } else if (!mediaPath) {
         const hasValidCached =
           Boolean(mediaMeta?.cachedVideoFile) &&
-          this.videoCache.resolveSafePath(mediaMeta!.cachedVideoFile!).ok;
+          (await this.videoCache.resolveSafePathAsync(mediaMeta!.cachedVideoFile!)).ok;
         const vidPlatform = detectSocialVideoPlatform(current.url);
         const shouldAttemptVideo =
           Boolean(mediaMeta?.videoUrl) ||

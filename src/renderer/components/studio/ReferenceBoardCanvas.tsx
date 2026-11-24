@@ -987,6 +987,8 @@ export const ReferenceBoardCanvas: React.FC<ReferenceBoardCanvasProps> = ({
                   <img
                     src={imgSrc}
                     alt={cleanBrokenTextArtifacts(item.title, true)}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full max-h-[180px] object-cover block"
                   />
                 ) : null}

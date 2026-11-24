@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Eyedropper, MapPin, PencilSimple, Trash, X } from '@phosphor-icons/react';
@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import type { CanvasAnnotation, VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { getMediaUrl } from '../../lib/format';
+import { hydrateFullVaultItem } from '../../lib/hydrate-item';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
 import { CopySlotPill } from '../ui/CopySlotPill';
 
@@ -14,6 +15,7 @@ interface ShotLightboxProps {
   onClose: () => void;
   onEditInStudio?: (item: VaultItem) => void;
   onSaveAnnotations?: (itemId: string, annotations: CanvasAnnotation[]) => Promise<void> | void;
+  onExited?: () => void;
 }
 
 declare global {
@@ -73,22 +75,64 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
   onClose,
   onEditInStudio,
   onSaveAnnotations,
+  onExited,
 }) => {
   const { t } = useI18n();
   const prefersReduced = useReducedMotion();
   const scopedAccentStyle = useScopedAccentStyle();
+  const [hydratedItem, setHydratedItem] = useState<VaultItem | null>(item);
+  const hydrateSeqRef = useRef(0);
+  const prevItemIdRef = useRef<string | null>(item?.id ?? null);
+  const lastPaletteItemIdRef = useRef<string | null>(null);
   const [swatches, setSwatches] = useState<string[]>([]);
   const [annotateMode, setAnnotateMode] = useState(false);
   const [draftPin, setDraftPin] = useState<{ xPct: number; yPct: number; text: string } | null>(null);
 
   useEffect(() => {
-    setSwatches(item?.colorPalette ?? []);
-    setAnnotateMode(false);
-    setDraftPin(null);
-  }, [item]);
+    const nextId = item?.id ?? null;
+    if (prevItemIdRef.current !== nextId) {
+      prevItemIdRef.current = nextId;
+      setAnnotateMode(false);
+      setDraftPin(null);
+    }
+  }, [item?.id]);
 
   useEffect(() => {
-    if (!item) return;
+    const seq = ++hydrateSeqRef.current;
+    setHydratedItem(item);
+    const nextId = item?.id ?? null;
+    if (lastPaletteItemIdRef.current !== nextId) {
+      lastPaletteItemIdRef.current = nextId;
+      setSwatches(item?.colorPalette ?? []);
+    } else if (item?.colorPalette?.length) {
+      setSwatches(item.colorPalette);
+    }
+    if (!item || !item.isCardProjection) {
+      return () => {
+        hydrateSeqRef.current += 1;
+      };
+    }
+    void hydrateFullVaultItem(item).then((full) => {
+      if (hydrateSeqRef.current !== seq) return;
+      setHydratedItem(full);
+      if (full.colorPalette?.length) {
+        setSwatches(full.colorPalette);
+      }
+    });
+    return () => {
+      hydrateSeqRef.current += 1;
+    };
+  }, [item]);
+
+  const activeItem =
+    item && hydratedItem && hydratedItem.id === item.id && !hydratedItem.isCardProjection
+      ? hydratedItem
+      : item;
+  const activeItemIdRef = useRef<string | null>(null);
+  activeItemIdRef.current = activeItem?.id ?? null;
+
+  useEffect(() => {
+    if (!activeItem) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (draftPin) setDraftPin(null);
@@ -97,13 +141,13 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [item, draftPin, onClose]);
+  }, [activeItem, draftPin, onClose]);
 
-  const localImagePath = item ? item.imagePath || item.thumbPath || null : null;
-  const src = item
-    ? getMediaUrl(localImagePath) || (item.ogImageUrl ? item.ogImageUrl : null)
+  const localImagePath = activeItem ? activeItem.imagePath || activeItem.thumbPath || null : null;
+  const src = activeItem
+    ? getMediaUrl(localImagePath) || (activeItem.ogImageUrl ? activeItem.ogImageUrl : null)
     : null;
-  const annotations = item?.annotations ?? [];
+  const annotations = activeItem?.annotations ?? [];
 
   const handleEyeDropper = async () => {
     if (!window.EyeDropper) {
@@ -125,27 +169,42 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
   };
 
   const commitDraftPin = async () => {
-    if (!item || !draftPin || !draftPin.text.trim()) {
+    const pinText = draftPin?.text.trim() ?? '';
+    if (!activeItem || !draftPin || !pinText) {
       setDraftPin(null);
       return;
     }
-    const next: CanvasAnnotation[] = [
-      ...annotations,
-      {
-        id: crypto.randomUUID(),
-        xPct: draftPin.xPct,
-        yPct: draftPin.yPct,
-        text: draftPin.text.trim().slice(0, 180),
-      },
-    ];
-    await onSaveAnnotations?.(item.id, next);
-    setDraftPin(null);
-    setAnnotateMode(false);
+    const targetId = activeItem.id;
+    const newPin: CanvasAnnotation = {
+      id: crypto.randomUUID(),
+      xPct: draftPin.xPct,
+      yPct: draftPin.yPct,
+      text: pinText.slice(0, 180),
+    };
+    const base = activeItem.isCardProjection ? await hydrateFullVaultItem(activeItem) : activeItem;
+    const next: CanvasAnnotation[] = [...(base.annotations ?? []), newPin];
+    if (activeItemIdRef.current === targetId) {
+      setHydratedItem({ ...base, annotations: next });
+      setDraftPin(null);
+      setAnnotateMode(false);
+    }
+    await onSaveAnnotations?.(targetId, next);
+  };
+
+  const handleDeletePin = async (annId: string) => {
+    if (!activeItem || !onSaveAnnotations) return;
+    const targetId = activeItem.id;
+    const base = activeItem.isCardProjection ? await hydrateFullVaultItem(activeItem) : activeItem;
+    const next = (base.annotations ?? []).filter((a) => a.id !== annId);
+    if (activeItemIdRef.current === targetId) {
+      setHydratedItem({ ...base, annotations: next });
+    }
+    await onSaveAnnotations(targetId, next);
   };
 
   const lightboxTree = (
-    <AnimatePresence>
-      {item ? (
+    <AnimatePresence onExitComplete={onExited}>
+      {activeItem ? (
         <motion.div
           role="dialog"
           aria-modal="true"
@@ -163,10 +222,10 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
             className="w-full max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 px-6 pt-5 pb-3 shrink-0 text-[#f4f3ee]"
           >
             <div className="min-w-0">
-              <div className="text-[15px] font-semibold truncate">{item.title || t('dna.image')}</div>
-              {item.summary && item.summary !== item.title ? (
+              <div className="text-[15px] font-semibold truncate">{activeItem.title || t('dna.image')}</div>
+              {activeItem.summary && activeItem.summary !== activeItem.title ? (
                 <div className="text-[12px] text-[#aba9a0] truncate max-w-[520px]">
-                  {item.summary}
+                  {activeItem.summary}
                 </div>
               ) : null}
             </div>
@@ -230,14 +289,14 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   tone="secret"
                   onCopy={() => window.kapsula.copyImage(localImagePath)}
                 />
-              ) : item.url ? (
+              ) : activeItem.url ? (
                 <CopySlotPill
                   label={t('cards.copyLink')}
                   copiedLabel={t('common.copied')}
                   widthPx={164}
                   heightPx={32}
                   tone="secret"
-                  onCopy={() => window.kapsula.copyText(item.url!)}
+                  onCopy={() => window.kapsula.copyText(activeItem.url!)}
                 />
               ) : null}
 
@@ -246,7 +305,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   type="button"
                   onClick={() => {
                     onClose();
-                    onEditInStudio(item);
+                    onEditInStudio(activeItem);
                   }}
                   className="k-interactive inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12px] font-medium cursor-pointer"
                 >
@@ -307,7 +366,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
             >
               <img
                 src={src}
-                alt={item.title}
+                alt={activeItem.title}
                 onLoad={(e) => {
                   const extracted = extractCanvasSwatches(e.currentTarget);
                   if (extracted.length > 0 && swatches.length === 0) {
@@ -333,12 +392,7 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                     {onSaveAnnotations ? (
                       <button
                         type="button"
-                        onClick={() =>
-                          void onSaveAnnotations(
-                            item.id,
-                            annotations.filter((a) => a.id !== ann.id)
-                          )
-                        }
+                        onClick={() => void handleDeletePin(ann.id)}
                         className="text-white/60 hover:text-[var(--k-danger)] cursor-pointer shrink-0"
                       >
                         <Trash className="w-3.5 h-3.5" />

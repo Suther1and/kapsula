@@ -269,10 +269,17 @@ describe('Kapsula v8 Voice AI Transcription, Inline Image Asset & AI Security', 
     expect(repo.queryItems({ limit: 50 })).toHaveLength(0);
   });
 
-  it('scrubs bank card screenshot BEFORE persisting to SQLite when OCR detects a secret (no OCR-before-Sync race)', async () => {
-    vi.spyOn(defaultLocalOcrAdapter, 'extractText').mockResolvedValue({
-      text: 'МИР Банк 2200 7007 1234 5676 09/29 CVV 741',
-      lines: ['МИР Банк 2200 7007 1234 5676 09/29 CVV 741'],
+  it('defers sync_dirty until background OCR finishes and converts bank card screenshot to encrypted secret', async () => {
+    let releaseOcr!: () => void;
+    const ocrGate = new Promise<void>((resolve) => {
+      releaseOcr = resolve;
+    });
+    vi.spyOn(defaultLocalOcrAdapter, 'extractText').mockImplementation(async () => {
+      await ocrGate;
+      return {
+        text: 'МИР Банк 2200 7007 1234 5676 09/29 CVV 741',
+        lines: ['МИР Банк 2200 7007 1234 5676 09/29 CVV 741'],
+      };
     });
 
     const { pipeline, repo } = makeTempEnv({
@@ -281,20 +288,27 @@ describe('Kapsula v8 Voice AI Transcription, Inline Image Asset & AI Security', 
       enableAutoOcr: true,
     });
 
-    const item = await pipeline.capture({
+    const initialItem = await pipeline.capture({
       imageBase64: SAMPLE_PNG_BASE64,
       source: 'vault_ui',
     });
+    expect(initialItem.dna).toBe('shot');
+    expect(
+      repo.db.prepare("SELECT COUNT(*) AS c FROM sync_dirty WHERE entity_id = ?").get(initialItem.id)
+    ).toEqual({ c: 0 });
+
+    releaseOcr();
     await pipeline.waitForIdle();
 
-    expect(item.dna).toBe('secret');
-    expect(item.imagePath).toBeNull();
-    expect(item.thumbPath).toBeNull();
-    expect(item.ocrText).toBe('');
-    expect(item.aiStatus).toBe('skipped_secret');
-    expect(item.secretMeta?.kind).toBe('bank_card');
+    const item = repo.getItemById(initialItem.id);
+    expect(item).not.toBeNull();
+    expect(item!.dna).toBe('secret');
+    expect(item!.imagePath).toBeNull();
+    expect(item!.thumbPath).toBeNull();
+    expect(item!.ocrText).toBe('');
+    expect(item!.aiStatus).toBe('skipped_secret');
+    expect(item!.secretMeta?.kind).toBe('bank_card');
     expect(fs.readdirSync(pipeline.getMediaDir())).toHaveLength(0);
-    expect(repo.getItemById(item.id)?.imagePath).toBeNull();
   });
 
   it('redacts inline secrets in transformNoteText before cloud call and restores placeholders locally', async () => {

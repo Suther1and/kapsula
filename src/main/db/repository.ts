@@ -4,9 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  type CompiledCharFreq,
+  compileBilingualSearchQuery,
+  damerauDistanceWithin,
+  damerauDistanceWithinPrefix,
   detectPlatformIntent,
   expandBilingualQuery,
+  isSearchWordCharAt,
+  normalizeSearchText,
+  passesCharFreqs,
   scoreBilingualFields,
+  scoreBilingualFieldsCompiled,
 } from '@shared/bilingual-search';
 import { DEFAULT_APPEARANCE_CONFIG } from '@shared/color-engine';
 import {
@@ -33,6 +41,12 @@ import type {
   AppLocale,
   AppearanceConfig,
   BudgetSummary,
+  BulkDeleteItemsResult,
+  BulkDeleteTasksResult,
+  BulkTasksMutationResult,
+  BulkToggleTaskInput,
+  BulkUpdateItemsResult,
+  BulkUpdateTasksMetaInput,
   CalendarChecklistItem,
   CalendarEvent,
   CalendarEventInput,
@@ -397,6 +411,117 @@ function mapRowToItem(row: ItemRow): VaultItem {
   };
 }
 
+const CARD_BODY_MAX = 700;
+const CARD_BODY_SLICE = 520;
+const CARD_TRANSCRIPT_PREVIEW_MAX = 240;
+
+export function projectItemForCard(item: VaultItem): VaultItem {
+  const rawBody = item.body || '';
+  const bodyLength = rawBody.length;
+  const parsedTasks =
+    rawBody.includes('[') && rawBody.includes(']') ? parseMarkdownTasks(rawBody) : [];
+  const hasCheckbox = parsedTasks.length > 0;
+
+  let projectedBody = rawBody;
+  let isBodyTruncated = false;
+
+  if (item.dna === 'snippet' && rawBody.length > CARD_BODY_MAX) {
+    const codeMatch = /```([a-z0-9_-]*)\n([\s\S]*?)```/i.exec(rawBody);
+    if (codeMatch) {
+      const lang = codeMatch[1] || '';
+      const codeLines = (codeMatch[2] || '').split(/\r?\n/).slice(0, 8);
+      let block = `\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\``;
+      if (block.length > CARD_BODY_MAX) {
+        const maxInner = Math.max(80, CARD_BODY_MAX - lang.length - 10);
+        block = `\`\`\`${lang}\n${codeLines.join('\n').slice(0, maxInner)}\n\`\`\``;
+      }
+      projectedBody = block;
+    } else {
+      projectedBody = rawBody.slice(0, CARD_BODY_MAX);
+    }
+    isBodyTruncated = true;
+  } else if (rawBody.length > CARD_BODY_MAX) {
+    let sliceEnd = CARD_BODY_SLICE;
+    const prevNl = rawBody.lastIndexOf('\n', sliceEnd);
+    if (prevNl >= 280) {
+      sliceEnd = prevNl;
+    } else {
+      const prevSpace = rawBody.lastIndexOf(' ', sliceEnd);
+      if (prevSpace >= 360) sliceEnd = prevSpace;
+    }
+    let head = rawBody.slice(0, sliceEnd).trimEnd();
+    const fenceLineRe = /^\s*(```|~~~)/;
+    let activeFence: string | null = null;
+    for (const line of head.split(/\r?\n/)) {
+      const fenceMatch = fenceLineRe.exec(line);
+      if (!fenceMatch) continue;
+      const marker = fenceMatch[1]!;
+      if (!activeFence) {
+        activeFence = marker;
+      } else if (activeFence === marker) {
+        activeFence = null;
+      }
+    }
+    if (activeFence) {
+      head += `\n${activeFence}`;
+    }
+    if (!item.thumbPath && !item.imagePath && extractInlineMediaFilenames(head).length === 0) {
+      const allInline = extractInlineMediaFilenames(rawBody);
+      if (allInline.length > 0) {
+        head += `\n\n![](kapsula-media://local/${allInline[0]})`;
+      }
+    }
+    if (hasCheckbox) {
+      const headTasks = parseMarkdownTasks(head);
+      const targetTaskCount = Math.min(5, parsedTasks.length);
+      if (headTasks.length < targetTaskCount) {
+        const extraLines = parsedTasks
+          .slice(headTasks.length, targetTaskCount)
+          .map((task) => `- [${task.done ? 'x' : ' '}] ${task.text.slice(0, 120)}`);
+        if (extraLines.length > 0) {
+          head += `\n${extraLines.join('\n')}`;
+        }
+      }
+    }
+    projectedBody = head;
+    isBodyTruncated = true;
+  }
+
+  let projectedMediaMeta: MediaMeta | null = item.mediaMeta;
+  if (item.mediaMeta) {
+    projectedMediaMeta = { ...item.mediaMeta };
+    if (typeof projectedMediaMeta.transcript === 'string') {
+      if (item.dna === 'voice' && !projectedBody.trim()) {
+        if (projectedMediaMeta.transcript.length > CARD_TRANSCRIPT_PREVIEW_MAX) {
+          projectedMediaMeta.transcript = projectedMediaMeta.transcript.slice(
+            0,
+            CARD_TRANSCRIPT_PREVIEW_MAX
+          );
+          isBodyTruncated = true;
+        }
+      } else {
+        if (projectedMediaMeta.transcript.length > 0) {
+          isBodyTruncated = true;
+        }
+        delete projectedMediaMeta.transcript;
+      }
+    }
+  }
+
+  return {
+    ...item,
+    body: projectedBody,
+    ocrText: '',
+    annotations: [],
+    extractedActions: item.extractedActions.slice(0, 6),
+    mediaMeta: projectedMediaMeta,
+    isCardProjection: true,
+    isBodyTruncated,
+    hasCheckbox,
+    bodyLength,
+  };
+}
+
 export function getCurrentMonthKey(now = new Date()): string {
   const y = now.getUTCFullYear();
   const m = String(now.getUTCMonth() + 1).padStart(2, '0');
@@ -408,6 +533,10 @@ const AUTO_REVISION_INTERVAL_MS = 5 * 60_000;
 const AUTO_REVISION_LENGTH_DELTA = 120;
 const MAX_REVISIONS_PER_ITEM = 30;
 const MAX_SYNCED_REVISIONS_PER_ITEM = 15;
+const AI_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AI_CACHE_MAX_ROWS = 2000;
+const AI_USAGE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const AI_USAGE_MAX_ROWS = 5000;
 const VALID_TASK_PRIORITIES = new Set<TaskPriority>(['none', 'low', 'medium', 'high', 'urgent']);
 
 function computeRevisionHash(title: string | null, content: string): string {
@@ -421,8 +550,308 @@ function escapeSqlLike(input: string): string {
   return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
+function compileTextAnyRegex(terms: string[], alreadyNormalized = false): RegExp | null {
+  const normalized = terms
+    .filter((t): t is string => typeof t === 'string' && t.length > 0)
+    .map((t) => normalizeSearchText(t));
+  if (normalized.length === 0) return null;
+  const sorted = Array.from(new Set(normalized)).sort((a, b) => a.length - b.length);
+  const pruned: string[] = [];
+  for (const term of sorted) {
+    if (!pruned.some((shorter) => term.includes(shorter))) {
+      pruned.push(term);
+    }
+  }
+  if (pruned.length === 0) return null;
+  if (alreadyNormalized) {
+    const escaped = pruned.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp(escaped.join('|'));
+  }
+  const escaped = pruned.map((t) =>
+    t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/е/g, '[её]')
+  );
+  return new RegExp(escaped.join('|'), 'i');
+}
+
+interface SearchFuzzyPrecheckCand {
+  candLen: number;
+  minTokenLen: number;
+  maxDist: number;
+  nonWordCount: number;
+  canPrefixFilter: boolean;
+  c0: number;
+  c1: number;
+  c2: number;
+  wordCharFreqs: CompiledCharFreq[];
+  allCharFreqs: CompiledCharFreq[];
+}
+
+interface SearchFallbackGroupSpec {
+  matchingOrbitIds: Set<string>;
+  groupExactRe: RegExp | null;
+  fuzzyCands: SearchFuzzyPrecheckCand[];
+  tagExtraCands: SearchFuzzyPrecheckCand[];
+  minWordLen: number;
+}
+
+interface UnifiedSearchScanGroup {
+  matchingOrbitIds: Set<string>;
+  exactRe: RegExp | null;
+  fuzzyCands: SearchFuzzyPrecheckCand[];
+  tagExtraCands: SearchFuzzyPrecheckCand[];
+  minWordLen: number;
+}
+
+interface SearchIndexVocabEntry {
+  w: string;
+  c0: number;
+  c1: number;
+  c2: number;
+  postings: number[];
+}
+
+interface VaultSearchIndex {
+  totalChanges: number;
+  count: number;
+  idToIdx: Map<string, number>;
+  ids: string[];
+  orbits: string[];
+  dnas: ContentDna[];
+  subKinds: Array<ItemSubKind | null>;
+  focusBoardIds: Array<string | null>;
+  isPinned: Uint8Array;
+  isArchived: Uint8Array;
+  isPurged: Uint8Array;
+  semFlags: Uint8Array;
+  deletedAt: Float64Array;
+  remindAt: Float64Array;
+  createdAt: Float64Array;
+  rowids: Float64Array;
+  tagsLower: string[][];
+  tagsNorm: string[][];
+  flatNorm: string[];
+  digitsStr: string[];
+  vocabReady: boolean;
+  wordsByLen: Map<number, SearchIndexVocabEntry[]>;
+  tagPostings: Map<string, number[]>;
+}
+
+const EMPTY_SEARCH_STR_ARR: string[] = [];
+const CONTACT_PHONE_RE = /(?:\+7|8|\+\d{1,3})[\s()-]*(?:\d[\s()-]*){7,}/;
+const SEMANTIC_BIT: Record<SemanticMatchKind, number> = {
+  bank_card: 1,
+  secret: 2,
+  shot: 4,
+  link: 8,
+  voice: 16,
+  doc: 32,
+  contact: 64,
+  snippet: 128,
+};
+
+const ASCII_LOWER_CODE = new Uint8Array(128);
+for (let c = 0; c < 128; c += 1) {
+  ASCII_LOWER_CODE[c] = c >= 65 && c <= 90 ? c + 32 : c;
+}
+
+function toNormLowerCode(c: number): number {
+  if (c < 128) return ASCII_LOWER_CODE[c]!;
+  if (c >= 1040 && c <= 1071) return c + 32;
+  if (c === 1025 || c === 1105) return 1077;
+  if (c >= 1072 && c <= 1103) return c;
+  return String.fromCharCode(c).toLowerCase().charCodeAt(0);
+}
+
+let fuzzyNormTokenBuf: Int32Array = new Int32Array(256);
+
+function ensureFuzzyNormTokenBuf(needed: number): Int32Array {
+  if (fuzzyNormTokenBuf.length < needed) {
+    let nextLen = fuzzyNormTokenBuf.length || 256;
+    while (nextLen < needed) nextLen *= 2;
+    fuzzyNormTokenBuf = new Int32Array(nextLen);
+  }
+  return fuzzyNormTokenBuf;
+}
+
+function extractDigitsIfAtLeastThree(
+  a: string,
+  b: string,
+  c: string,
+  d: string
+): string {
+  let out = '';
+  const appendDigits = (s: string) => {
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s.charCodeAt(i);
+      if (ch >= 48 && ch <= 57) {
+        out += s[i]!;
+      }
+    }
+  };
+  if (a) appendDigits(a);
+  if (b) appendDigits(b);
+  if (c) appendDigits(c);
+  if (d) appendDigits(d);
+  return out.length >= 3 ? out : '';
+}
+
+function matchColumnFuzzyRuns(
+  str: unknown,
+  minWordLen: number,
+  fuzzyCands: SearchFuzzyPrecheckCand[]
+): boolean {
+  if (typeof str !== 'string' || str.length < minWordLen || fuzzyCands.length === 0) return false;
+  if (str.indexOf('\\u') >= 0) return true;
+
+  const n = str.length;
+  const candsLen = fuzzyCands.length;
+  let runStart = 0;
+  for (let i = 0; i <= n; i += 1) {
+    const isWord = i < n && isSearchWordCharAt(str, i);
+    if (!isWord) {
+      const tokLen = i - runStart;
+      if (tokLen >= minWordLen) {
+        const w0 = toNormLowerCode(str.charCodeAt(runStart));
+        const w1 = toNormLowerCode(str.charCodeAt(runStart + 1));
+        let w2 = -1;
+        let normalizedPrefixLen = 0;
+        let normBuf = fuzzyNormTokenBuf;
+        for (let ci = 0; ci < candsLen; ci += 1) {
+          const fc = fuzzyCands[ci]!;
+          if (tokLen < fc.minTokenLen) continue;
+          const isPrefixOnly = tokLen > fc.candLen + fc.maxDist;
+          if (isPrefixOnly && fc.candLen < 5) continue;
+          const effectiveMaxDist = isPrefixOnly ? 1 : fc.maxDist;
+          if (fc.nonWordCount > effectiveMaxDist) continue;
+          if (fc.canPrefixFilter) {
+            if (fc.maxDist === 1 || isPrefixOnly) {
+              if (w0 !== fc.c0 && w0 !== fc.c1 && w1 !== fc.c0 && w1 !== fc.c1) continue;
+            } else if (tokLen >= 3) {
+              if (w2 < 0) w2 = toNormLowerCode(str.charCodeAt(runStart + 2));
+              if (
+                w0 !== fc.c0 &&
+                w0 !== fc.c1 &&
+                w0 !== fc.c2 &&
+                w1 !== fc.c0 &&
+                w1 !== fc.c1 &&
+                w1 !== fc.c2 &&
+                w2 !== fc.c0 &&
+                w2 !== fc.c1 &&
+                w2 !== fc.c2
+              ) {
+                continue;
+              }
+            }
+          }
+          const effectiveLen = isPrefixOnly ? fc.candLen : tokLen;
+          if (normalizedPrefixLen < effectiveLen) {
+            normBuf = ensureFuzzyNormTokenBuf(effectiveLen);
+            for (let p = normalizedPrefixLen; p < effectiveLen; p += 1) {
+              normBuf[p] = toNormLowerCode(str.charCodeAt(runStart + p));
+            }
+            normalizedPrefixLen = effectiveLen;
+          }
+          let misses = fc.nonWordCount;
+          const freqs = fc.wordCharFreqs;
+          for (let k = 0; k < freqs.length; k += 1) {
+            const f = freqs[k]!;
+            const code = f.code;
+            let count = 0;
+            for (let p = 0; p < effectiveLen; p += 1) {
+              if (normBuf[p] === code) {
+                count += 1;
+                if (count >= f.count) break;
+              }
+            }
+            if (count < f.count) {
+              misses += f.count - count;
+              if (misses > effectiveMaxDist) break;
+            }
+          }
+          if (misses <= effectiveMaxDist) return true;
+        }
+      }
+      runStart = i + 1;
+    }
+  }
+  return false;
+}
+
+interface ActiveSearchScanState {
+  unifiedGroups: UnifiedSearchScanGroup[] | null;
+  exactGroupMatchers: Array<{ re: RegExp | null; orbitIds: Set<string> }>;
+  fuzzyGroups: SearchFallbackGroupSpec[];
+  allowFuzzy: boolean;
+}
+
+function matchFuzzyGroupOnColumns(
+  minLen: number,
+  cands: SearchFuzzyPrecheckCand[],
+  tagExtraCands: SearchFuzzyPrecheckCand[],
+  title: unknown,
+  summary: unknown,
+  body: unknown,
+  ocr: unknown,
+  mediaMeta: unknown,
+  secretMeta: unknown,
+  url: unknown,
+  domain: unknown,
+  tags: unknown
+): boolean {
+  if (
+    matchColumnFuzzyRuns(title, minLen, cands) ||
+    matchColumnFuzzyRuns(summary, minLen, cands) ||
+    matchColumnFuzzyRuns(body, minLen, cands) ||
+    matchColumnFuzzyRuns(ocr, minLen, cands) ||
+    matchColumnFuzzyRuns(url, minLen, cands) ||
+    matchColumnFuzzyRuns(domain, minLen, cands) ||
+    matchColumnFuzzyRuns(mediaMeta, minLen, cands) ||
+    matchColumnFuzzyRuns(secretMeta, minLen, cands)
+  ) {
+    return true;
+  }
+  if (typeof tags === 'string' && tags.length > 2 && tags !== '[]') {
+    if (tags.indexOf('\\u') >= 0) return true;
+    const tgNorm = normalizeSearchText(tags);
+    for (let c = 0; c < cands.length; c += 1) {
+      const fc = cands[c]!;
+      if (passesCharFreqs(tgNorm, fc.allCharFreqs, 0, fc.maxDist)) return true;
+    }
+    for (let c = 0; c < tagExtraCands.length; c += 1) {
+      const fc = tagExtraCands[c]!;
+      if (passesCharFreqs(tgNorm, fc.allCharFreqs, 0, fc.maxDist)) return true;
+    }
+  }
+  return false;
+}
+
+function testRegexOnColumns(
+  re: RegExp,
+  title: unknown,
+  summary: unknown,
+  body: unknown,
+  ocr: unknown,
+  mediaMeta: unknown,
+  secretMeta: unknown,
+  url: unknown,
+  domain: unknown,
+  tags: unknown
+): boolean {
+  if (typeof title === 'string' && title.length > 0 && re.test(title)) return true;
+  if (typeof summary === 'string' && summary.length > 0 && re.test(summary)) return true;
+  if (typeof body === 'string' && body.length > 0 && re.test(body)) return true;
+  if (typeof ocr === 'string' && ocr.length > 0 && re.test(ocr)) return true;
+  if (typeof mediaMeta === 'string' && mediaMeta.length > 0 && re.test(mediaMeta)) return true;
+  if (typeof secretMeta === 'string' && secretMeta.length > 0 && re.test(secretMeta)) return true;
+  if (typeof url === 'string' && url.length > 0 && re.test(url)) return true;
+  if (typeof domain === 'string' && domain.length > 0 && re.test(domain)) return true;
+  if (typeof tags === 'string' && tags.length > 2 && tags !== '[]' && re.test(tags)) return true;
+  return false;
+}
+
 export class VaultRepository {
   public readonly db: DatabaseSync;
+  private readonly dbPath: string;
   private txDepth = 0;
   private tagUniverseCache: string[] | null = null;
   private vaultMutationVersion = 0;
@@ -434,9 +863,473 @@ export class VaultRepository {
   private ftsDeleteStmt: ReturnType<DatabaseSync['prepare']> | null = null;
   private ftsInsertStmt: ReturnType<DatabaseSync['prepare']> | null = null;
   private mutationListener: ((entityType: SyncEntityType, entityId: string) => void) | null = null;
+  private syncDirtyTrackingEnabled = true;
   private dirtySeqCounter = 0;
   private localDeviceId: string | null = null;
   private defaultOsLocale?: string | null;
+  private activeSearchScan: ActiveSearchScanState | null = null;
+  private searchIndex: VaultSearchIndex | null = null;
+  private totalChangesStmt: ReturnType<DatabaseSync['prepare']> | null = null;
+
+  private readTotalChanges(): number {
+    const row = (this.totalChangesStmt ??= this.db.prepare('SELECT total_changes() AS tc')).get() as {
+      tc: number;
+    };
+    return Number(row?.tc ?? 0);
+  }
+
+  private isSearchIndexValid(): boolean {
+    return this.searchIndex !== null && this.searchIndex.totalChanges === this.readTotalChanges();
+  }
+
+  private advanceSearchIndexChanges(wasValid: boolean): void {
+    if (wasValid && this.searchIndex !== null) {
+      this.searchIndex.totalChanges = this.readTotalChanges();
+    }
+  }
+
+  private buildIndexFieldsFromRow(row: {
+    dna: ContentDna;
+    sub_kind: ItemSubKind | null;
+    title: string;
+    body: string;
+    summary: string;
+    url: string | null;
+    domain: string | null;
+    platform: string | null;
+    media_path: string | null;
+    media_type: string | null;
+    media_meta_json: string | null;
+    ocr_text: string;
+    secret_meta_json: string | null;
+    tags_json: string;
+  }) {
+    let tagsLower = EMPTY_SEARCH_STR_ARR;
+    let tagsNorm = EMPTY_SEARCH_STR_ARR;
+    let tagsNormJoined = '';
+    if (row.tags_json && row.tags_json !== '[]') {
+      const parsed = safeParseJson<string[]>(row.tags_json, EMPTY_SEARCH_STR_ARR);
+      if (parsed.length > 0) {
+        tagsLower = new Array<string>(parsed.length);
+        tagsNorm = new Array<string>(parsed.length);
+        for (let i = 0; i < parsed.length; i += 1) {
+          const t = String(parsed[i] ?? '');
+          tagsLower[i] = t.toLowerCase();
+          tagsNorm[i] = normalizeSearchText(t);
+        }
+        tagsNormJoined = tagsNorm.join(' ');
+      }
+    }
+
+    let secretText = '';
+    let secretKind = '';
+    if (row.secret_meta_json) {
+      const sm = safeParseJson<SecretMeta | null>(row.secret_meta_json, null);
+      if (sm) {
+        secretKind = sm.kind ?? '';
+        secretText = [sm.service, sm.loginHint, sm.cardBrand, sm.last4, sm.kind]
+          .filter(Boolean)
+          .join(' ');
+      }
+    }
+
+    let mediaText = '';
+    let contactPhone = '';
+    if (row.media_meta_json) {
+      const mm = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
+      if (mm) {
+        contactPhone = mm.contactPhone ?? '';
+        mediaText = [
+          mm.forwardAuthor,
+          mm.fileName,
+          mm.transcript,
+          mm.contactPhone,
+          mm.contactEmail,
+          mm.contactHandle,
+          ...(mm.keyPoints ?? []),
+        ]
+          .filter(Boolean)
+          .join(' ');
+      }
+    }
+
+    const parts: string[] = [];
+    if (row.title) parts.push(row.title);
+    if (row.summary) parts.push(row.summary);
+    if (row.body) parts.push(row.body);
+    if (row.ocr_text) parts.push(row.ocr_text);
+    if (row.domain) parts.push(row.domain);
+    if (row.url) parts.push(row.url);
+    if (row.platform) parts.push(row.platform);
+    if (tagsNormJoined) parts.push(tagsNormJoined);
+    if (secretText) parts.push(secretText);
+    if (mediaText) parts.push(mediaText);
+    const flatNorm = parts.length > 0 ? normalizeSearchText(parts.join('\n')) : '';
+
+    const digitsStr = extractDigitsIfAtLeastThree(
+      row.title || '',
+      row.body || '',
+      secretText,
+      contactPhone
+    );
+
+    let sem = 0;
+    if (secretKind === 'bank_card') sem |= SEMANTIC_BIT.bank_card;
+    if (row.dna === 'secret' || Boolean(row.secret_meta_json)) sem |= SEMANTIC_BIT.secret;
+    if (row.dna === 'shot') sem |= SEMANTIC_BIT.shot;
+    if (row.dna === 'link' || Boolean(row.url)) sem |= SEMANTIC_BIT.link;
+    if (row.dna === 'voice' || Boolean(row.media_path && row.media_type?.startsWith('audio/'))) {
+      sem |= SEMANTIC_BIT.voice;
+    }
+    if (row.dna === 'doc') sem |= SEMANTIC_BIT.doc;
+    if (
+      row.sub_kind === 'contact' ||
+      Boolean(contactPhone) ||
+      (digitsStr.length >= 8 && CONTACT_PHONE_RE.test(`${row.title || ''}\n${row.body || ''}`))
+    ) {
+      sem |= SEMANTIC_BIT.contact;
+    }
+    if (row.dna === 'snippet' || (row.body ? row.body.includes('```') : false)) {
+      sem |= SEMANTIC_BIT.snippet;
+    }
+
+    return { tagsLower, tagsNorm, flatNorm, digitsStr, sem };
+  }
+
+  private indexItemVocabTokens(
+    index: VaultSearchIndex,
+    itemIdx: number,
+    vocabMap?: Map<string, SearchIndexVocabEntry>
+  ): void {
+    const tags = index.tagsNorm[itemIdx]!;
+    for (let ti = 0; ti < tags.length; ti += 1) {
+      const tg = tags[ti]!;
+      if (!tg) continue;
+      let arr = index.tagPostings.get(tg);
+      if (!arr) {
+        arr = [itemIdx];
+        index.tagPostings.set(tg, arr);
+      } else if (arr[arr.length - 1] !== itemIdx) {
+        arr.push(itemIdx);
+      }
+    }
+
+    const str = index.flatNorm[itemIdx]!;
+    const n = str.length;
+    if (n < 3) return;
+    let runStart = 0;
+    for (let p = 0; p <= n; p += 1) {
+      const isWord = p < n && isSearchWordCharAt(str, p);
+      if (!isWord) {
+        const tokLen = p - runStart;
+        if (tokLen >= 3) {
+          const w = str.slice(runStart, p);
+          if (vocabMap) {
+            let entry = vocabMap.get(w);
+            if (!entry) {
+              entry = {
+                w,
+                c0: w.charCodeAt(0),
+                c1: w.charCodeAt(1),
+                c2: w.charCodeAt(2),
+                postings: [itemIdx],
+              };
+              vocabMap.set(w, entry);
+              let bucket = index.wordsByLen.get(tokLen);
+              if (!bucket) {
+                bucket = [entry];
+                index.wordsByLen.set(tokLen, bucket);
+              } else {
+                bucket.push(entry);
+              }
+            } else if (entry.postings[entry.postings.length - 1] !== itemIdx) {
+              entry.postings.push(itemIdx);
+            }
+          } else {
+            let bucket = index.wordsByLen.get(tokLen);
+            let found: SearchIndexVocabEntry | undefined;
+            if (bucket) {
+              for (let b = 0; b < bucket.length; b += 1) {
+                if (bucket[b]!.w === w) {
+                  found = bucket[b]!;
+                  break;
+                }
+              }
+            } else {
+              bucket = [];
+              index.wordsByLen.set(tokLen, bucket);
+            }
+            if (!found) {
+              found = {
+                w,
+                c0: w.charCodeAt(0),
+                c1: w.charCodeAt(1),
+                c2: w.charCodeAt(2),
+                postings: [itemIdx],
+              };
+              bucket.push(found);
+            } else if (found.postings[found.postings.length - 1] !== itemIdx) {
+              found.postings.push(itemIdx);
+            }
+          }
+        }
+        runStart = p + 1;
+      }
+    }
+  }
+
+  private ensureSearchIndexVocab(index: VaultSearchIndex): void {
+    if (index.vocabReady) return;
+    index.wordsByLen.clear();
+    index.tagPostings.clear();
+    const vocabMap = new Map<string, SearchIndexVocabEntry>();
+    for (let i = 0; i < index.count; i += 1) {
+      if (index.isPurged[i] === 1) continue;
+      this.indexItemVocabTokens(index, i, vocabMap);
+    }
+    index.vocabReady = true;
+  }
+
+  private ensureSearchIndex(withVocab: boolean): VaultSearchIndex {
+    const tc = this.readTotalChanges();
+    if (!this.searchIndex || this.searchIndex.totalChanges !== tc) {
+      const rows = this.db
+        .prepare(
+          `SELECT
+             id, rowid AS _rowid, dna, sub_kind, orbit, focus_board_id,
+             title, body, summary, url, domain, platform,
+             media_path, media_type, media_meta_json, ocr_text, secret_meta_json, tags_json,
+             is_pinned, is_archived, deleted_at, remind_at, created_at
+           FROM items
+           WHERE purged_at IS NULL`
+        )
+        .all() as unknown as Array<
+        Pick<
+          ItemRow,
+          | 'id'
+          | 'dna'
+          | 'sub_kind'
+          | 'orbit'
+          | 'focus_board_id'
+          | 'title'
+          | 'body'
+          | 'summary'
+          | 'url'
+          | 'domain'
+          | 'platform'
+          | 'media_path'
+          | 'media_type'
+          | 'media_meta_json'
+          | 'ocr_text'
+          | 'secret_meta_json'
+          | 'tags_json'
+          | 'is_pinned'
+          | 'is_archived'
+          | 'deleted_at'
+          | 'remind_at'
+          | 'created_at'
+        > & { _rowid: number }
+      >;
+
+      const count = rows.length;
+      const cap = Math.max(64, count + 32);
+      const idToIdx = new Map<string, number>();
+      const ids = new Array<string>(count);
+      const orbits = new Array<string>(count);
+      const dnas = new Array<ContentDna>(count);
+      const subKinds = new Array<ItemSubKind | null>(count);
+      const focusBoardIds = new Array<string | null>(count);
+      const isPinned = new Uint8Array(cap);
+      const isArchived = new Uint8Array(cap);
+      const isPurged = new Uint8Array(cap);
+      const semFlags = new Uint8Array(cap);
+      const deletedAt = new Float64Array(cap);
+      const remindAt = new Float64Array(cap);
+      const createdAt = new Float64Array(cap);
+      const rowids = new Float64Array(cap);
+      const tagsLower = new Array<string[]>(count);
+      const tagsNorm = new Array<string[]>(count);
+      const flatNorm = new Array<string>(count);
+      const digitsStr = new Array<string>(count);
+
+      for (let i = 0; i < count; i += 1) {
+        const r = rows[i]!;
+        idToIdx.set(r.id, i);
+        ids[i] = r.id;
+        orbits[i] = r.orbit ?? '';
+        dnas[i] = r.dna;
+        subKinds[i] = r.sub_kind ?? null;
+        focusBoardIds[i] = r.focus_board_id ?? null;
+        isPinned[i] = r.is_pinned === 1 ? 1 : 0;
+        isArchived[i] = r.is_archived === 1 ? 1 : 0;
+        isPurged[i] = 0;
+        deletedAt[i] = r.deleted_at != null ? r.deleted_at : NaN;
+        remindAt[i] = r.remind_at != null ? r.remind_at : NaN;
+        createdAt[i] = r.created_at;
+        rowids[i] = r._rowid ?? i + 1;
+
+        const built = this.buildIndexFieldsFromRow(r);
+        tagsLower[i] = built.tagsLower;
+        tagsNorm[i] = built.tagsNorm;
+        flatNorm[i] = built.flatNorm;
+        digitsStr[i] = built.digitsStr;
+        semFlags[i] = built.sem;
+      }
+
+      this.searchIndex = {
+        totalChanges: tc,
+        count,
+        idToIdx,
+        ids,
+        orbits,
+        dnas,
+        subKinds,
+        focusBoardIds,
+        isPinned,
+        isArchived,
+        isPurged,
+        semFlags,
+        deletedAt,
+        remindAt,
+        createdAt,
+        rowids,
+        tagsLower,
+        tagsNorm,
+        flatNorm,
+        digitsStr,
+        vocabReady: false,
+        wordsByLen: new Map(),
+        tagPostings: new Map(),
+      };
+    }
+
+    if (withVocab && !this.searchIndex.vocabReady) {
+      this.ensureSearchIndexVocab(this.searchIndex);
+    }
+    return this.searchIndex;
+  }
+
+  private growSearchIndexCapacity(index: VaultSearchIndex): void {
+    const oldCap = index.isPinned.length;
+    const newCap = Math.max(64, oldCap * 2);
+    const growU8 = (src: Uint8Array) => {
+      const dst = new Uint8Array(newCap);
+      dst.set(src);
+      return dst;
+    };
+    const growF64 = (src: Float64Array) => {
+      const dst = new Float64Array(newCap);
+      dst.set(src);
+      return dst;
+    };
+    index.isPinned = growU8(index.isPinned);
+    index.isArchived = growU8(index.isArchived);
+    index.isPurged = growU8(index.isPurged);
+    index.semFlags = growU8(index.semFlags);
+    index.deletedAt = growF64(index.deletedAt);
+    index.remindAt = growF64(index.remindAt);
+    index.createdAt = growF64(index.createdAt);
+    index.rowids = growF64(index.rowids);
+  }
+
+  private upsertSearchIndexRow(row: ItemRow, rowidVal?: number): void {
+    const index = this.searchIndex;
+    if (!index) return;
+
+    if (row.purged_at != null) {
+      const existingIdx = index.idToIdx.get(row.id);
+      if (existingIdx !== undefined) {
+        index.isPurged[existingIdx] = 1;
+        index.flatNorm[existingIdx] = '';
+        index.digitsStr[existingIdx] = '';
+        index.semFlags[existingIdx] = 0;
+        index.tagsLower[existingIdx] = EMPTY_SEARCH_STR_ARR;
+        index.tagsNorm[existingIdx] = EMPTY_SEARCH_STR_ARR;
+      }
+      index.totalChanges = this.readTotalChanges();
+      return;
+    }
+
+    const built = this.buildIndexFieldsFromRow(row);
+    const existingIdx = index.idToIdx.get(row.id);
+    if (existingIdx !== undefined) {
+      const textChanged =
+        index.flatNorm[existingIdx] !== built.flatNorm ||
+        index.tagsNorm[existingIdx]!.join('\0') !== built.tagsNorm.join('\0');
+      index.orbits[existingIdx] = row.orbit ?? '';
+      index.dnas[existingIdx] = row.dna;
+      index.subKinds[existingIdx] = row.sub_kind ?? null;
+      index.focusBoardIds[existingIdx] = row.focus_board_id ?? null;
+      index.isPinned[existingIdx] = row.is_pinned === 1 ? 1 : 0;
+      index.isArchived[existingIdx] = row.is_archived === 1 ? 1 : 0;
+      index.isPurged[existingIdx] = 0;
+      index.deletedAt[existingIdx] = row.deleted_at != null ? row.deleted_at : NaN;
+      index.remindAt[existingIdx] = row.remind_at != null ? row.remind_at : NaN;
+      index.createdAt[existingIdx] = row.created_at;
+      if (rowidVal !== undefined) index.rowids[existingIdx] = rowidVal;
+      index.tagsLower[existingIdx] = built.tagsLower;
+      index.tagsNorm[existingIdx] = built.tagsNorm;
+      index.flatNorm[existingIdx] = built.flatNorm;
+      index.digitsStr[existingIdx] = built.digitsStr;
+      index.semFlags[existingIdx] = built.sem;
+      if (textChanged && index.vocabReady) {
+        index.vocabReady = false;
+        index.wordsByLen.clear();
+        index.tagPostings.clear();
+      }
+      index.totalChanges = this.readTotalChanges();
+      return;
+    }
+
+    const idx = index.count;
+    if (idx >= index.isPinned.length) {
+      this.growSearchIndexCapacity(index);
+    }
+    index.count = idx + 1;
+    index.idToIdx.set(row.id, idx);
+    index.ids[idx] = row.id;
+    index.orbits[idx] = row.orbit ?? '';
+    index.dnas[idx] = row.dna;
+    index.subKinds[idx] = row.sub_kind ?? null;
+    index.focusBoardIds[idx] = row.focus_board_id ?? null;
+    index.isPinned[idx] = row.is_pinned === 1 ? 1 : 0;
+    index.isArchived[idx] = row.is_archived === 1 ? 1 : 0;
+    index.isPurged[idx] = 0;
+    index.deletedAt[idx] = row.deleted_at != null ? row.deleted_at : NaN;
+    index.remindAt[idx] = row.remind_at != null ? row.remind_at : NaN;
+    index.createdAt[idx] = row.created_at;
+    index.rowids[idx] = rowidVal ?? idx + 1;
+    index.tagsLower[idx] = built.tagsLower;
+    index.tagsNorm[idx] = built.tagsNorm;
+    index.flatNorm[idx] = built.flatNorm;
+    index.digitsStr[idx] = built.digitsStr;
+    index.semFlags[idx] = built.sem;
+    if (index.vocabReady) {
+      this.indexItemVocabTokens(index, idx);
+    }
+    index.totalChanges = this.readTotalChanges();
+  }
+
+  public warmupSearchIndex(): void {
+    this.ensureSearchIndex(true);
+  }
+
+  private fetchRowsByIds(ids: string[]): ItemRow[] {
+    if (ids.length === 0) return [];
+    const out: ItemRow[] = [];
+    const chunkSize = 500;
+    for (let start = 0; start < ids.length; start += chunkSize) {
+      const slice = ids.slice(start, start + chunkSize);
+      const placeholders = slice.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(`SELECT * FROM items WHERE id IN (${placeholders})`)
+        .all(...slice) as unknown as ItemRow[];
+      for (let i = 0; i < rows.length; i += 1) {
+        out.push(rows[i]!);
+      }
+    }
+    return out;
+  }
 
   private bumpVaultMutationVersion(): void {
     this.vaultMutationVersion += 1;
@@ -462,6 +1355,26 @@ export class VaultRepository {
     this.mutationListener = listener;
   }
 
+  public setSyncDirtyTrackingEnabled(enabled: boolean): void {
+    this.syncDirtyTrackingEnabled = enabled;
+  }
+
+  public isSyncDirtyTrackingEnabled(): boolean {
+    return this.syncDirtyTrackingEnabled;
+  }
+
+  public clearUnsentSyncDirty(): number {
+    const wasValid = this.isSearchIndexValid();
+    try {
+      const res = this.db.prepare('DELETE FROM sync_dirty').run();
+      this.dirtySeqCounter = 0;
+      this.advanceSearchIndexChanges(wasValid);
+      return Number(res.changes ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
   private nextDirtySeq(): number {
     if (this.dirtySeqCounter === 0) {
       const row = this.db
@@ -483,7 +1396,9 @@ export class VaultRepository {
   }
 
   public markDirty(entityType: SyncEntityType, entityId: string): void {
+    const wasValid = this.isSearchIndexValid();
     this.bumpVaultMutationVersion();
+    if (!this.syncDirtyTrackingEnabled) return;
     try {
       const seq = this.nextDirtySeq();
       this.db
@@ -493,6 +1408,7 @@ export class VaultRepository {
            VALUES (?, ?, ?, ?, 0, NULL, 0)`
         )
         .run(entityType, entityId, Date.now(), seq);
+      this.advanceSearchIndexChanges(wasValid);
       this.mutationListener?.(entityType, entityId);
     } catch {
       // Never break local writes if sync tracking table is unavailable
@@ -500,12 +1416,199 @@ export class VaultRepository {
   }
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     if (dbPath !== ':memory:') {
       fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
     }
     this.db = new DatabaseSync(dbPath);
     this.db.function('lower_utf', (val: unknown) =>
       typeof val === 'string' ? val.toLowerCase() : ''
+    );
+    let cachedTermsKey = '';
+    let cachedTermsRegex: RegExp | null = null;
+    this.db.function(
+      'text_has_any',
+      (
+        title: unknown,
+        summary: unknown,
+        body: unknown,
+        ocr: unknown,
+        mediaMeta: unknown,
+        secretMeta: unknown,
+        url: unknown,
+        domain: unknown,
+        tags: unknown,
+        termsJson: unknown
+      ) => {
+        if (typeof termsJson !== 'string' || !termsJson) return 0;
+        if (termsJson !== cachedTermsKey) {
+          cachedTermsKey = termsJson;
+          cachedTermsRegex = null;
+          try {
+            const parsed = JSON.parse(termsJson);
+            if (Array.isArray(parsed)) {
+              cachedTermsRegex = compileTextAnyRegex(parsed);
+            }
+          } catch {
+            cachedTermsRegex = null;
+          }
+        }
+        const re = cachedTermsRegex;
+        if (!re) return 0;
+        return testRegexOnColumns(
+          re,
+          title,
+          summary,
+          body,
+          ocr,
+          mediaMeta,
+          secretMeta,
+          url,
+          domain,
+          tags
+        )
+          ? 1
+          : 0;
+      }
+    );
+    this.db.function(
+      'search_fallback_scan',
+      (
+        title: unknown,
+        summary: unknown,
+        body: unknown,
+        ocr: unknown,
+        mediaMeta: unknown,
+        secretMeta: unknown,
+        url: unknown,
+        domain: unknown,
+        tags: unknown,
+        orbitId: unknown
+      ) => {
+        const state = this.activeSearchScan;
+        if (!state) return 0;
+        const orb = typeof orbitId === 'string' ? orbitId : '';
+
+        if (state.unifiedGroups !== null) {
+          let usedFuzzy = false;
+          for (let g = 0; g < state.unifiedGroups.length; g += 1) {
+            const ug = state.unifiedGroups[g]!;
+            if (orb && ug.matchingOrbitIds.has(orb)) continue;
+            if (
+              ug.exactRe &&
+              testRegexOnColumns(
+                ug.exactRe,
+                title,
+                summary,
+                body,
+                ocr,
+                mediaMeta,
+                secretMeta,
+                url,
+                domain,
+                tags
+              )
+            ) {
+              continue;
+            }
+            if (!state.allowFuzzy || (ug.fuzzyCands.length === 0 && ug.tagExtraCands.length === 0)) {
+              return 0;
+            }
+            if (
+              !matchFuzzyGroupOnColumns(
+                ug.minWordLen,
+                ug.fuzzyCands,
+                ug.tagExtraCands,
+                title,
+                summary,
+                body,
+                ocr,
+                mediaMeta,
+                secretMeta,
+                url,
+                domain,
+                tags
+              )
+            ) {
+              return 0;
+            }
+            usedFuzzy = true;
+          }
+          return usedFuzzy ? 2 : 1;
+        }
+
+        if (state.exactGroupMatchers.length > 0) {
+          let allExactMatch = true;
+          for (let i = 0; i < state.exactGroupMatchers.length; i += 1) {
+            const m = state.exactGroupMatchers[i]!;
+            if (orb && m.orbitIds.has(orb)) continue;
+            if (
+              m.re &&
+              testRegexOnColumns(
+                m.re,
+                title,
+                summary,
+                body,
+                ocr,
+                mediaMeta,
+                secretMeta,
+                url,
+                domain,
+                tags
+              )
+            ) {
+              continue;
+            }
+            allExactMatch = false;
+            break;
+          }
+          if (allExactMatch) return 1;
+        }
+
+        if (!state.allowFuzzy || state.fuzzyGroups.length === 0) return 0;
+
+        for (let g = 0; g < state.fuzzyGroups.length; g += 1) {
+          const fg = state.fuzzyGroups[g]!;
+          if (orb && fg.matchingOrbitIds.has(orb)) continue;
+          if (
+            fg.groupExactRe &&
+            testRegexOnColumns(
+              fg.groupExactRe,
+              title,
+              summary,
+              body,
+              ocr,
+              mediaMeta,
+              secretMeta,
+              url,
+              domain,
+              tags
+            )
+          ) {
+            continue;
+          }
+
+          if (
+            !matchFuzzyGroupOnColumns(
+              fg.minWordLen,
+              fg.fuzzyCands,
+              fg.tagExtraCands,
+              title,
+              summary,
+              body,
+              ocr,
+              mediaMeta,
+              secretMeta,
+              url,
+              domain,
+              tags
+            )
+          ) {
+            return 0;
+          }
+        }
+        return 2;
+      }
     );
     initSchema(this.db);
     this.localDeviceId = this.getSyncState('device_id');
@@ -539,7 +1642,7 @@ export class VaultRepository {
            AND purged_at IS NULL
            AND dna != 'secret'
            AND title_norm IN (${placeholders})
-         ORDER BY created_at DESC`
+         ORDER BY created_at DESC, rowid DESC`
       )
       .all(...orderedNorms) as Array<{ id: string; title_norm: string | null }>;
 
@@ -563,7 +1666,7 @@ export class VaultRepository {
              AND dna != 'secret'
              AND title_norm IS NULL
              AND lower_utf(trim(title)) = ?
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT 1`
         );
         for (const norm of orderedNorms) {
@@ -627,6 +1730,13 @@ export class VaultRepository {
   }
 
   public close(): void {
+    if (this.dbPath !== ':memory:') {
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch {
+        // Non-fatal WAL checkpoint on close
+      }
+    }
     this.db.close();
   }
 
@@ -710,6 +1820,7 @@ export class VaultRepository {
       new Set([...(input.linksOut ?? []), ...resolvedWikiLinks])
     );
 
+    const wasValid = this.isSearchIndexValid();
     const row = this.inTx(() => {
       this.db
         .prepare(
@@ -783,6 +1894,9 @@ export class VaultRepository {
       }
       return createdRow;
     });
+    if (wasValid) {
+      this.upsertSearchIndexRow(row);
+    }
     return mapRowToItem(row);
   }
 
@@ -912,6 +2026,7 @@ export class VaultRepository {
 
     const now = this.monotonicTimestamp(row.updated_at);
     const nextSyncVersion = (row.sync_version ?? 1) + 1;
+    const wasValid = this.isSearchIndexValid();
     const inserted = this.inTx(() => {
       this.db
         .prepare(
@@ -986,6 +2101,9 @@ export class VaultRepository {
       }
       return next;
     });
+    if (wasValid) {
+      this.upsertSearchIndexRow(inserted);
+    }
     return mapRowToItem(inserted);
   }
 
@@ -1075,6 +2193,7 @@ export class VaultRepository {
       }
     }
 
+    const wasValid = this.isSearchIndexValid();
     const updated = this.inTx(() => {
       // Auto-checkpoint item_revisions on meaningful title/body changes for non-secret items inside the same transaction
       if (
@@ -1259,6 +2378,9 @@ export class VaultRepository {
       }
       return next;
     });
+    if (wasValid) {
+      this.upsertSearchIndexRow(updated);
+    }
     return mapRowToItem(updated);
   }
 
@@ -1274,6 +2396,7 @@ export class VaultRepository {
       return this.purgeItemPermanently(id).purged;
     }
     const now = this.monotonicTimestamp(row.updated_at);
+    const wasValid = this.isSearchIndexValid();
     const deleted = this.inTx(() => {
       const res = this.db
         .prepare(
@@ -1290,6 +2413,13 @@ export class VaultRepository {
       }
       return changed;
     });
+    if (deleted && wasValid && this.searchIndex) {
+      const idx = this.searchIndex.idToIdx.get(id);
+      if (idx !== undefined) {
+        this.searchIndex.deletedAt[idx] = now;
+      }
+      this.searchIndex.totalChanges = this.readTotalChanges();
+    }
     return deleted;
   }
 
@@ -1306,6 +2436,7 @@ export class VaultRepository {
       ? this.db.prepare('SELECT 1 FROM focus_boards WHERE id = ? AND deleted_at IS NULL').get(row.focus_board_id)
       : null;
 
+    const wasValid = this.isSearchIndexValid();
     const restored = this.inTx(() => {
       const hasExternalIdCollision = Boolean(
         row.external_id &&
@@ -1345,7 +2476,112 @@ export class VaultRepository {
       }
       return next;
     });
+    if (wasValid) {
+      this.upsertSearchIndexRow(restored);
+    }
     return mapRowToItem(restored);
+  }
+
+  public bulkUpdateItems(
+    ids: string[],
+    patch: UpdateItemPatch,
+    opts?: { projection?: 'card' | 'full'; skipAutoRevision?: boolean; preserveContentUpdatedAt?: boolean }
+  ): BulkUpdateItemsResult {
+    const uniqueIds = Array.from(
+      new Set((ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) {
+      return { items: [], count: 0, failedIds: [] };
+    }
+    const items: VaultItem[] = [];
+    const failedIds: string[] = [];
+    this.inTx(() => {
+      for (const id of uniqueIds) {
+        const updated = this.updateItem(id, patch, {
+          skipAutoRevision: opts?.skipAutoRevision,
+          preserveContentUpdatedAt: opts?.preserveContentUpdatedAt,
+        });
+        if (!updated) {
+          failedIds.push(id);
+        } else {
+          items.push(opts?.projection === 'card' ? projectItemForCard(updated) : updated);
+        }
+      }
+    });
+    return { items, count: items.length, failedIds };
+  }
+
+  public bulkDeleteItems(
+    ids: string[]
+  ): BulkDeleteItemsResult & { freedMedia: string[] } {
+    const uniqueIds = Array.from(
+      new Set((ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) {
+      return { deletedIds: [], purgedIds: [], failedIds: [], freedMedia: [] };
+    }
+    const deletedIds: string[] = [];
+    const purgedIds: string[] = [];
+    const failedIds: string[] = [];
+    const freedMediaSet = new Set<string>();
+    const statusStmt = this.db.prepare('SELECT deleted_at, purged_at FROM items WHERE id = ?');
+
+    this.inTx(() => {
+      for (const id of uniqueIds) {
+        const row = statusStmt.get(id) as
+          | { deleted_at: number | null; purged_at: number | null }
+          | undefined;
+        if (!row || row.purged_at != null) {
+          failedIds.push(id);
+          continue;
+        }
+        if (row.deleted_at != null) {
+          const purged = this.purgeItemPermanently(id);
+          if (purged.purged) {
+            purgedIds.push(id);
+            for (const m of purged.freedMedia) freedMediaSet.add(m);
+          } else {
+            failedIds.push(id);
+          }
+        } else if (this.deleteItem(id)) {
+          deletedIds.push(id);
+        } else {
+          failedIds.push(id);
+        }
+      }
+    });
+
+    return {
+      deletedIds,
+      purgedIds,
+      failedIds,
+      freedMedia: Array.from(freedMediaSet),
+    };
+  }
+
+  public bulkRestoreItems(
+    ids: string[],
+    opts?: { projection?: 'card' | 'full' }
+  ): BulkUpdateItemsResult {
+    const uniqueIds = Array.from(
+      new Set((ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) {
+      return { items: [], count: 0, failedIds: [] };
+    }
+    const items: VaultItem[] = [];
+    const failedIds: string[] = [];
+    this.inTx(() => {
+      for (const id of uniqueIds) {
+        const restored = this.restoreItem(id);
+        if (!restored) {
+          failedIds.push(id);
+        } else {
+          items.push(opts?.projection === 'card' ? projectItemForCard(restored) : restored);
+        }
+      }
+    });
+    return { items, count: items.length, failedIds };
   }
 
   /**
@@ -1360,6 +2596,7 @@ export class VaultRepository {
     const freedMedia = this.collectItemMediaRefs(row);
     const ts = this.monotonicTimestamp(row.updated_at);
     let purgedRevisionIds: string[] = [];
+    const wasValid = this.isSearchIndexValid();
 
     this.inTx(() => {
       this.db
@@ -1425,7 +2662,21 @@ export class VaultRepository {
           this.markDirty('item_revision', revId);
         }
       }
+      this.pruneUnreferencedBlobCache(freedMedia, id);
     });
+
+    if (wasValid && this.searchIndex) {
+      const idx = this.searchIndex.idToIdx.get(id);
+      if (idx !== undefined) {
+        this.searchIndex.isPurged[idx] = 1;
+        this.searchIndex.flatNorm[idx] = '';
+        this.searchIndex.digitsStr[idx] = '';
+        this.searchIndex.semFlags[idx] = 0;
+        this.searchIndex.tagsLower[idx] = EMPTY_SEARCH_STR_ARR;
+        this.searchIndex.tagsNorm[idx] = EMPTY_SEARCH_STR_ARR;
+      }
+      this.searchIndex.totalChanges = this.readTotalChanges();
+    }
 
     return { purged: true, freedMedia };
   }
@@ -1487,6 +2738,7 @@ export class VaultRepository {
       this.setSetting('demo_dismissed', 'true');
       this.tagUniverseCache = null;
       if (Number(res.changes) > 0) {
+        this.searchIndex = null;
         this.bumpVaultMutationVersion();
       }
       return Number(res.changes);
@@ -1598,48 +2850,682 @@ export class VaultRepository {
     const limit = Math.min(5000, Math.max(1, q.limit ?? 500));
     const offset = Math.max(0, q.offset ?? 0);
     const orderBy = q.remindersDueOnly
-      ? 'ORDER BY i.remind_at ASC'
+      ? 'ORDER BY i.remind_at ASC, i.rowid ASC'
       : q.sortBy === 'updated_desc'
-        ? 'ORDER BY i.is_pinned DESC, COALESCE(i.content_updated_at, i.updated_at) DESC'
+        ? 'ORDER BY i.is_pinned DESC, COALESCE(i.content_updated_at, i.updated_at) DESC, i.rowid DESC'
         : q.sortBy === 'title_asc'
-          ? 'ORDER BY i.is_pinned DESC, lower_utf(i.title) ASC'
+          ? 'ORDER BY i.is_pinned DESC, lower_utf(i.title) ASC, i.created_at DESC, i.rowid DESC'
           : q.sortBy === 'media_first'
-            ? 'ORDER BY i.is_pinned DESC, CASE WHEN i.image_path IS NOT NULL OR i.media_path IS NOT NULL THEN 0 ELSE 1 END ASC, i.created_at DESC'
-            : 'ORDER BY i.is_pinned DESC, i.created_at DESC';
+            ? 'ORDER BY i.is_pinned DESC, CASE WHEN i.image_path IS NOT NULL OR i.media_path IS NOT NULL THEN 0 ELSE 1 END ASC, i.created_at DESC, i.rowid DESC'
+            : 'ORDER BY i.is_pinned DESC, i.created_at DESC, i.rowid DESC';
 
     if (!searchRaw) {
       const whereClause = baseConditions.length > 0 ? `WHERE ${baseConditions.join(' AND ')}` : '';
       const rows = this.db
         .prepare(`SELECT i.* FROM items i ${whereClause} ${orderBy} LIMIT ? OFFSET ?`)
         .all(...baseParams, limit, offset) as unknown as ItemRow[];
-      return rows.map(mapRowToItem);
+      const mapped = rows.map(mapRowToItem);
+      return q.projection === 'card' ? mapped.map(projectItemForCard) : mapped;
     }
 
-    const qLower = searchRaw.toLowerCase();
-    const cleanTokens = qLower
+    const orbits = this.db
+      .prepare('SELECT id, name FROM orbits WHERE deleted_at IS NULL')
+      .all() as Array<{ id: string; name: string }>;
+    const orbitNameById = new Map<string, string>(orbits.map((o) => [o.id, o.name]));
+    const orbitNormPairs = orbits.map((o) => ({
+      id: o.id,
+      nameNorm: normalizeSearchText(o.name),
+    }));
+
+    const qLower = normalizeSearchText(searchRaw);
+    const compiledQuery = compileBilingualSearchQuery(searchRaw);
+    const allowFuzzy = searchRaw.length >= 4;
+    const hashBaseQuery =
+      compiledQuery.rawTagMatches.length > 0
+        ? searchRaw
+            .replace(/(?:^|(?<=\s))#(?=[\p{L}\p{N}_-]*\p{L})[\p{L}\p{N}_-]+/gu, ' ')
+            .trim() || searchRaw
+        : searchRaw;
+    const hashBaseLower = normalizeSearchText(hashBaseQuery);
+    const cleanTokens = hashBaseLower
       .replace(/["'*()[\]{}]/g, ' ')
       .split(/\s+/)
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
-    const expandedGroups = expandBilingualQuery(searchRaw);
-    const tokens = cleanTokens.length > 0 ? cleanTokens : [qLower];
+    const expandedGroups = expandBilingualQuery(hashBaseQuery);
+    const tokens = cleanTokens.length > 0 ? cleanTokens : [hashBaseLower];
     const tokenSpecs = (expandedGroups.length > 0
       ? expandedGroups
       : tokens.map((t) => ({ primary: t, variants: [t] }))
     ).map((grp) => {
-      const stem = computeSearchStem(grp.primary);
-      const variants = Array.from(new Set([grp.primary, stem, ...grp.variants])).filter(
-        (v) => v.length >= 2 || v === grp.primary
-      );
-      const digits = grp.primary.replace(/\D/g, '');
+      const tok = normalizeSearchText(grp.primary);
+      const stem = normalizeSearchText(computeSearchStem(tok));
+      const variants = Array.from(
+        new Set([tok, stem, ...grp.variants.map((v) => normalizeSearchText(v))])
+      ).filter((v) => v.length >= 2 || v === tok);
+      const digits = tok.replace(/\D/g, '');
       const semantics = new Set<SemanticMatchKind>();
       for (const v of variants) {
         for (const k of detectSemanticKinds(v)) semantics.add(k);
       }
-      return { tok: grp.primary, stem, variants, digits, semantics: Array.from(semantics) };
+      let semMask = 0;
+      for (const s of semantics) semMask |= SEMANTIC_BIT[s];
+      const matchingOrbitIds = orbitNormPairs
+        .filter((o) => o.nameNorm && variants.some((v) => o.nameNorm.includes(v)))
+        .map((o) => o.id);
+      return {
+        tok,
+        stem,
+        variants,
+        digits,
+        semantics: Array.from(semantics),
+        semMask,
+        matchingOrbitIds,
+        orbitSet: new Set(matchingOrbitIds),
+      };
     });
 
+    const candidateLimit = Math.max(400, Math.min(5000, limit * 2));
+    const fuzzyScanLimit = Math.max(320, Math.min(2000, limit));
+
+    const scoreCandidateRows = (rows: Iterable<ItemRow>): Array<{ item: VaultItem; score: number }> => {
+      const out: Array<{ item: VaultItem; score: number }> = [];
+      for (const row of rows) {
+        const item = mapRowToItem(row);
+        if (compiledQuery.rawTagMatches.length > 0) {
+          const itemTagsNorm = item.tags.map((tg) => normalizeSearchText(tg));
+          let tagsOk = true;
+          for (let ti = 0; ti < compiledQuery.rawTagMatches.length; ti += 1) {
+            const wantedTag = compiledQuery.rawTagMatches[ti]!;
+            if (!itemTagsNorm.some((tg) => tg.includes(wantedTag))) {
+              tagsOk = false;
+              break;
+            }
+          }
+          if (!tagsOk) continue;
+        }
+
+        if (compiledQuery.groups.length === 0 && compiledQuery.rawTagMatches.length > 0) {
+          out.push({
+            item,
+            score: 80 + compiledQuery.rawTagMatches.length * 40 + (item.isPinned ? 4 : 0),
+          });
+          continue;
+        }
+
+        const titleL = normalizeSearchText(item.title || '');
+        const summaryL = normalizeSearchText(item.summary || '');
+        const bodyL = normalizeSearchText(item.body || '');
+        const ocrL = normalizeSearchText(item.ocrText || '');
+        const domainL = normalizeSearchText(item.domain || '');
+        const urlL = normalizeSearchText(item.url || '');
+        const platformL = normalizeSearchText(item.platform || '');
+        const tagsL = normalizeSearchText(item.tags.join(' '));
+        const orbitL = item.orbit ? normalizeSearchText(orbitNameById.get(item.orbit) ?? '') : '';
+        const secretL = item.secretMeta
+          ? normalizeSearchText(
+              [
+                item.secretMeta.service,
+                item.secretMeta.loginHint,
+                item.secretMeta.cardBrand,
+                item.secretMeta.last4,
+                item.secretMeta.kind,
+              ]
+                .filter(Boolean)
+                .join(' ')
+            )
+          : '';
+        const metaL = item.mediaMeta
+          ? normalizeSearchText(
+              [
+                item.mediaMeta.forwardAuthor,
+                item.mediaMeta.fileName,
+                item.mediaMeta.transcript,
+                item.mediaMeta.contactPhone,
+                item.mediaMeta.contactEmail,
+                item.mediaMeta.contactHandle,
+                ...(item.mediaMeta.keyPoints ?? []),
+              ]
+                .filter(Boolean)
+                .join(' ')
+            )
+          : '';
+        const digitsHay = `${item.title} ${item.body} ${secretL} ${item.mediaMeta?.contactPhone ?? ''}`.replace(/\D/g, '');
+
+        let allTokensMatch = true;
+        let score = item.isPinned ? 8 : 0;
+
+        if (titleL.includes(qLower)) score += 160;
+        else if (summaryL.includes(qLower) || bodyL.includes(qLower)) score += 45;
+
+        for (const spec of tokenSpecs) {
+          let tokMatched = false;
+          let tokBestScore = 0;
+
+          const checkField = (hay: string, weightExact: number, weightVariant: number) => {
+            if (!hay) return;
+            if (hay.includes(spec.tok)) {
+              tokMatched = true;
+              tokBestScore = Math.max(tokBestScore, weightExact);
+              return;
+            }
+            for (const variant of spec.variants) {
+              if (hay.includes(variant)) {
+                tokMatched = true;
+                tokBestScore = Math.max(tokBestScore, weightVariant);
+                return;
+              }
+            }
+          };
+
+          if (spec.variants.some((v) => titleL.startsWith(v))) {
+            tokMatched = true;
+            tokBestScore = Math.max(tokBestScore, 90);
+          }
+          checkField(titleL, 70, 54);
+          checkField(tagsL, 64, 50);
+          checkField(orbitL, 64, 50);
+          checkField(domainL, 62, 50);
+          checkField(platformL, 60, 48);
+          checkField(secretL, 62, 48);
+          checkField(metaL, 48, 38);
+          checkField(summaryL, 42, 34);
+          checkField(urlL, 40, 32);
+          checkField(bodyL, 30, 24);
+          checkField(ocrL, 22, 18);
+
+          if (spec.digits.length >= 3 && digitsHay.includes(spec.digits)) {
+            tokMatched = true;
+            tokBestScore = Math.max(tokBestScore, 64);
+          }
+
+          for (const sem of spec.semantics) {
+            if (itemMatchesSemanticKind(item, sem)) {
+              tokMatched = true;
+              tokBestScore = Math.max(tokBestScore, 48);
+            }
+          }
+
+          if (!tokMatched) {
+            allTokensMatch = false;
+            break;
+          }
+          score += tokBestScore;
+        }
+
+        if (allTokensMatch) {
+          if (compiledQuery.rawTagMatches.length > 0) {
+            score += compiledQuery.rawTagMatches.length * 40;
+          }
+          out.push({ item, score });
+        }
+      }
+      return out;
+    };
+
+    const scoreFuzzyRows = (
+      fuzzyRows: ItemRow[],
+      seenScoredIds: Set<string>,
+      scored: Array<{ item: VaultItem; score: number }>
+    ) => {
+      const nowMs = Date.now();
+      for (const row of fuzzyRows) {
+        if (seenScoredIds.has(row.id)) continue;
+        const tags =
+          row.tags_json && row.tags_json !== '[]'
+            ? safeParseJson<string[]>(row.tags_json, [])
+            : [];
+        let extra = '';
+        if (row.secret_meta_json) {
+          const sm = safeParseJson<SecretMeta | null>(row.secret_meta_json, null);
+          if (sm) {
+            extra = [sm.service, sm.loginHint].filter(Boolean).join(' ');
+          }
+        }
+        if (row.media_meta_json) {
+          const mm = safeParseJson<MediaMeta | null>(row.media_meta_json, null);
+          if (mm) {
+            const mediaExtra = [mm.transcript, mm.fileName].filter(Boolean).join(' ');
+            if (mediaExtra) extra = extra ? `${extra} ${mediaExtra}` : mediaExtra;
+          }
+        }
+        const fuzzyScore = scoreBilingualFieldsCompiled(
+          {
+            title: row.title,
+            tags,
+            orbitName: row.orbit ? orbitNameById.get(row.orbit) : undefined,
+            domain: row.domain,
+            summary: row.summary,
+            body: row.body,
+            ocrText: row.ocr_text,
+            url: row.url,
+            extra: extra || undefined,
+            isPinned: row.is_pinned === 1,
+            updatedAt: row.content_updated_at ?? row.updated_at ?? row.created_at,
+          },
+          compiledQuery,
+          { nowMs }
+        );
+        if (fuzzyScore > 0) {
+          const item = mapRowToItem(row);
+          seenScoredIds.add(item.id);
+          scored.push({ item, score: Math.round(fuzzyScore * 0.65) });
+        }
+      }
+    };
+
+    if (!q.includePurged) {
+      const idx = this.ensureSearchIndex(false);
+      const delMode = q.onlyDeleted ? 1 : q.includeDeleted ? 2 : 0;
+      const archMode = q.onlyDeleted
+        ? q.archivedOnly
+          ? 1
+          : 2
+        : q.archivedOnly
+          ? 1
+          : q.includeArchived
+            ? 2
+            : 0;
+      const excludeSecrets = q.includeSecrets === false;
+      const needPinned = Boolean(q.isPinned);
+      const needReminders = Boolean(q.remindersDueOnly);
+      const unassignedOnly = Boolean(q.unassignedOnly);
+      const filterOrbit = !unassignedOnly && q.orbit && q.orbit !== 'all' ? q.orbit : null;
+      const filterDna = q.dna || null;
+      const filterBoard = q.focusBoardId || null;
+      const filterTag = q.tag ? normalizeTagText(q.tag) : '';
+      const hasCreatedBefore = typeof q.createdBefore === 'number' && Number.isFinite(q.createdBefore);
+      const createdBeforeVal = hasCreatedBefore ? q.createdBefore! : 0;
+      const rawTagMatches = compiledQuery.rawTagMatches;
+
+      const baseIndices: number[] = [];
+      for (let i = 0; i < idx.count; i += 1) {
+        if (idx.isPurged[i] === 1) continue;
+        const delTs = idx.deletedAt[i]!;
+        if (delMode === 0) {
+          if (!Number.isNaN(delTs)) continue;
+        } else if (delMode === 1) {
+          if (Number.isNaN(delTs)) continue;
+        }
+        const arch = idx.isArchived[i]!;
+        if (archMode === 0) {
+          if (arch !== 0) continue;
+        } else if (archMode === 1) {
+          if (arch !== 1) continue;
+        }
+        if (excludeSecrets && idx.dnas[i] === 'secret') continue;
+        if (needPinned && idx.isPinned[i] !== 1) continue;
+        if (needReminders && Number.isNaN(idx.remindAt[i]!)) continue;
+        if (unassignedOnly) {
+          const orb = idx.orbits[i]!;
+          if (orb !== '' && orb !== 'inbox') continue;
+        } else if (filterOrbit !== null && idx.orbits[i] !== filterOrbit) {
+          continue;
+        }
+        if (filterDna !== null && idx.dnas[i] !== filterDna) continue;
+        if (filterBoard !== null && idx.focusBoardIds[i] !== filterBoard) continue;
+        if (filterTag) {
+          const tl = idx.tagsLower[i]!;
+          let tagMatched = false;
+          for (let ti = 0; ti < tl.length; ti += 1) {
+            if (tl[ti] === filterTag) {
+              tagMatched = true;
+              break;
+            }
+          }
+          if (!tagMatched) continue;
+        }
+        if (hasCreatedBefore && idx.createdAt[i]! >= createdBeforeVal) continue;
+        if (rawTagMatches.length > 0) {
+          const tn = idx.tagsNorm[i]!;
+          if (tn.length === 0) continue;
+          let allRawTagsOk = true;
+          for (let rti = 0; rti < rawTagMatches.length; rti += 1) {
+            const wanted = rawTagMatches[rti]!;
+            let found = false;
+            for (let ti = 0; ti < tn.length; ti += 1) {
+              if (tn[ti]!.includes(wanted)) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              allRawTagsOk = false;
+              break;
+            }
+          }
+          if (!allRawTagsOk) continue;
+        }
+        baseIndices.push(i);
+      }
+
+      if (baseIndices.length === 0) return [];
+
+      const sliceByDefaultOrder = (indices: number[], maxCount: number): number[] => {
+        if (indices.length <= maxCount) return indices;
+        const copy = indices.slice();
+        copy.sort((a, b) => {
+          if (q.remindersDueOnly) {
+            return (idx.remindAt[a]! - idx.remindAt[b]!) || (idx.rowids[a]! - idx.rowids[b]!);
+          }
+          const pinDiff = idx.isPinned[b]! - idx.isPinned[a]!;
+          if (pinDiff !== 0) return pinDiff;
+          const crDiff = idx.createdAt[b]! - idx.createdAt[a]!;
+          if (crDiff !== 0) return crDiff;
+          return idx.rowids[b]! - idx.rowids[a]!;
+        });
+        return copy.slice(0, maxCount);
+      };
+
+      if (compiledQuery.groups.length === 0 && rawTagMatches.length > 0) {
+        const picked = sliceByDefaultOrder(baseIndices, candidateLimit);
+        const rows = this.fetchRowsByIds(picked.map((i) => idx.ids[i]!));
+        const scored = scoreCandidateRows(rows);
+        scored.sort((a, b) => {
+          if (q.remindersDueOnly) return (a.item.remindAt ?? 0) - (b.item.remindAt ?? 0);
+          if (b.score !== a.score) return b.score - a.score;
+          if (Number(b.item.isPinned) !== Number(a.item.isPinned)) {
+            return Number(b.item.isPinned) - Number(a.item.isPinned);
+          }
+          return b.item.createdAt - a.item.createdAt;
+        });
+        const result = scored.slice(offset, offset + limit).map((entry) => entry.item);
+        return q.projection === 'card' ? result.map(projectItemForCard) : result;
+      }
+
+      const groupExactRes = tokenSpecs.map((spec) => {
+        const terms = tokenSpecs.length === 1 && rawTagMatches.length === 0 ? [qLower, ...spec.variants] : spec.variants;
+        return compileTextAnyRegex(terms, true);
+      });
+
+      const groupCompiledMeta = tokenSpecs.map((spec, gIdx) => {
+        const fg = gIdx < compiledQuery.groups.length ? compiledQuery.groups[gIdx]! : null;
+        const fuzzyOrbitSet = new Set<string>(spec.matchingOrbitIds);
+        let minWordLen = Infinity;
+        let wordCandCount = 0;
+        if (fg && allowFuzzy) {
+          for (const o of orbitNormPairs) {
+            if (!o.nameNorm || fuzzyOrbitSet.has(o.id)) continue;
+            for (const fc of fg.fuzzyCandidates) {
+              if (passesCharFreqs(o.nameNorm, fc.wordCharFreqs, fc.nonWordCount, fc.maxDist)) {
+                fuzzyOrbitSet.add(o.id);
+                break;
+              }
+            }
+          }
+          for (const fc of fg.fuzzyCandidates) {
+            if (fc.nonWordCount <= fc.maxDist) {
+              wordCandCount += 1;
+              const minL = fc.candLen - fc.maxDist;
+              if (minL < minWordLen) minWordLen = minL;
+            }
+          }
+        }
+        return {
+          fg,
+          fuzzyOrbitSet,
+          minWordLen: wordCandCount > 0 ? minWordLen : 0,
+          wordCandCount,
+        };
+      });
+
+      const groupOrder = tokenSpecs.map((_, g) => g);
+      if (groupOrder.length > 1) {
+        const ftsScores = groupOrder.map((g) => {
+          const spec = tokenSpecs[g]!;
+          const grpSet = new Set<string>();
+          for (const v of spec.variants) {
+            if (/[,;'[\]]/.test(v)) continue;
+            const sanitized = v.replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim();
+            for (const word of sanitized.split(/\s+/)) {
+              if (word.length >= 2) grpSet.add(`"${word}"*`);
+            }
+          }
+          let ftsCount = 0;
+          if (grpSet.size > 0) {
+            const grpList = Array.from(grpSet).slice(0, 12);
+            const expr = grpList.length === 1 ? grpList[0]! : `(${grpList.join(' OR ')})`;
+            try {
+              const cntRow = this.db
+                .prepare('SELECT COUNT(*) AS c FROM items_fts WHERE items_fts MATCH ?')
+                .get(expr) as { c: number } | undefined;
+              ftsCount = Number(cntRow?.c ?? 0);
+            } catch {
+              ftsCount = 0;
+            }
+          }
+          return (
+            ftsCount +
+            (spec.orbitSet.size > 0 ? 500 : 0) +
+            (spec.semMask !== 0 ? 500 : 0) +
+            (spec.digits.length >= 3 ? 200 : 0)
+          );
+        });
+        groupOrder.sort((a, b) => {
+          const selDiff = ftsScores[a]! - ftsScores[b]!;
+          if (selDiff !== 0) return selDiff;
+          const ma = groupCompiledMeta[a]!;
+          const mb = groupCompiledMeta[b]!;
+          const hasA = ma.wordCandCount > 0 ? 1 : 0;
+          const hasB = mb.wordCandCount > 0 ? 1 : 0;
+          if (hasA !== hasB) return hasA - hasB;
+          if (mb.minWordLen !== ma.minWordLen) return mb.minWordLen - ma.minWordLen;
+          return ma.wordCandCount - mb.wordCandCount;
+        });
+      }
+
+      // Pass 1: Exact / variant / orbit / digit / semantic intersection in selectivity order
+      let exactSurvivors = baseIndices;
+      for (let oi = 0; oi < groupOrder.length; oi += 1) {
+        const g = groupOrder[oi]!;
+        const spec = tokenSpecs[g]!;
+        const exactRe = groupExactRes[g]!;
+        const next: number[] = [];
+        for (let k = 0; k < exactSurvivors.length; k += 1) {
+          const i = exactSurvivors[k]!;
+          if (
+            (spec.orbitSet.size > 0 && spec.orbitSet.has(idx.orbits[i]!)) ||
+            (spec.semMask !== 0 && (idx.semFlags[i]! & spec.semMask) !== 0) ||
+            (spec.digits.length >= 3 && idx.digitsStr[i]!.includes(spec.digits)) ||
+            (exactRe !== null && exactRe.test(idx.flatNorm[i]!))
+          ) {
+            next.push(i);
+          }
+        }
+        exactSurvivors = next;
+        if (exactSurvivors.length === 0) break;
+      }
+
+      let scored: Array<{ item: VaultItem; score: number }> = [];
+      if (exactSurvivors.length > 0) {
+        const pickedExact = sliceByDefaultOrder(exactSurvivors, candidateLimit);
+        const exactRows = this.fetchRowsByIds(pickedExact.map((i) => idx.ids[i]!));
+        scored = scoreCandidateRows(exactRows);
+      }
+
+      // Pass 2: Vocabulary-indexed fuzzy intersection (only when < 8 exact hits and query >= 4 chars)
+      if (scored.length < 8 && allowFuzzy && compiledQuery.groups.length > 0) {
+        this.ensureSearchIndexVocab(idx);
+        let fuzzySurvivors = baseIndices;
+        let fuzzyMask: Uint8Array | null = null;
+        for (let oi = 0; oi < groupOrder.length; oi += 1) {
+          const g = groupOrder[oi]!;
+          const spec = tokenSpecs[g]!;
+          const exactRe = groupExactRes[g]!;
+          const meta = groupCompiledMeta[g]!;
+          const fg = meta.fg;
+          if (!fg || fg.fuzzyCandidates.length === 0) {
+            // Non-fuzzy group: must satisfy exact/orbit/sem/digits
+            const next: number[] = [];
+            for (let k = 0; k < fuzzySurvivors.length; k += 1) {
+              const i = fuzzySurvivors[k]!;
+              if (
+                (spec.orbitSet.size > 0 && spec.orbitSet.has(idx.orbits[i]!)) ||
+                (spec.semMask !== 0 && (idx.semFlags[i]! & spec.semMask) !== 0) ||
+                (spec.digits.length >= 3 && idx.digitsStr[i]!.includes(spec.digits)) ||
+                (exactRe !== null && exactRe.test(idx.flatNorm[i]!))
+              ) {
+                next.push(i);
+              }
+            }
+            fuzzySurvivors = next;
+            if (fuzzySurvivors.length === 0) break;
+            continue;
+          }
+
+          if (!fuzzyMask) {
+            fuzzyMask = new Uint8Array(idx.count);
+          } else {
+            fuzzyMask.fill(0);
+          }
+
+          for (let ci = 0; ci < fg.fuzzyCandidates.length; ci += 1) {
+            const fc = fg.fuzzyCandidates[ci]!;
+            const cand = fc.cand;
+            const candLen = fc.candLen;
+            const maxDist = fc.maxDist;
+
+            if (fc.nonWordCount <= maxDist) {
+              const minL = Math.max(3, candLen - maxDist);
+              const maxL = candLen + maxDist;
+              for (let len = minL; len <= maxL; len += 1) {
+                const bucket = idx.wordsByLen.get(len);
+                if (!bucket) continue;
+                for (let bi = 0; bi < bucket.length; bi += 1) {
+                  const entry = bucket[bi]!;
+                  if (maxDist === 1) {
+                    if (
+                      entry.c0 !== fc.c0 &&
+                      entry.c0 !== fc.c1 &&
+                      entry.c1 !== fc.c0 &&
+                      entry.c1 !== fc.c1
+                    ) {
+                      continue;
+                    }
+                  } else if (
+                    entry.c0 !== fc.c0 &&
+                    entry.c0 !== fc.c1 &&
+                    entry.c0 !== fc.c2 &&
+                    entry.c1 !== fc.c0 &&
+                    entry.c1 !== fc.c1 &&
+                    entry.c1 !== fc.c2 &&
+                    entry.c2 !== fc.c0 &&
+                    entry.c2 !== fc.c1 &&
+                    entry.c2 !== fc.c2
+                  ) {
+                    continue;
+                  }
+                  if (!passesCharFreqs(entry.w, fc.wordCharFreqs, fc.nonWordCount, maxDist)) {
+                    continue;
+                  }
+                  if (damerauDistanceWithin(cand, entry.w, maxDist) <= maxDist) {
+                    const postings = entry.postings;
+                    for (let pi = 0; pi < postings.length; pi += 1) {
+                      fuzzyMask[postings[pi]!] = 1;
+                    }
+                  }
+                }
+              }
+
+              if (candLen >= 5 && fc.nonWordCount <= 1) {
+                for (const [len, bucket] of idx.wordsByLen) {
+                  if (len <= candLen + maxDist) continue;
+                  for (let bi = 0; bi < bucket.length; bi += 1) {
+                    const entry = bucket[bi]!;
+                    if (
+                      entry.c0 !== fc.c0 &&
+                      entry.c0 !== fc.c1 &&
+                      entry.c1 !== fc.c0 &&
+                      entry.c1 !== fc.c1
+                    ) {
+                      continue;
+                    }
+                    if (!passesCharFreqs(entry.w, fc.wordCharFreqs, fc.nonWordCount, 1, candLen)) {
+                      continue;
+                    }
+                    if (damerauDistanceWithinPrefix(cand, entry.w, candLen, 1) <= 1) {
+                      const postings = entry.postings;
+                      for (let pi = 0; pi < postings.length; pi += 1) {
+                        fuzzyMask[postings[pi]!] = 1;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            // Unique normalized tags (supports tags containing non-word punctuation like `;;x;'`)
+            for (const [tagNorm, postings] of idx.tagPostings) {
+              const tLen = tagNorm.length;
+              if (Math.abs(tLen - candLen) <= maxDist) {
+                if (!passesCharFreqs(tagNorm, fc.allCharFreqs, 0, maxDist)) continue;
+                if (damerauDistanceWithin(cand, tagNorm, maxDist) <= maxDist) {
+                  for (let pi = 0; pi < postings.length; pi += 1) {
+                    fuzzyMask[postings[pi]!] = 1;
+                  }
+                }
+              } else if (tLen > candLen && candLen >= 5) {
+                if (!passesCharFreqs(tagNorm, fc.allCharFreqs, 0, 1, candLen)) continue;
+                if (damerauDistanceWithinPrefix(cand, tagNorm, candLen, 1) <= 1) {
+                  for (let pi = 0; pi < postings.length; pi += 1) {
+                    fuzzyMask[postings[pi]!] = 1;
+                  }
+                }
+              }
+            }
+          }
+
+          const nextFuzzy: number[] = [];
+          for (let k = 0; k < fuzzySurvivors.length; k += 1) {
+            const i = fuzzySurvivors[k]!;
+            if (
+              fuzzyMask[i] === 1 ||
+              (meta.fuzzyOrbitSet.size > 0 && meta.fuzzyOrbitSet.has(idx.orbits[i]!)) ||
+              (spec.semMask !== 0 && (idx.semFlags[i]! & spec.semMask) !== 0) ||
+              (spec.digits.length >= 3 && idx.digitsStr[i]!.includes(spec.digits)) ||
+              (exactRe !== null && exactRe.test(idx.flatNorm[i]!))
+            ) {
+              nextFuzzy.push(i);
+            }
+          }
+          fuzzySurvivors = nextFuzzy;
+          if (fuzzySurvivors.length === 0) break;
+        }
+
+        if (fuzzySurvivors.length > 0) {
+          const seenScoredIds = new Set(scored.map((e) => e.item.id));
+          const newFuzzyIndices: number[] = [];
+          for (let k = 0; k < fuzzySurvivors.length; k += 1) {
+            const i = fuzzySurvivors[k]!;
+            if (!seenScoredIds.has(idx.ids[i]!)) {
+              newFuzzyIndices.push(i);
+            }
+          }
+          if (newFuzzyIndices.length > 0) {
+            const pickedFuzzy = sliceByDefaultOrder(newFuzzyIndices, fuzzyScanLimit);
+            const fuzzyRows = this.fetchRowsByIds(pickedFuzzy.map((i) => idx.ids[i]!));
+            scoreFuzzyRows(fuzzyRows, seenScoredIds, scored);
+          }
+        }
+      }
+
+      scored.sort((a, b) => {
+        if (q.remindersDueOnly) {
+          return (a.item.remindAt ?? 0) - (b.item.remindAt ?? 0);
+        }
+        if (b.score !== a.score) return b.score - a.score;
+        if (Number(b.item.isPinned) !== Number(a.item.isPinned)) {
+          return Number(b.item.isPinned) - Number(a.item.isPinned);
+        }
+        return b.item.createdAt - a.item.createdAt;
+      });
+
+      const result = scored.slice(offset, offset + limit).map((entry) => entry.item);
+      return q.projection === 'card' ? result.map(projectItemForCard) : result;
+    }
+
+    // Fallback SQLite search path when `includePurged: true`
     const candidateRows = new Map<string, ItemRow>();
     const addRows = (rows: ItemRow[]) => {
       for (const row of rows) {
@@ -1647,12 +3533,12 @@ export class VaultRepository {
       }
     };
 
-    // 1. Gather bilingual FTS5 prefix candidates (AND across token groups first so rare multi-token hits are never drowned by 400 common hits)
     const tokenFtsGroups: string[] = [];
     const ftsSet = new Set<string>();
     for (const spec of tokenSpecs) {
       const grpSet = new Set<string>();
       for (const v of spec.variants) {
+        if (/[,;'[\]]/.test(v)) continue;
         const sanitized = v.replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim();
         for (const word of sanitized.split(/\s+/)) {
           if (word.length >= 2) {
@@ -1676,8 +3562,8 @@ export class VaultRepository {
       ];
       try {
         const rows = this.db
-          .prepare(`SELECT i.* FROM items i WHERE ${ftsConditions.join(' AND ')} ${orderBy} LIMIT 400`)
-          .all(...baseParams, expr) as unknown as ItemRow[];
+          .prepare(`SELECT i.* FROM items i WHERE ${ftsConditions.join(' AND ')} ${orderBy} LIMIT ?`)
+          .all(...baseParams, expr, candidateLimit) as unknown as ItemRow[];
         addRows(rows);
       } catch {
         // Fallback to LIKE scan below for edge-case queries
@@ -1687,60 +3573,50 @@ export class VaultRepository {
     if (tokenFtsGroups.length > 1) {
       runFtsExpr(tokenFtsGroups.slice(0, 8).join(' AND '));
     }
-    if ((candidateRows.size === 0 || tokenFtsGroups.length <= 1) && ftsParts.length > 0) {
+    if (tokenFtsGroups.length <= 1 && ftsParts.length > 0) {
       runFtsExpr(ftsParts.join(' OR '));
     }
 
-    // 2. Targeted semantic/digit predicates + gated 9-column SQL LIKE fallback for FTS edge cases
-    const orClauses: string[] = [];
-    const orParams: Array<string | number> = [];
+    const TEXT_HAS_ANY_SQL =
+      'text_has_any(i.title, i.summary, i.body, i.ocr_text, i.media_meta_json, i.secret_meta_json, i.url, i.domain, i.tags_json, ?) = 1';
     const targetedClauses: string[] = [];
     const targetedParams: Array<string | number> = [];
-    const perTokenLikeClauses: string[] = [];
-    const perTokenLikeParams: Array<string | number> = [];
+    const perTokenTermEntries: Array<{
+      terms: string[];
+      termsJson: string;
+      matchingOrbitIds: string[];
+    }> = [];
     const seenLikeTerms = new Set<string>();
-    const makeLikePred = (term: string): { clause: string; params: string[] } => {
-      const pat = `%${escapeSqlLike(term)}%`;
-      return {
-        clause: `(
-          lower_utf(i.title) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.summary) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.body) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.ocr_text) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.secret_meta_json, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.url, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.domain, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.tags_json) LIKE ? ESCAPE '\\'
-        )`,
-        params: [pat, pat, pat, pat, pat, pat, pat, pat, pat],
-      };
-    };
     const addTextLike = (term: string) => {
-      if (!term || seenLikeTerms.has(term) || seenLikeTerms.size >= 42) return;
-      seenLikeTerms.add(term);
-      const pred = makeLikePred(term);
-      orClauses.push(pred.clause);
-      orParams.push(...pred.params);
+      const norm = normalizeSearchText(term);
+      if (!norm || seenLikeTerms.has(norm) || seenLikeTerms.size >= 64) return;
+      seenLikeTerms.add(norm);
     };
 
-    addTextLike(qLower);
+    if (compiledQuery.rawTagMatches.length === 0) {
+      addTextLike(qLower);
+    }
     for (const spec of tokenSpecs) {
-      const grpClauses: string[] = [];
-      const grpParams: string[] = [];
+      const grpTerms = new Set<string>();
       for (const variant of spec.variants) {
         addTextLike(variant);
         if (tokenSpecs.length > 1 && variant) {
-          const pred = makeLikePred(variant);
-          grpClauses.push(pred.clause);
-          grpParams.push(...pred.params);
+          grpTerms.add(variant);
         }
       }
-      if (tokenSpecs.length > 1 && grpClauses.length > 0 && perTokenLikeClauses.length < 6) {
-        perTokenLikeClauses.push(`(${grpClauses.join(' OR ')})`);
-        perTokenLikeParams.push(...grpParams);
+      if (tokenSpecs.length > 1 && grpTerms.size > 0 && perTokenTermEntries.length < 6) {
+        const termsArr = Array.from(grpTerms);
+        perTokenTermEntries.push({
+          terms: termsArr,
+          termsJson: JSON.stringify(termsArr),
+          matchingOrbitIds: spec.matchingOrbitIds,
+        });
       }
-      if (spec.digits.length >= 3) {
+      if (tokenSpecs.length === 1 && spec.matchingOrbitIds.length > 0) {
+        targetedClauses.push(`i.orbit IN (${spec.matchingOrbitIds.map(() => '?').join(',')})`);
+        targetedParams.push(...spec.matchingOrbitIds);
+      }
+      if (spec.digits.length >= 3 && !/[\p{L}]/u.test(spec.tok)) {
         const dPat = `%${escapeSqlLike(spec.digits)}%`;
         targetedClauses.push(
           `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(i.title || ' ' || i.body || ' ' || COALESCE(i.secret_meta_json, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ? ESCAPE '\\'`
@@ -1776,180 +3652,207 @@ export class VaultRepository {
       addRows(targetedRows);
     }
 
-    const needHeavyTextLikeScan =
-      candidateRows.size < 15 ||
-      ftsParts.length === 0 ||
-      cleanTokens.some((t) => t.length < 2) ||
-      /[@+#/.]/.test(searchRaw) ||
-      q.dna === 'secret';
+    const packedAllTerms = seenLikeTerms.size > 0 ? JSON.stringify(Array.from(seenLikeTerms)) : null;
+    const baseWherePrefix = baseConditions.length > 0 ? `${baseConditions.join(' AND ')} AND ` : '';
 
-    if (needHeavyTextLikeScan) {
-      if (tokenSpecs.length > 1 && perTokenLikeClauses.length > 1) {
-        const andScanConditions = [...baseConditions, perTokenLikeClauses.join(' AND ')];
-        const andRows = this.db
-          .prepare(`SELECT i.* FROM items i WHERE ${andScanConditions.join(' AND ')} ${orderBy} LIMIT 400`)
-          .all(...baseParams, ...perTokenLikeParams) as unknown as ItemRow[];
-        addRows(andRows);
-      }
-      if ((tokenSpecs.length <= 1 || candidateRows.size === 0) && orClauses.length > 0) {
-        const scanConditions = [...baseConditions, `(${orClauses.join(' OR ')})`];
-        const rows = this.db
-          .prepare(`SELECT i.* FROM items i WHERE ${scanConditions.join(' AND ')} ${orderBy} LIMIT 400`)
-          .all(...baseParams, ...orParams) as unknown as ItemRow[];
-        addRows(rows);
-      }
-    } else if (q.includeSecrets !== false && q.dna !== 'secret' && orClauses.length > 0) {
-      // Secrets are excluded from FTS5; scan only indexed secret rows so unindexed secrets still surface
-      const secretConditions = [...baseConditions, "i.dna = 'secret'", `(${orClauses.join(' OR ')})`];
-      const secretRows = this.db
-        .prepare(`SELECT i.* FROM items i WHERE ${secretConditions.join(' AND ')} ${orderBy} LIMIT 80`)
-        .all(...baseParams, ...orParams) as unknown as ItemRow[];
-      addRows(secretRows);
-    }
+    const exactGroupMatchers: Array<{ re: RegExp | null; orbitIds: Set<string> }> =
+      tokenSpecs.length > 1 && perTokenTermEntries.length > 1
+        ? perTokenTermEntries.map((entry) => ({
+            re: compileTextAnyRegex(entry.terms),
+            orbitIds: new Set(entry.matchingOrbitIds),
+          }))
+        : seenLikeTerms.size > 0
+          ? [
+              {
+                re: compileTextAnyRegex(Array.from(seenLikeTerms)),
+                orbitIds: new Set(tokenSpecs.flatMap((s) => s.matchingOrbitIds)),
+              },
+            ]
+          : [];
 
-    // 3. Score & verify all bilingual token groups across candidate items
-    const scored: Array<{ item: VaultItem; score: number }> = [];
-    for (const row of candidateRows.values()) {
-      const item = mapRowToItem(row);
-      const titleL = (item.title || '').toLowerCase();
-      const summaryL = (item.summary || '').toLowerCase();
-      const bodyL = (item.body || '').toLowerCase();
-      const ocrL = (item.ocrText || '').toLowerCase();
-      const domainL = (item.domain || '').toLowerCase();
-      const urlL = (item.url || '').toLowerCase();
-      const platformL = (item.platform || '').toLowerCase();
-      const tagsL = item.tags.join(' ').toLowerCase();
-      const secretL = item.secretMeta
-        ? [
-            item.secretMeta.service,
-            item.secretMeta.loginHint,
-            item.secretMeta.cardBrand,
-            item.secretMeta.last4,
-            item.secretMeta.kind,
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .toLowerCase()
-        : '';
-      const metaL = item.mediaMeta
-        ? [
-            item.mediaMeta.forwardAuthor,
-            item.mediaMeta.fileName,
-            item.mediaMeta.transcript,
-            item.mediaMeta.contactPhone,
-            item.mediaMeta.contactEmail,
-            item.mediaMeta.contactHandle,
-            ...(item.mediaMeta.keyPoints ?? []),
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .toLowerCase()
-        : '';
-      const digitsHay = `${item.title} ${item.body} ${secretL} ${item.mediaMeta?.contactPhone ?? ''}`.replace(/\D/g, '');
-
-      let allTokensMatch = true;
-      let score = item.isPinned ? 8 : 0;
-
-      if (titleL.includes(qLower)) score += 160;
-      else if (summaryL.includes(qLower) || bodyL.includes(qLower)) score += 45;
-
-      for (const spec of tokenSpecs) {
-        let tokMatched = false;
-        let tokBestScore = 0;
-
-        const checkField = (hay: string, weightExact: number, weightVariant: number) => {
-          if (!hay) return;
-          if (hay.includes(spec.tok)) {
-            tokMatched = true;
-            tokBestScore = Math.max(tokBestScore, weightExact);
-            return;
-          }
-          for (const variant of spec.variants) {
-            if (hay.includes(variant)) {
-              tokMatched = true;
-              tokBestScore = Math.max(tokBestScore, weightVariant);
-              return;
+    const fuzzyGroups: SearchFallbackGroupSpec[] = allowFuzzy
+      ? compiledQuery.groups.map((g) => {
+          const groupExactRe = compileTextAnyRegex([g.primaryNorm, ...g.variantNorms]);
+          const matchingOrbitIds = new Set<string>();
+          for (const o of orbitNormPairs) {
+            if (!o.nameNorm) continue;
+            if (groupExactRe && groupExactRe.test(o.nameNorm)) {
+              matchingOrbitIds.add(o.id);
+              continue;
+            }
+            for (const fc of g.fuzzyCandidates) {
+              if (passesCharFreqs(o.nameNorm, fc.wordCharFreqs, fc.nonWordCount, fc.maxDist)) {
+                matchingOrbitIds.add(o.id);
+                break;
+              }
             }
           }
+          const fuzzyCands: SearchFuzzyPrecheckCand[] = [];
+          const tagExtraCands: SearchFuzzyPrecheckCand[] = [];
+          for (const fc of g.fuzzyCandidates) {
+            const mapped: SearchFuzzyPrecheckCand = {
+              candLen: fc.candLen,
+              minTokenLen: fc.candLen - fc.maxDist,
+              maxDist: fc.maxDist,
+              nonWordCount: fc.nonWordCount,
+              canPrefixFilter: fc.candLen >= 2,
+              c0: fc.c0,
+              c1: fc.c1,
+              c2: fc.c2,
+              wordCharFreqs: fc.wordCharFreqs,
+              allCharFreqs: fc.allCharFreqs,
+            };
+            if (fc.nonWordCount <= fc.maxDist) {
+              fuzzyCands.push(mapped);
+            } else {
+              tagExtraCands.push(mapped);
+            }
+          }
+          const minWordLen =
+            fuzzyCands.length > 0 ? Math.min(...fuzzyCands.map((fc) => fc.minTokenLen)) : 0;
+          return { matchingOrbitIds, groupExactRe, fuzzyCands, tagExtraCands, minWordLen };
+        })
+      : [];
+
+    const unifiedGroups: UnifiedSearchScanGroup[] | null =
+      exactGroupMatchers.length === fuzzyGroups.length && fuzzyGroups.length > 0
+        ? fuzzyGroups
+            .map((fg, idx) => {
+              const em = exactGroupMatchers[idx]!;
+              const mergedOrbitIds = new Set<string>(fg.matchingOrbitIds);
+              for (const oid of em.orbitIds) mergedOrbitIds.add(oid);
+              return {
+                matchingOrbitIds: mergedOrbitIds,
+                exactRe: em.re ?? fg.groupExactRe,
+                fuzzyCands: fg.fuzzyCands,
+                tagExtraCands: fg.tagExtraCands,
+                minWordLen: fg.minWordLen,
+              };
+            })
+            .sort((a, b) => {
+              const ha = a.fuzzyCands.length === 0 ? 0 : 1;
+              const hb = b.fuzzyCands.length === 0 ? 0 : 1;
+              if (ha !== hb) return ha - hb;
+              if (b.minWordLen !== a.minWordLen) return b.minWordLen - a.minWordLen;
+              return a.fuzzyCands.length - b.fuzzyCands.length;
+            })
+        : null;
+
+    let scored: Array<{ item: VaultItem; score: number }> = [];
+    let deferredFuzzyRows: ItemRow[] | null = null;
+
+    try {
+      if (candidateRows.size === 0 && allowFuzzy && compiledQuery.groups.length > 0) {
+        this.activeSearchScan = {
+          unifiedGroups,
+          exactGroupMatchers,
+          fuzzyGroups,
+          allowFuzzy: true,
         };
-
-        if (spec.variants.some((v) => titleL.startsWith(v))) {
-          tokMatched = true;
-          tokBestScore = Math.max(tokBestScore, 90);
-        }
-        checkField(titleL, 70, 54);
-        checkField(tagsL, 64, 50);
-        checkField(domainL, 62, 50);
-        checkField(platformL, 60, 48);
-        checkField(secretL, 62, 48);
-        checkField(metaL, 48, 38);
-        checkField(summaryL, 42, 34);
-        checkField(urlL, 40, 32);
-        checkField(bodyL, 30, 24);
-        checkField(ocrL, 22, 18);
-
-        if (spec.digits.length >= 3 && digitsHay.includes(spec.digits)) {
-          tokMatched = true;
-          tokBestScore = Math.max(tokBestScore, 64);
-        }
-
-        for (const sem of spec.semantics) {
-          if (itemMatchesSemanticKind(item, sem)) {
-            tokMatched = true;
-            tokBestScore = Math.max(tokBestScore, 48);
+        const fallbackRows = this.db
+          .prepare(
+            `SELECT i.* FROM items i WHERE ${baseWherePrefix}search_fallback_scan(i.title, i.summary, i.body, i.ocr_text, i.media_meta_json, i.secret_meta_json, i.url, i.domain, i.tags_json, i.orbit) > 0 ${orderBy} LIMIT ?`
+          )
+          .all(...baseParams, Math.max(candidateLimit, fuzzyScanLimit)) as unknown as ItemRow[];
+        deferredFuzzyRows = [];
+        for (const row of fallbackRows) {
+          let exactHit = exactGroupMatchers.length > 0;
+          for (let mIdx = 0; mIdx < exactGroupMatchers.length; mIdx += 1) {
+            const m = exactGroupMatchers[mIdx]!;
+            if (row.orbit && m.orbitIds.has(row.orbit)) continue;
+            if (
+              m.re &&
+              testRegexOnColumns(
+                m.re,
+                row.title,
+                row.summary,
+                row.body,
+                row.ocr_text,
+                row.media_meta_json,
+                row.secret_meta_json,
+                row.url,
+                row.domain,
+                row.tags_json
+              )
+            ) {
+              continue;
+            }
+            exactHit = false;
+            break;
+          }
+          if (exactHit) {
+            addRows([row]);
+          } else {
+            deferredFuzzyRows.push(row);
           }
         }
-
-        if (!tokMatched) {
-          allTokensMatch = false;
-          break;
-        }
-        score += tokBestScore;
-      }
-
-      if (allTokensMatch) {
-        scored.push({ item, score });
-      }
-    }
-
-    // 4. Typo-tolerant & section-aware fuzzy fallback when exact FTS/LIKE yielded few hits
-    if (scored.length < 8 && searchRaw.length >= 4) {
-      const seenScoredIds = new Set(scored.map((e) => e.item.id));
-      const orbitMap = new Map(this.listOrbits().map((o) => [o.id, o.name]));
-      const recentRows = this.db
-        .prepare(`SELECT i.* FROM items i WHERE ${baseConditions.join(' AND ')} ${orderBy} LIMIT 320`)
-        .all(...baseParams) as unknown as ItemRow[];
-      for (const row of recentRows) {
-        if (seenScoredIds.has(row.id)) continue;
-        const item = mapRowToItem(row);
-        const fuzzyScore = scoreBilingualFields(
-          {
-            title: item.title,
-            tags: item.tags,
-            orbitName: item.orbit ? orbitMap.get(item.orbit) : undefined,
-            domain: item.domain,
-            summary: item.summary,
-            body: item.body,
-            ocrText: item.ocrText,
-            url: item.url,
-            extra: [
-              item.secretMeta?.service,
-              item.secretMeta?.loginHint,
-              item.mediaMeta?.transcript,
-              item.mediaMeta?.fileName,
-            ]
-              .filter(Boolean)
-              .join(' '),
-            isPinned: item.isPinned,
-            updatedAt: item.contentUpdatedAt || item.createdAt,
-          },
-          searchRaw
-        );
-        if (fuzzyScore > 0) {
-          seenScoredIds.add(item.id);
-          scored.push({ item, score: Math.round(fuzzyScore * 0.65) });
+      } else {
+        if (tokenSpecs.length > 1 && perTokenTermEntries.length > 1) {
+          const andClauses: string[] = [];
+          const andParams: Array<string | number> = [];
+          for (const entry of perTokenTermEntries) {
+            if (entry.matchingOrbitIds.length > 0) {
+              andClauses.push(
+                `(${TEXT_HAS_ANY_SQL} OR i.orbit IN (${entry.matchingOrbitIds.map(() => '?').join(',')}))`
+              );
+              andParams.push(entry.termsJson, ...entry.matchingOrbitIds);
+            } else {
+              andClauses.push(TEXT_HAS_ANY_SQL);
+              andParams.push(entry.termsJson);
+            }
+          }
+          const andRows = this.db
+            .prepare(`SELECT i.* FROM items i WHERE ${baseWherePrefix}${andClauses.join(' AND ')} ${orderBy} LIMIT ?`)
+            .all(...baseParams, ...andParams, candidateLimit) as unknown as ItemRow[];
+          addRows(andRows);
+        } else if (packedAllTerms) {
+          const singleOrbitIds = tokenSpecs.length === 1 ? tokenSpecs[0]!.matchingOrbitIds : [];
+          if (singleOrbitIds.length > 0) {
+            const rows = this.db
+              .prepare(
+                `SELECT i.* FROM items i WHERE ${baseWherePrefix}(${TEXT_HAS_ANY_SQL} OR i.orbit IN (${singleOrbitIds.map(() => '?').join(',')})) ${orderBy} LIMIT ?`
+              )
+              .all(...baseParams, packedAllTerms, ...singleOrbitIds, candidateLimit) as unknown as ItemRow[];
+            addRows(rows);
+          } else {
+            const rows = this.db
+              .prepare(`SELECT i.* FROM items i WHERE ${baseWherePrefix}${TEXT_HAS_ANY_SQL} ${orderBy} LIMIT ?`)
+              .all(...baseParams, packedAllTerms, candidateLimit) as unknown as ItemRow[];
+            addRows(rows);
+          }
         }
       }
+
+      scored = scoreCandidateRows(candidateRows.values());
+
+      if (scored.length < 8 && allowFuzzy && compiledQuery.groups.length > 0) {
+        const seenScoredIds = new Set(scored.map((e) => e.item.id));
+        let fuzzyRows: ItemRow[];
+        if (deferredFuzzyRows !== null) {
+          fuzzyRows = deferredFuzzyRows;
+        } else {
+          this.activeSearchScan = {
+            unifiedGroups: fuzzyGroups.map((fg) => ({
+              matchingOrbitIds: fg.matchingOrbitIds,
+              exactRe: fg.groupExactRe,
+              fuzzyCands: fg.fuzzyCands,
+              tagExtraCands: fg.tagExtraCands,
+              minWordLen: fg.minWordLen,
+            })),
+            exactGroupMatchers: [],
+            fuzzyGroups,
+            allowFuzzy: true,
+          };
+          fuzzyRows = this.db
+            .prepare(
+              `SELECT i.* FROM items i WHERE ${baseWherePrefix}search_fallback_scan(i.title, i.summary, i.body, i.ocr_text, i.media_meta_json, i.secret_meta_json, i.url, i.domain, i.tags_json, i.orbit) > 0 ${orderBy} LIMIT ?`
+            )
+            .all(...baseParams, fuzzyScanLimit) as unknown as ItemRow[];
+        }
+        scoreFuzzyRows(fuzzyRows, seenScoredIds, scored);
+      }
+    } finally {
+      this.activeSearchScan = null;
     }
 
     scored.sort((a, b) => {
@@ -1963,7 +3866,8 @@ export class VaultRepository {
       return b.item.createdAt - a.item.createdAt;
     });
 
-    return scored.slice(offset, offset + limit).map((entry) => entry.item);
+    const result = scored.slice(offset, offset + limit).map((entry) => entry.item);
+    return q.projection === 'card' ? result.map(projectItemForCard) : result;
   }
 
   public searchNonSecretForAsk(question: string, limit = 12): VaultItem[] {
@@ -1971,13 +3875,20 @@ export class VaultRepository {
     const groups = expandBilingualQuery(question);
     if (groups.length === 0 && !platformIntent) return [];
 
+    const orbits = this.db
+      .prepare('SELECT id, name FROM orbits WHERE deleted_at IS NULL')
+      .all() as Array<{ id: string; name: string }>;
+    const orbitNameById = new Map<string, string>(orbits.map((o) => [o.id, o.name]));
+
     // Cap variants per token group so tail words in longer prompts are never truncated away
-    const ftsVariants = Array.from(new Set(groups.flatMap((g) => g.variants.slice(0, 6))))
+    const ftsVariants = Array.from(new Set(groups.flatMap((g) => g.variants.slice(0, 12))))
+      .filter((v) => v.length >= 2 && !/[,;'[\]]/.test(v))
+      .slice(0, 64);
+    const likeVariants = Array.from(
+      new Set(groups.flatMap((g) => g.variants.slice(0, 12).map((v) => normalizeSearchText(v))))
+    )
       .filter((v) => v.length >= 2)
-      .slice(0, 48);
-    const likeVariants = Array.from(new Set(groups.flatMap((g) => g.variants.slice(0, 4))))
-      .filter((v) => v.length >= 2)
-      .slice(0, 32);
+      .slice(0, 64);
 
     const ftsExpr = ftsVariants
       .map((t) => `"${t.replace(/[^\p{L}\p{N}_-]+/gu, '')}"*`)
@@ -1991,13 +3902,13 @@ export class VaultRepository {
       const platRows = this.db
         .prepare(
           `SELECT i.* FROM items i
-           WHERE i.deleted_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND (
+           WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND (
              lower_utf(COALESCE(i.platform, '')) = ?
              OR lower_utf(COALESCE(i.domain, '')) LIKE ?
              OR lower_utf(COALESCE(i.url, '')) LIKE ?
              OR lower_utf(i.tags_json) LIKE ?
            )
-           ORDER BY i.created_at DESC
+           ORDER BY i.created_at DESC, i.rowid DESC
            LIMIT 50`
         )
         .all(
@@ -2028,7 +3939,7 @@ export class VaultRepository {
             `SELECT i.* FROM items i
              WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret'
                AND i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)
-             ORDER BY i.created_at DESC
+             ORDER BY i.created_at DESC, i.rowid DESC
              LIMIT 32`
           )
           .all(ftsExpr) as unknown as ItemRow[];
@@ -2038,33 +3949,46 @@ export class VaultRepository {
       }
     }
 
-    if (candidateRows.size < Math.max(limit * 2, 16) && likeVariants.length > 0) {
-      const combinedClauses: string[] = [];
-      const combinedParams: string[] = [];
-      for (const term of likeVariants) {
-        const pat = `%${escapeSqlLike(term)}%`;
-        combinedClauses.push(`(
-          lower_utf(i.title) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.summary) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.body) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.ocr_text) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.url, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.domain, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.platform, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(COALESCE(i.media_meta_json, '')) LIKE ? ESCAPE '\\'
-          OR lower_utf(i.tags_json) LIKE ? ESCAPE '\\'
-        )`);
-        combinedParams.push(pat, pat, pat, pat, pat, pat, pat, pat, pat);
+    if (likeVariants.length > 0) {
+      const idx = this.ensureSearchIndex(false);
+      const exactRe = compileTextAnyRegex(likeVariants, true);
+      const matchingOrbitSet = new Set(
+        orbits
+          .filter((o) => {
+            const orbNorm = normalizeSearchText(o.name);
+            return orbNorm && likeVariants.some((v) => orbNorm.includes(v));
+          })
+          .map((o) => o.id)
+      );
+      const matchedIndices: number[] = [];
+      for (let i = 0; i < idx.count; i += 1) {
+        if (idx.isPurged[i] === 1) continue;
+        if (!Number.isNaN(idx.deletedAt[i]!) || idx.isArchived[i] !== 0 || idx.dnas[i] === 'secret') {
+          continue;
+        }
+        if (
+          (matchingOrbitSet.size > 0 && matchingOrbitSet.has(idx.orbits[i]!)) ||
+          (exactRe !== null && exactRe.test(idx.flatNorm[i]!))
+        ) {
+          matchedIndices.push(i);
+        }
       }
-      const likeRows = this.db
-        .prepare(
-          `SELECT i.* FROM items i
-           WHERE i.deleted_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND (${combinedClauses.join(' OR ')})
-           ORDER BY i.created_at DESC
-           LIMIT 60`
-        )
-        .all(...combinedParams) as unknown as ItemRow[];
-      for (const r of likeRows) candidateRows.set(r.id, r);
+      if (matchedIndices.length > 60) {
+        matchedIndices.sort(
+          (a, b) =>
+            idx.createdAt[b]! - idx.createdAt[a]! || idx.rowids[b]! - idx.rowids[a]!
+        );
+      }
+      const needIds: string[] = [];
+      const cap = Math.min(60, matchedIndices.length);
+      for (let k = 0; k < cap; k += 1) {
+        const id = idx.ids[matchedIndices[k]!]!;
+        if (!candidateRows.has(id)) needIds.push(id);
+      }
+      if (needIds.length > 0) {
+        const rows = this.fetchRowsByIds(needIds);
+        for (const r of rows) candidateRows.set(r.id, r);
+      }
     }
 
     const rowMatchesPlatform = (row: ItemRow): boolean => {
@@ -2082,14 +4006,18 @@ export class VaultRepository {
     const scored = [...candidateRows.values()]
       .filter(rowMatchesPlatform)
       .map((row) => {
-        const hay = `${row.title}\n${row.summary}\n${row.body}\n${row.ocr_text}\n${row.media_meta_json ?? ''}\n${row.url ?? ''}\n${row.domain ?? ''}\n${row.platform ?? ''}\n${row.tags_json}`.toLowerCase();
+        const orbitName = row.orbit ? (orbitNameById.get(row.orbit) ?? '') : '';
+        const hay = normalizeSearchText(
+          `${row.title}\n${row.summary}\n${row.body}\n${row.ocr_text}\n${row.media_meta_json ?? ''}\n${row.url ?? ''}\n${row.domain ?? ''}\n${row.platform ?? ''}\n${orbitName}\n${row.tags_json}`
+        );
         let score = platformIntent ? 6 : 0;
         let matchedGroups = 0;
         for (const grp of groups) {
-          if (hay.includes(grp.primary)) {
+          const pNorm = normalizeSearchText(grp.primary);
+          if (hay.includes(pNorm)) {
             score += 5;
             matchedGroups++;
-          } else if (grp.variants.some((v) => hay.includes(v))) {
+          } else if (grp.variants.some((v) => hay.includes(normalizeSearchText(v)))) {
             score += 3;
             matchedGroups++;
           }
@@ -2117,7 +4045,7 @@ export class VaultRepository {
         `SELECT id, title, dna, orbit, remind_at
          FROM items
          WHERE deleted_at IS NULL AND is_archived = 0 AND dna != 'secret' AND remind_at IS NOT NULL
-         ORDER BY remind_at ASC
+         ORDER BY remind_at ASC, rowid ASC
          LIMIT 8`
       )
       .all() as Array<{ id: string; title: string; dna: ContentDna; orbit: string; remind_at: number }>;
@@ -2132,7 +4060,7 @@ export class VaultRepository {
 
     const secretRows = this.db
       .prepare(
-        "SELECT id, title, orbit, secret_meta_json FROM items WHERE deleted_at IS NULL AND is_archived = 0 AND dna = 'secret' ORDER BY created_at DESC"
+        "SELECT id, title, orbit, secret_meta_json FROM items WHERE deleted_at IS NULL AND is_archived = 0 AND dna = 'secret' ORDER BY created_at DESC, rowid DESC"
       )
       .all() as Array<{ id: string; title: string; orbit: string; secret_meta_json: string | null }>;
 
@@ -2302,7 +4230,7 @@ export class VaultRepository {
       .prepare(
         `SELECT * FROM items
          WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND remind_at IS NOT NULL AND remind_at <= ?
-         ORDER BY remind_at ASC
+         ORDER BY remind_at ASC, rowid ASC
          LIMIT 50`
       )
       .all(endMs) as unknown as ItemRow[];
@@ -2314,7 +4242,7 @@ export class VaultRepository {
       .prepare(
         `SELECT * FROM items
          WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND remind_at IS NOT NULL AND (reminded_at IS NULL OR reminded_at < remind_at)
-         ORDER BY remind_at ASC
+         ORDER BY remind_at ASC, rowid ASC
          LIMIT 1`
       )
       .get() as ItemRow | undefined;
@@ -2357,7 +4285,7 @@ export class VaultRepository {
          LEFT JOIN items i ON i.orbit = o.id AND i.is_archived = 0 AND i.deleted_at IS NULL
          WHERE o.deleted_at IS NULL
          GROUP BY o.id
-         ORDER BY o.sort_order ASC`
+         ORDER BY o.sort_order ASC, o.rowid ASC`
       )
       .all() as Array<{
       id: string;
@@ -2463,8 +4391,9 @@ export class VaultRepository {
   }): OrbitDef {
     const cleanName = input.name.trim().slice(0, 32);
     if (!cleanName) throw new Error(translate(this.getLocale(), 'main.repo.emptySectionName'));
+    const wasValid = this.isSearchIndexValid();
 
-    return this.inTx(() => {
+    const orbit = this.inTx(() => {
       const countRow = this.db
         .prepare('SELECT COUNT(*) AS cnt FROM orbits WHERE deleted_at IS NULL')
         .get() as { cnt: number };
@@ -2474,7 +4403,7 @@ export class VaultRepository {
         .get() as { m: number };
       const now = Date.now();
 
-      const orbit: OrbitDef = {
+      const createdOrbit: OrbitDef = {
         id,
         name: cleanName,
         description: input.description.trim() || cleanName,
@@ -2494,24 +4423,27 @@ export class VaultRepository {
            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, 1, ?)`
         )
         .run(
-          orbit.id,
-          orbit.name,
-          orbit.description,
-          orbit.icon,
-          orbit.color,
-          orbit.sortOrder,
+          createdOrbit.id,
+          createdOrbit.name,
+          createdOrbit.description,
+          createdOrbit.icon,
+          createdOrbit.color,
+          createdOrbit.sortOrder,
           now,
           now,
           this.localDeviceId
         );
 
-      this.markDirty('orbit', orbit.id);
-      return orbit;
+      this.markDirty('orbit', createdOrbit.id);
+      return createdOrbit;
     });
+    this.advanceSearchIndexChanges(wasValid);
+    return orbit;
   }
 
   public updateOrbit(id: string, patch: OrbitUpdateInput): OrbitDef | null {
-    return this.inTx(() => {
+    const wasValid = this.isSearchIndexValid();
+    const updated = this.inTx(() => {
       const existing = this.db
         .prepare('SELECT * FROM orbits WHERE id = ? AND deleted_at IS NULL')
         .get(id) as
@@ -2547,9 +4479,12 @@ export class VaultRepository {
       this.markDirty('orbit', id);
       return this.listOrbits().find((o) => o.id === id) ?? null;
     });
+    this.advanceSearchIndexChanges(wasValid);
+    return updated;
   }
 
   public reorderOrbits(orderedIds: string[]): OrbitDef[] {
+    const wasValid = this.isSearchIndexValid();
     this.inTx(() => {
       const readStmt = this.db.prepare('SELECT updated_at FROM orbits WHERE id = ? AND deleted_at IS NULL');
       const stmt = this.db.prepare(
@@ -2564,11 +4499,13 @@ export class VaultRepository {
         this.markDirty('orbit', id);
       }
     });
+    this.advanceSearchIndexChanges(wasValid);
     return this.listOrbits();
   }
 
   public deleteOrbit(id: string): boolean {
-    return this.inTx(() => {
+    const wasValid = this.isSearchIndexValid();
+    const ok = this.inTx(() => {
       const row = this.db
         .prepare('SELECT id, updated_at FROM orbits WHERE id = ? AND deleted_at IS NULL')
         .get(id) as { id: string; updated_at?: number | null } | undefined;
@@ -2590,8 +4527,8 @@ export class VaultRepository {
           'UPDATE orbits SET deleted_at = ?, updated_at = ?, sync_version = sync_version + 1, last_device_id = ? WHERE id = ?'
         )
         .run(now, now, this.localDeviceId, id);
-      const ok = Number(res.changes) > 0;
-      if (ok) {
+      const changed = Number(res.changes) > 0;
+      if (changed) {
         this.markDirty('orbit', id);
         for (const item of orphaned) {
           if (!item.is_demo) {
@@ -2599,8 +4536,17 @@ export class VaultRepository {
           }
         }
       }
-      return ok;
+      return changed;
     });
+    if (ok && wasValid && this.searchIndex) {
+      for (let i = 0; i < this.searchIndex.count; i += 1) {
+        if (this.searchIndex.orbits[i] === id) {
+          this.searchIndex.orbits[i] = '';
+        }
+      }
+      this.searchIndex.totalChanges = this.readTotalChanges();
+    }
+    return ok;
   }
 
   public listFocusBoards(): FocusBoard[] {
@@ -2611,7 +4557,7 @@ export class VaultRepository {
          LEFT JOIN items i ON i.focus_board_id = f.id AND i.is_archived = 0 AND i.deleted_at IS NULL
          WHERE f.deleted_at IS NULL
          GROUP BY f.id
-         ORDER BY f.sort_order ASC, f.created_at DESC`
+         ORDER BY f.sort_order ASC, f.created_at DESC, f.rowid DESC`
       )
       .all() as Array<{
       id: string;
@@ -2789,16 +4735,36 @@ export class VaultRepository {
 
   public getCachedAi(contentHash: string): unknown | null {
     const row = this.db
-      .prepare('SELECT response_json FROM ai_cache WHERE content_hash = ?')
-      .get(contentHash) as { response_json: string } | undefined;
+      .prepare('SELECT response_json, created_at FROM ai_cache WHERE content_hash = ?')
+      .get(contentHash) as { response_json: string; created_at: number } | undefined;
     if (!row) return null;
+    if (row.created_at < Date.now() - AI_CACHE_TTL_MS) {
+      try {
+        this.db.prepare('DELETE FROM ai_cache WHERE content_hash = ?').run(contentHash);
+      } catch {
+        // Non-fatal cache eviction
+      }
+      return null;
+    }
     return safeParseJson(row.response_json, null);
   }
 
   public setCachedAi(contentHash: string, response: unknown): void {
+    const wasValid = this.isSearchIndexValid();
+    const nowMs = Date.now();
     this.db
       .prepare('INSERT OR REPLACE INTO ai_cache (content_hash, response_json, created_at) VALUES (?, ?, ?)')
-      .run(contentHash, JSON.stringify(response), Date.now());
+      .run(contentHash, JSON.stringify(response), nowMs);
+    this.db.prepare('DELETE FROM ai_cache WHERE created_at < ?').run(nowMs - AI_CACHE_TTL_MS);
+    this.db
+      .prepare(
+        `DELETE FROM ai_cache
+         WHERE content_hash NOT IN (
+           SELECT content_hash FROM ai_cache ORDER BY created_at DESC, rowid DESC LIMIT ?
+         )`
+      )
+      .run(AI_CACHE_MAX_ROWS);
+    this.advanceSearchIndexChanges(wasValid);
   }
 
   public logAiUsage(
@@ -2809,10 +4775,12 @@ export class VaultRepository {
     costUsd: number,
     isCloudProxy = false
   ): void {
+    const wasValid = this.isSearchIndexValid();
     const storedModel =
       isCloudProxy && model !== 'cache_hit' && !model.startsWith('cloud_proxy:')
         ? `cloud_proxy:${model}`
         : model;
+    const nowMs = Date.now();
     this.db
       .prepare(
         'INSERT INTO ai_usage_log (id, provider, model, input_tokens, output_tokens, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -2824,8 +4792,22 @@ export class VaultRepository {
         inputTokens,
         outputTokens,
         costUsd,
-        Date.now()
+        nowMs
       );
+    const nowDate = new Date(nowMs);
+    const startOfMonth = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const retentionCutoff = Math.min(startOfMonth, nowMs - AI_USAGE_RETENTION_MS);
+    this.db.prepare('DELETE FROM ai_usage_log WHERE created_at < ?').run(retentionCutoff);
+    this.db
+      .prepare(
+        `DELETE FROM ai_usage_log
+         WHERE created_at < ?
+           AND id NOT IN (
+             SELECT id FROM ai_usage_log ORDER BY created_at DESC, rowid DESC LIMIT ?
+           )`
+      )
+      .run(startOfMonth, AI_USAGE_MAX_ROWS);
+    this.advanceSearchIndexChanges(wasValid);
   }
 
   public getMonthBudgetSummary(
@@ -2872,7 +4854,9 @@ export class VaultRepository {
   }
 
   public setSetting(key: string, value: string): void {
+    const wasValid = this.isSearchIndexValid();
     this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+    this.advanceSearchIndexChanges(wasValid);
   }
 
   public saveItemRevision(
@@ -3329,7 +5313,7 @@ export class VaultRepository {
              OR body LIKE '%\\[ \\]%' ESCAPE '\\' OR body LIKE '%\\[x\\]%' ESCAPE '\\' OR body LIKE '%\\[X\\]%' ESCAPE '\\'
              OR COALESCE(media_meta_json, '') LIKE '%"actionItems"%'
            )
-         ORDER BY effective_ts DESC
+         ORDER BY effective_ts DESC, rowid DESC
          LIMIT 5000`
       )
       .all() as Array<{
@@ -3834,6 +5818,354 @@ export class VaultRepository {
     return { item: updated };
   }
 
+  public bulkToggleTasks(inputs: BulkToggleTaskInput[]): BulkTasksMutationResult {
+    const byItem = new Map<string, BulkToggleTaskInput[]>();
+    for (const raw of inputs ?? []) {
+      const itemId = String(raw?.itemId ?? '').trim();
+      if (!itemId) continue;
+      if (raw.sourceType !== 'markdown' && raw.sourceType !== 'voice_action') continue;
+      if (!Number.isInteger(raw.taskIndex) || raw.taskIndex < 0) continue;
+      const list = byItem.get(itemId);
+      if (list) list.push(raw);
+      else byItem.set(itemId, [raw]);
+    }
+    if (byItem.size === 0) {
+      return { updatedItems: [], tasks: this.listVaultTasks() };
+    }
+
+    const updatedItems: VaultItem[] = [];
+    this.inTx(() => {
+      const columns = this.listTaskBoardColumns();
+      for (const [itemId, itemInputs] of byItem.entries()) {
+        const current = this.getItemById(itemId);
+        if (!current || current.dna === 'secret') continue;
+
+        const deduped = new Map<string, BulkToggleTaskInput>();
+        for (const inp of itemInputs) {
+          deduped.set(`${inp.sourceType}:${inp.taskIndex}`, inp);
+        }
+
+        const meta: MediaMeta = { ...(current.mediaMeta ?? {}) };
+        let nextBody = current.body || '';
+        let bodyChanged = false;
+        let metaChanged = false;
+        const checkedSet = new Set(
+          Array.isArray(meta.checkedActionIndices) ? meta.checkedActionIndices : []
+        );
+        const actionsLen = Array.isArray(meta.actionItems) ? meta.actionItems.length : 0;
+
+        for (const inp of deduped.values()) {
+          if (inp.sourceType === 'markdown') {
+            const toggled = toggleMarkdownTaskInBody(nextBody, inp.taskIndex, Boolean(inp.done));
+            if (toggled) {
+              nextBody = toggled.body;
+              bodyChanged = true;
+            }
+          } else if (inp.taskIndex >= 0 && inp.taskIndex < actionsLen) {
+            if (inp.done) checkedSet.add(inp.taskIndex);
+            else checkedSet.delete(inp.taskIndex);
+            metaChanged = true;
+          }
+        }
+
+        if (!bodyChanged && !metaChanged) continue;
+        if (metaChanged) {
+          meta.checkedActionIndices = Array.from(checkedSet).sort((a, b) => a - b);
+        }
+        const updatedTasks = this.collectItemTasksForReconcile(nextBody, meta);
+        meta.taskMeta = reconcileTaskMeta(updatedTasks, meta.taskMeta, columns);
+
+        const updated = this.updateItem(
+          itemId,
+          {
+            ...(bodyChanged ? { body: nextBody } : {}),
+            mediaMeta: meta,
+          },
+          { preserveContentUpdatedAt: true }
+        );
+        if (updated) updatedItems.push(updated);
+      }
+    });
+
+    return {
+      updatedItems,
+      tasks: this.listVaultTasks(),
+    };
+  }
+
+  public bulkUpdateTasksMeta(input: BulkUpdateTasksMetaInput): BulkTasksMutationResult {
+    const byItem = new Map<string, string[]>();
+    for (const ref of input?.tasks ?? []) {
+      const itemId = String(ref?.itemId ?? '').trim();
+      const taskKey = String(ref?.taskKey ?? '').trim();
+      if (!itemId || !taskKey) continue;
+      const list = byItem.get(itemId);
+      if (list) {
+        if (!list.includes(taskKey)) list.push(taskKey);
+      } else {
+        byItem.set(itemId, [taskKey]);
+      }
+    }
+    if (byItem.size === 0) {
+      return { updatedItems: [], tasks: this.listVaultTasks() };
+    }
+
+    const updatedItems: VaultItem[] = [];
+    this.inTx(() => {
+      const columns = this.listTaskBoardColumns();
+      const hasValidCol =
+        typeof input.columnId === 'string' && columns.some((c) => c.id === input.columnId);
+
+      for (const [itemId, taskKeys] of byItem.entries()) {
+        const current = this.getItemById(itemId);
+        if (!current || current.dna === 'secret') continue;
+
+        const meta: MediaMeta = { ...(current.mediaMeta ?? {}) };
+        const beforeTasks = this.collectItemTasksForReconcile(current.body || '', meta);
+        const beforeReconciled = reconcileTaskMeta(beforeTasks, meta.taskMeta, columns);
+        const workingMap: Record<string, TaskBoardItemMeta> = { ...beforeReconciled };
+        let nextBody = current.body || '';
+        let bodyChanged = false;
+        let anyTouched = false;
+
+        for (const taskKey of taskKeys) {
+          const parsedKey = this.parseTaskKey(taskKey);
+          if (!parsedKey) continue;
+          const targetBefore = beforeTasks.find((t) => t.taskKey === taskKey);
+          if (!targetBefore) continue;
+          anyTouched = true;
+
+          const prevEntry = workingMap[taskKey] ?? {
+            columnId: targetBefore.done ? 'done' : 'inbox',
+            boardOrder: targetBefore.taskIndex * 1000,
+            priority: 'none' as TaskPriority,
+            dueAt: null,
+            textHash: targetBefore.textHash,
+          };
+
+          let nextColumnId = prevEntry.columnId;
+          let nextPrevColumnId = prevEntry.prevColumnId;
+          if (hasValidCol && input.columnId) {
+            const targetIsDone = isDoneColumn(input.columnId, columns);
+            if (targetIsDone && !isDoneColumn(prevEntry.columnId, columns)) {
+              nextPrevColumnId = prevEntry.columnId;
+            }
+            nextColumnId = input.columnId;
+            if (targetIsDone !== targetBefore.done) {
+              if (parsedKey.sourceType === 'markdown') {
+                const toggled = toggleMarkdownTaskInBody(nextBody, parsedKey.index, targetIsDone);
+                if (toggled) {
+                  nextBody = toggled.body;
+                  bodyChanged = true;
+                }
+              } else {
+                const checked = new Set(
+                  Array.isArray(meta.checkedActionIndices) ? meta.checkedActionIndices : []
+                );
+                if (targetIsDone) checked.add(parsedKey.index);
+                else checked.delete(parsedKey.index);
+                meta.checkedActionIndices = Array.from(checked).sort((a, b) => a - b);
+              }
+            }
+          }
+
+          const nextPriority: TaskPriority =
+            input.priority && VALID_TASK_PRIORITIES.has(input.priority)
+              ? input.priority
+              : (prevEntry.priority ?? 'none');
+          const nextDueAt =
+            input.dueAt !== undefined
+              ? typeof input.dueAt === 'number' && Number.isFinite(input.dueAt)
+                ? input.dueAt
+                : null
+              : (prevEntry.dueAt ?? null);
+          const nextNotes =
+            input.notes !== undefined
+              ? typeof input.notes === 'string' && input.notes.trim()
+                ? input.notes.trim()
+                : undefined
+              : prevEntry.notes;
+
+          workingMap[taskKey] = {
+            columnId: nextColumnId,
+            ...(nextPrevColumnId ? { prevColumnId: nextPrevColumnId } : {}),
+            boardOrder: prevEntry.boardOrder,
+            ...(prevEntry.customOrder ? { customOrder: true } : {}),
+            priority: nextPriority,
+            dueAt: nextDueAt,
+            ...(nextNotes ? { notes: nextNotes } : {}),
+            textHash: targetBefore.textHash,
+          };
+        }
+
+        if (!anyTouched) continue;
+        const afterTasks = this.collectItemTasksForReconcile(nextBody, meta);
+        meta.taskMeta = reconcileTaskMeta(afterTasks, workingMap, columns);
+
+        const patch: UpdateItemPatch = {
+          ...(bodyChanged ? { body: nextBody } : {}),
+          mediaMeta: meta,
+        };
+        if (input.orbit !== undefined) {
+          patch.orbit = typeof input.orbit === 'string' ? input.orbit.trim() : '';
+        }
+        if (input.focusBoardId !== undefined) {
+          patch.focusBoardId =
+            typeof input.focusBoardId === 'string' && input.focusBoardId.trim()
+              ? input.focusBoardId.trim()
+              : null;
+        }
+        if (meta.isStandaloneTask && input.dueAt !== undefined) {
+          patch.remindAt =
+            typeof input.dueAt === 'number' && Number.isFinite(input.dueAt) ? input.dueAt : null;
+        }
+
+        const updated = this.updateItem(itemId, patch, { preserveContentUpdatedAt: true });
+        if (updated) updatedItems.push(updated);
+      }
+    });
+
+    return {
+      updatedItems,
+      tasks: this.listVaultTasks(),
+    };
+  }
+
+  public bulkDeleteTasks(
+    inputs: Array<{ itemId: string; taskKey: string }>
+  ): BulkDeleteTasksResult {
+    const byItem = new Map<string, string[]>();
+    for (const ref of inputs ?? []) {
+      const itemId = String(ref?.itemId ?? '').trim();
+      const taskKey = String(ref?.taskKey ?? '').trim();
+      if (!itemId || !taskKey) continue;
+      const list = byItem.get(itemId);
+      if (list) {
+        if (!list.includes(taskKey)) list.push(taskKey);
+      } else {
+        byItem.set(itemId, [taskKey]);
+      }
+    }
+    if (byItem.size === 0) {
+      return { updatedItems: [], deletedItemIds: [], tasks: this.listVaultTasks() };
+    }
+
+    const updatedItems: VaultItem[] = [];
+    const deletedItemIds: string[] = [];
+
+    this.inTx(() => {
+      const columns = this.listTaskBoardColumns();
+      for (const [itemId, taskKeys] of byItem.entries()) {
+        const current = this.getItemById(itemId);
+        if (!current || current.dna === 'secret') continue;
+
+        const meta: MediaMeta = { ...(current.mediaMeta ?? {}) };
+        const beforeTasks = this.collectItemTasksForReconcile(current.body || '', meta);
+        const beforeReconciled = reconcileTaskMeta(beforeTasks, meta.taskMeta, columns);
+        const remainingMetaSeed: Record<string, TaskBoardItemMeta> = { ...beforeReconciled };
+
+        const mdLineIndices = new Set<number>();
+        const vaIndices = new Set<number>();
+        const matchedTargets: ReturnType<VaultRepository['collectItemTasksForReconcile']> = [];
+
+        for (const taskKey of taskKeys) {
+          const parsedKey = this.parseTaskKey(taskKey);
+          if (!parsedKey) continue;
+          const target = beforeTasks.find((t) => t.taskKey === taskKey);
+          if (!target) continue;
+
+          if (parsedKey.sourceType === 'markdown') {
+            if (target.lineIndex !== undefined && target.lineIndex >= 0) {
+              mdLineIndices.add(target.lineIndex);
+              matchedTargets.push(target);
+              delete remainingMetaSeed[taskKey];
+            }
+          } else {
+            const actionsLen = Array.isArray(meta.actionItems) ? meta.actionItems.length : 0;
+            if (parsedKey.index >= 0 && parsedKey.index < actionsLen) {
+              vaIndices.add(parsedKey.index);
+              matchedTargets.push(target);
+              delete remainingMetaSeed[taskKey];
+            }
+          }
+        }
+
+        if (matchedTargets.length === 0) continue;
+
+        let nextBody = current.body || '';
+        let bodyChanged = false;
+        if (mdLineIndices.size > 0) {
+          const lines = nextBody.split(/\r?\n/);
+          const descIndices = Array.from(mdLineIndices).sort((a, b) => b - a);
+          for (const lineIdx of descIndices) {
+            if (lineIdx >= 0 && lineIdx < lines.length) {
+              lines.splice(lineIdx, 1);
+            }
+          }
+          nextBody = lines.join('\n').trim();
+          bodyChanged = true;
+        }
+
+        if (vaIndices.size > 0) {
+          const actions = Array.isArray(meta.actionItems) ? [...meta.actionItems] : [];
+          meta.actionItems = actions.filter((_, idx) => !vaIndices.has(idx));
+          const sortedDeletedVa = Array.from(vaIndices).sort((a, b) => a - b);
+          const nextChecked: number[] = [];
+          for (const checkedIdx of meta.checkedActionIndices ?? []) {
+            if (vaIndices.has(checkedIdx)) continue;
+            let shift = 0;
+            for (const delIdx of sortedDeletedVa) {
+              if (delIdx < checkedIdx) shift += 1;
+              else break;
+            }
+            nextChecked.push(checkedIdx - shift);
+          }
+          meta.checkedActionIndices = nextChecked;
+        }
+
+        const totalMdBefore = beforeTasks.filter((t) => t.sourceType === 'markdown').length;
+        const remainingMdCount = Math.max(0, totalMdBefore - mdLineIndices.size);
+        const hasAttachments = Boolean(current.imagePath || current.mediaPath || current.url);
+        const hasVoiceActions = Boolean(meta.actionItems && meta.actionItems.length > 0);
+        const isStandalone = Boolean(meta.isStandaloneTask);
+        const titleMatchesDeletedTask = matchedTargets.some(
+          (t) =>
+            isUntitledPlaceholderTitle(current.title) ||
+            current.title.trim() === t.text.trim() ||
+            current.title.trim() === truncateAtWordBoundary(t.text.trim(), 72).trim()
+        );
+        const hasPreservedMeta =
+          !isStandalone &&
+          (current.tags.length > 0 ||
+            Boolean(current.remindAt) ||
+            Boolean(current.annotations && current.annotations.length > 0) ||
+            Boolean(current.linksOut && current.linksOut.length > 0) ||
+            !titleMatchesDeletedTask);
+
+        if (!nextBody.trim() && !hasAttachments && !hasVoiceActions && !hasPreservedMeta && remainingMdCount === 0) {
+          if (this.deleteItem(current.id)) {
+            deletedItemIds.push(current.id);
+          }
+          continue;
+        }
+
+        const afterTasks = this.collectItemTasksForReconcile(nextBody, meta);
+        meta.taskMeta = reconcileTaskMeta(afterTasks, remainingMetaSeed, columns);
+        const updated = this.updateItem(current.id, {
+          ...(bodyChanged ? { body: nextBody } : {}),
+          mediaMeta: meta,
+        });
+        if (updated) updatedItems.push(updated);
+      }
+    });
+
+    return {
+      updatedItems,
+      deletedItemIds,
+      tasks: this.listVaultTasks(),
+    };
+  }
+
   // ==================== Calendar Events ====================
 
   public listCalendarEvents(range?: { startAt?: number; endAt?: number; includeDeleted?: boolean }): CalendarEvent[] {
@@ -3852,7 +6184,7 @@ export class VaultRepository {
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.db
-      .prepare(`SELECT * FROM calendar_events ${where} ORDER BY start_at ASC`)
+      .prepare(`SELECT * FROM calendar_events ${where} ORDER BY start_at ASC, created_at ASC, rowid ASC`)
       .all(...params) as Array<Record<string, unknown>>;
 
     return rows.map((r) => this.mapCalendarEventRow(r));
@@ -3930,7 +6262,7 @@ export class VaultRepository {
 
   public findCalendarEventByLinkedItemId(linkedItemId: string): CalendarEvent | null {
     const r = this.db
-      .prepare('SELECT * FROM calendar_events WHERE linked_item_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1')
+      .prepare('SELECT * FROM calendar_events WHERE linked_item_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1')
       .get(linkedItemId) as Record<string, unknown> | undefined;
     return r ? this.mapCalendarEventRow(r) : null;
   }
@@ -4075,7 +6407,7 @@ export class VaultRepository {
         `SELECT * FROM items
          WHERE deleted_at IS NULL AND is_archived = 0 AND dna != 'secret'
            AND id != ? AND lower_utf(links_out_json) LIKE ?
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, rowid DESC
          LIMIT 20`
       )
       .all(itemId, `%"${itemId.toLowerCase()}"%`) as unknown as ItemRow[];
@@ -4134,7 +6466,7 @@ export class VaultRepository {
         `SELECT * FROM items
          WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret'
            AND id != ? AND lower_utf(links_out_json) LIKE ?
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, rowid DESC
          LIMIT 20`
       )
       .all(itemId, `%"${itemId.toLowerCase()}"%`) as unknown as ItemRow[];
@@ -4147,7 +6479,7 @@ export class VaultRepository {
           `SELECT * FROM items
            WHERE focus_board_id = ? AND is_archived = 0 AND deleted_at IS NULL AND purged_at IS NULL
              AND dna != 'secret' AND id != ?
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT 40`
         )
         .all(target.focusBoardId, itemId) as unknown as ItemRow[];
@@ -4178,7 +6510,7 @@ export class VaultRepository {
             `SELECT i.* FROM items i
              WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.is_archived = 0 AND i.dna != 'secret' AND i.id != ?
                AND i.id IN (SELECT id FROM items_fts WHERE items_fts MATCH ?)
-             ORDER BY i.created_at DESC
+             ORDER BY i.created_at DESC, i.rowid DESC
              LIMIT 100`
           )
           .all(itemId, ftsExpr) as unknown as ItemRow[];
@@ -4194,7 +6526,7 @@ export class VaultRepository {
         .prepare(
           `SELECT * FROM items
            WHERE deleted_at IS NULL AND purged_at IS NULL AND is_archived = 0 AND dna != 'secret' AND id != ?
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT 40`
         )
         .all(itemId) as unknown as ItemRow[];
@@ -4916,6 +7248,20 @@ export class VaultRepository {
     this.db.prepare('DELETE FROM sync_blob_cache').run();
   }
 
+  public pruneUnreferencedBlobCache(localNames: string[], excludeItemId?: string): number {
+    if (!localNames || localNames.length === 0) return 0;
+    const delStmt = this.db.prepare('DELETE FROM sync_blob_cache WHERE local_name = ?');
+    let removed = 0;
+    for (const rawName of new Set(localNames)) {
+      const name = (rawName || '').trim();
+      if (!name) continue;
+      if (this.isMediaReferencedElsewhere(name, excludeItemId)) continue;
+      const res = delStmt.run(name);
+      removed += Number(res.changes ?? 0);
+    }
+    return removed;
+  }
+
   private isMediaReferencedElsewhere(localName: string, excludeItemId?: string): boolean {
     const activeItems = this.db
       .prepare('SELECT id, image_path, thumb_path, media_path, media_meta_json, body FROM items WHERE purged_at IS NULL AND id != ?')
@@ -5042,6 +7388,7 @@ export class VaultRepository {
         )
         .run();
       this.tagUniverseCache = null;
+      this.searchIndex = null;
       this.bumpVaultMutationVersion();
     });
   }
@@ -5435,6 +7782,7 @@ export class VaultRepository {
       }
     }
 
+    const wasValid = this.isSearchIndexValid();
     const row = this.inTx(() => {
       this.db
         .prepare(
@@ -5527,6 +7875,11 @@ export class VaultRepository {
 
     if (isPurged && freedMedia.length > 0) {
       this.enqueuePendingBlobDeletes(freedMedia, payload.id);
+      this.pruneUnreferencedBlobCache(freedMedia, payload.id);
+    }
+
+    if (wasValid) {
+      this.upsertSearchIndexRow(row);
     }
 
     this.bumpVaultMutationVersion();

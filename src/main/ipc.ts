@@ -17,6 +17,8 @@ import type {
   AiProvider,
   AppLocale,
   AppearanceConfig,
+  BulkToggleTaskInput,
+  BulkUpdateTasksMetaInput,
   CalendarEventInput,
   CaptureInput,
   CaptureMode,
@@ -69,7 +71,7 @@ import {
   parseRussianDateExpression,
 } from './bridges/google-calendar';
 import { ensureDemoSeeded } from './db/demo-seed';
-import type { UpdateItemPatch, VaultRepository } from './db/repository';
+import { projectItemForCard, type UpdateItemPatch, type VaultRepository } from './db/repository';
 import { registerV8IntegrationIpc } from './ipc-integrations';
 import { CapturePipeline } from './pipeline/capture-pipeline';
 import { readClipboardSnapshot } from './pipeline/clipboard-helper';
@@ -458,6 +460,63 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     return updated;
   });
 
+  handleTrusted(
+    'vault:bulk-update-items',
+    (
+      e,
+      ids: string[],
+      patch: unknown,
+      opts?: { projection?: 'card' | 'full' }
+    ) => {
+      const uniqueIds = Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((id) => String(id ?? '').trim()).filter(Boolean))
+      );
+      if (uniqueIds.length === 0) {
+        return { items: [], count: 0, failedIds: [] };
+      }
+      const s = svc.getSettingsState();
+      const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
+      const vaultLocked = Boolean(s.hasMasterPin && !s.vaultUnlocked);
+      if (vaultLocked) {
+        for (const id of uniqueIds) {
+          const existing = svc.repo.getItemById(id);
+          if (existing?.dna === 'secret') {
+            throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
+          }
+        }
+      }
+
+      const cleanPatch = sanitizeUpdateItemPatch(patch);
+      const skipAutoRevision = Boolean(
+        patch &&
+          typeof patch === 'object' &&
+          !Array.isArray(patch) &&
+          (patch as Record<string, unknown>).skipAutoRevision === true
+      );
+      const res = svc.repo.bulkUpdateItems(uniqueIds, cleanPatch, {
+        projection: opts?.projection,
+        skipAutoRevision,
+      });
+
+      if (res.items.length > 0) {
+        const broadcastItems =
+          opts?.projection === 'card' ? res.items : res.items.map(projectItemForCard);
+        svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-upserted', broadcastItems);
+        if (
+          cleanPatch.orbit !== undefined ||
+          cleanPatch.focusBoardId !== undefined ||
+          cleanPatch.isArchived !== undefined
+        ) {
+          emitCountsChanged();
+        }
+        if (cleanPatch.remindAt !== undefined || cleanPatch.isArchived !== undefined) {
+          svc.refreshReminders?.();
+        }
+      }
+      return res;
+    }
+  );
+
   handleTrusted('vault:delete-item', (_e, id: string) => {
     const existing = svc.repo.getItemById(id, { includeDeleted: true });
     if (!existing) return false;
@@ -482,6 +541,43 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       if (existing.remindAt) svc.refreshReminders?.();
     }
     return ok;
+  });
+
+  handleTrusted('vault:bulk-delete-items', (e, ids: string[]) => {
+    const uniqueIds = Array.from(
+      new Set((Array.isArray(ids) ? ids : []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) {
+      return { deletedIds: [], purgedIds: [], failedIds: [] };
+    }
+    const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
+    const vaultLocked = Boolean(s.hasMasterPin && !s.vaultUnlocked);
+    let hasReminder = false;
+    for (const id of uniqueIds) {
+      const existing = svc.repo.getItemById(id, { includeDeleted: true });
+      if (!existing) continue;
+      if (vaultLocked && existing.dna === 'secret') {
+        throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
+      }
+      if (existing.remindAt) hasReminder = true;
+    }
+
+    const res = svc.repo.bulkDeleteItems(uniqueIds);
+    if (res.freedMedia.length > 0) {
+      svc.pipeline.cleanupUnreferencedMedia(res.freedMedia);
+    }
+    const removedIds = [...res.deletedIds, ...res.purgedIds];
+    if (removedIds.length > 0) {
+      svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-deleted', removedIds);
+      emitCountsChanged();
+      if (hasReminder) svc.refreshReminders?.();
+    }
+    return {
+      deletedIds: res.deletedIds,
+      purgedIds: res.purgedIds,
+      failedIds: res.failedIds,
+    };
   });
 
   handleTrusted('vault:purge-item', (_e, id: string) => {
@@ -542,6 +638,37 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     emitCountsChanged();
     if (restored.remindAt) svc.refreshReminders?.();
     return restored;
+  });
+
+  handleTrusted('vault:bulk-restore-items', (e, ids: string[], opts?: { projection?: 'card' | 'full' }) => {
+    const uniqueIds = Array.from(
+      new Set((Array.isArray(ids) ? ids : []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) {
+      return { items: [], count: 0, failedIds: [] };
+    }
+    const s = svc.getSettingsState();
+    const isEn = (s.locale ?? svc.repo.getLocale()) === 'en';
+    if (s.hasMasterPin && !s.vaultUnlocked) {
+      for (const id of uniqueIds) {
+        const existing = svc.repo.getItemById(id, { includeDeleted: true });
+        if (existing?.dna === 'secret') {
+          throw new Error(isEn ? 'Vault is locked by master PIN' : 'Сейф заблокирован мастер-кодом');
+        }
+      }
+    }
+    const projection = opts?.projection ?? 'card';
+    const res = svc.repo.bulkRestoreItems(uniqueIds, { projection });
+    if (res.items.length > 0) {
+      const broadcastItems =
+        projection === 'card' ? res.items : res.items.map(projectItemForCard);
+      svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-upserted', broadcastItems);
+      emitCountsChanged();
+      if (res.items.some((it) => Boolean(it.remindAt))) {
+        svc.refreshReminders?.();
+      }
+    }
+    return res;
   });
 
   handleTrusted('vault:duplicate-item', (_e, id: string) => {
@@ -1667,6 +1794,18 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
   );
 
+  handleTrusted('tasks:bulk-toggle', (e, inputs: BulkToggleTaskInput[]) => {
+    const res = svc.repo.bulkToggleTasks(Array.isArray(inputs) ? inputs : []);
+    if (res.updatedItems.length > 0) {
+      svc.windows.broadcastExcept(
+        e.sender.id,
+        'vault:items-batch-upserted',
+        res.updatedItems.map(projectItemForCard)
+      );
+    }
+    return res;
+  });
+
   handleTrusted(
     'tasks:move-on-board',
     (
@@ -1714,6 +1853,24 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     }
   );
 
+  handleTrusted('tasks:bulk-update-meta', (e, input: BulkUpdateTasksMetaInput) => {
+    const res = svc.repo.bulkUpdateTasksMeta(input ?? { tasks: [] });
+    if (res.updatedItems.length > 0) {
+      svc.windows.broadcastExcept(
+        e.sender.id,
+        'vault:items-batch-upserted',
+        res.updatedItems.map(projectItemForCard)
+      );
+      if (input?.orbit !== undefined || input?.focusBoardId !== undefined) {
+        emitCountsChanged();
+      }
+      if (input?.dueAt !== undefined) {
+        svc.refreshReminders?.();
+      }
+    }
+    return res;
+  });
+
   handleTrusted(
     'tasks:update-text',
     (
@@ -1742,6 +1899,23 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
       svc.windows.broadcast('vault:item-upserted', res.item);
     }
     return res.item;
+  });
+
+  handleTrusted('tasks:bulk-delete', (e, inputs: Array<{ itemId: string; taskKey: string }>) => {
+    const res = svc.repo.bulkDeleteTasks(Array.isArray(inputs) ? inputs : []);
+    if (res.updatedItems.length > 0) {
+      svc.windows.broadcastExcept(
+        e.sender.id,
+        'vault:items-batch-upserted',
+        res.updatedItems.map(projectItemForCard)
+      );
+    }
+    if (res.deletedItemIds.length > 0) {
+      svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-deleted', res.deletedItemIds);
+      emitCountsChanged();
+      svc.refreshReminders?.();
+    }
+    return res;
   });
 
   handleTrusted('tasks:list-columns', () => svc.repo.listTaskBoardColumns());
@@ -1951,7 +2125,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     ) {
       const sanitizedLimit = sanitizeVideoCacheLimitMb(patch.videoCacheLimitMb);
       svc.repo.setSetting('video_cache_limit_mb', String(sanitizedLimit));
-      svc.pipeline.getVideoCache().setLimitMb(sanitizedLimit);
+      void svc.pipeline.getVideoCache().setLimitMbAsync(sanitizedLimit);
     }
     if (patch.vaultUnlocked === false) {
       lockVaultIfProtected(false);
@@ -2157,9 +2331,9 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
     await shell.openPath(dir);
   });
 
-  handleTrusted('media:video-cache-stats', () => svc.pipeline.getVideoCache().getStats());
+  handleTrusted('media:video-cache-stats', () => svc.pipeline.getVideoCache().getStatsAsync());
 
-  handleTrusted('media:clear-video-cache', () => svc.pipeline.getVideoCache().clear());
+  handleTrusted('media:clear-video-cache', () => svc.pipeline.getVideoCache().clearAsync());
 
   handleTrusted('media:ensure-link-video', async (_e, itemId: string) => {
     if (typeof itemId !== 'string' || !itemId.trim()) return null;

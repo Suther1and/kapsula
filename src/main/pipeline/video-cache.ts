@@ -114,8 +114,22 @@ export class VideoCacheManager {
     return this.getStats();
   }
 
+  public async setLimitMbAsync(nextMb: number): Promise<VideoCacheStats> {
+    this.limitMb = sanitizeVideoCacheLimitMb(nextMb);
+    await this.evictToBudgetAsync();
+    return this.getStatsAsync();
+  }
+
   public ensureDir(): void {
     fs.mkdirSync(this.cacheDir, { recursive: true, mode: 0o700 });
+  }
+
+  public async ensureDirAsync(): Promise<void> {
+    await fs.promises.mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
+  }
+
+  public createTempFilePath(ext: '.mp4' | '.webm' = '.mp4'): string {
+    return path.join(this.cacheDir, `.tmp-${crypto.randomUUID()}${ext}`);
   }
 
   public resolveSafePath(rawPart: string):
@@ -140,6 +154,29 @@ export class VideoCacheManager {
     return { ok: true, safeName, filePath: realTarget, stat };
   }
 
+  public async resolveSafePathAsync(rawPart: string): Promise<
+    | { ok: true; safeName: string; filePath: string; stat: fs.Stats }
+    | { ok: false; status: 400 | 403 | 404 }
+  > {
+    const safeName = sanitizeCacheFilename(rawPart);
+    if (!safeName) return { ok: false, status: 400 };
+    const joined = path.resolve(this.cacheDir, safeName);
+    let realTarget: string;
+    let stat: fs.Stats;
+    try {
+      realTarget = await fs.promises.realpath(joined);
+      stat = await fs.promises.stat(realTarget);
+    } catch {
+      return { ok: false, status: 404 };
+    }
+    const rel = path.relative(this.realCacheDir, realTarget);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+      return { ok: false, status: 403 };
+    }
+    if (!stat.isFile()) return { ok: false, status: 404 };
+    return { ok: true, safeName, filePath: realTarget, stat };
+  }
+
   public touch(filename: string): void {
     const resolved = this.resolveSafePath(filename);
     if (!resolved.ok) return;
@@ -148,6 +185,97 @@ export class VideoCacheManager {
       fs.utimesSync(resolved.filePath, now, now);
     } catch {
       // ignore non-fatal mtime update errors
+    }
+  }
+
+  public async touchAsync(filename: string): Promise<void> {
+    const resolved = await this.resolveSafePathAsync(filename);
+    if (!resolved.ok) return;
+    try {
+      const now = new Date();
+      await fs.promises.utimes(resolved.filePath, now, now);
+    } catch {
+      // ignore non-fatal mtime update errors
+    }
+  }
+
+  public async putFileFromTemp(
+    tmpPath: string,
+    sha256Hex: string,
+    byteLength: number,
+    stem: string,
+    ext: '.mp4' | '.webm' = '.mp4'
+  ): Promise<{ filename: string; mime: string; byteLength: number } | null> {
+    if (
+      !tmpPath ||
+      !sha256Hex ||
+      !Number.isFinite(byteLength) ||
+      byteLength < MIN_VIDEO_FILE_BYTES ||
+      byteLength > MAX_VIDEO_FILE_BYTES
+    ) {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+      return null;
+    }
+
+    await this.ensureDirAsync();
+    let realTmp: string;
+    try {
+      realTmp = await fs.promises.realpath(tmpPath);
+    } catch {
+      return null;
+    }
+    const rel = path.relative(this.realCacheDir, realTmp);
+    const baseName = path.basename(realTmp);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !baseName.startsWith('.tmp-')) {
+      return null;
+    }
+
+    const cleanStem = (stem || 'vid').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 14) || 'vid';
+    const hashShort = sha256Hex.slice(0, 12);
+    const filename = `vc_${cleanStem}_${hashShort}${ext}`;
+    const finalPath = path.join(this.cacheDir, filename);
+
+    try {
+      try {
+        await fs.promises.rename(realTmp, finalPath);
+      } catch {
+        const existingStat = await fs.promises.stat(finalPath).catch(() => null);
+        if (!existingStat || !existingStat.isFile() || existingStat.size !== byteLength) {
+          return null;
+        }
+      }
+      const now = new Date();
+      await fs.promises.utimes(finalPath, now, now).catch(() => {});
+      await this.evictToBudgetAsync();
+      return {
+        filename,
+        mime: ext === '.webm' ? 'video/webm' : 'video/mp4',
+        byteLength,
+      };
+    } catch {
+      return null;
+    } finally {
+      await fs.promises.unlink(realTmp).catch(() => {});
+    }
+  }
+
+  public async putBufferAsync(
+    buf: Buffer,
+    stem: string,
+    ext: '.mp4' | '.webm' = '.mp4'
+  ): Promise<{ filename: string; mime: string; byteLength: number } | null> {
+    if (!buf || buf.length < MIN_VIDEO_FILE_BYTES || buf.length > MAX_VIDEO_FILE_BYTES) {
+      return null;
+    }
+    await this.ensureDirAsync();
+    const tmpPath = this.createTempFilePath(ext);
+    try {
+      await fs.promises.writeFile(tmpPath, buf, { mode: 0o600 });
+      const sha256Hex = crypto.createHash('sha256').update(buf).digest('hex');
+      return await this.putFileFromTemp(tmpPath, sha256Hex, buf.length, stem, ext);
+    } catch {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+      return null;
     }
   }
 
@@ -261,6 +389,87 @@ export class VideoCacheManager {
         // ignore
       }
     }
+    return {
+      bytesUsed: 0,
+      fileCount: 0,
+      limitMb: this.limitMb,
+    };
+  }
+
+  private async listEntriesAsync(): Promise<
+    Array<{ name: string; filePath: string; size: number; mtimeMs: number; atimeMs: number }>
+  > {
+    await this.ensureDirAsync();
+    let names: string[] = [];
+    try {
+      names = await fs.promises.readdir(this.cacheDir);
+    } catch {
+      return [];
+    }
+    const entries: Array<{
+      name: string;
+      filePath: string;
+      size: number;
+      mtimeMs: number;
+      atimeMs: number;
+    }> = [];
+    for (const name of names) {
+      if (name.startsWith('.tmp-')) continue;
+      const safe = sanitizeCacheFilename(name);
+      if (!safe) continue;
+      const fp = path.join(this.cacheDir, safe);
+      try {
+        const st = await fs.promises.stat(fp);
+        if (!st.isFile()) continue;
+        entries.push({
+          name: safe,
+          filePath: fp,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          atimeMs: st.atimeMs,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    return entries;
+  }
+
+  public async evictToBudgetAsync(limitMbOverride?: number): Promise<void> {
+    const budgetMb =
+      limitMbOverride !== undefined ? sanitizeVideoCacheLimitMb(limitMbOverride) : this.limitMb;
+    const budgetBytes = budgetMb * 1024 * 1024;
+    const entries = await this.listEntriesAsync();
+    let totalBytes = entries.reduce((sum, e) => sum + e.size, 0);
+    if (totalBytes <= budgetBytes) return;
+
+    entries.sort((a, b) => a.mtimeMs - b.mtimeMs || a.atimeMs - b.atimeMs);
+    for (const entry of entries) {
+      if (totalBytes <= budgetBytes) break;
+      try {
+        await fs.promises.unlink(entry.filePath);
+        totalBytes -= entry.size;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  public async getStatsAsync(): Promise<VideoCacheStats> {
+    const entries = await this.listEntriesAsync();
+    const bytesUsed = entries.reduce((sum, e) => sum + e.size, 0);
+    return {
+      bytesUsed,
+      fileCount: entries.length,
+      limitMb: this.limitMb,
+    };
+  }
+
+  public async clearAsync(): Promise<VideoCacheStats> {
+    const entries = await this.listEntriesAsync();
+    await Promise.all(
+      entries.map((entry) => fs.promises.unlink(entry.filePath).catch(() => {}))
+    );
     return {
       bytesUsed: 0,
       fileCount: 0,

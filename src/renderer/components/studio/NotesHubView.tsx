@@ -26,6 +26,7 @@ import {
   stripLeadingTitle,
   stripMarkdownPreview,
 } from '../../lib/format';
+import { hydrateFullVaultItem } from '../../lib/hydrate-item';
 import { ContextMenuSurface, type ContextMenuEntry } from '../ui/ContextMenuSurface';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectMenu } from '../ui/SelectMenu';
@@ -38,6 +39,7 @@ type NoteSortMode = 'updated_desc' | 'created_desc' | 'created_asc' | 'title_asc
 interface NotesHubViewProps {
   items: VaultItem[];
   allItemsForLinks?: VaultItem[];
+  availableTags?: string[];
   defaultOrbitId?: string;
   defaultFocusBoardId?: string | null;
   orbits: OrbitDef[];
@@ -118,6 +120,7 @@ function makeInlineDraftItem(
 export const NotesHubView: React.FC<NotesHubViewProps> = ({
   items,
   allItemsForLinks,
+  availableTags,
   defaultOrbitId = '',
   defaultFocusBoardId = null,
   orbits,
@@ -147,6 +150,29 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [draftItem, setDraftItem] = useState<VaultItem | null>(null);
   const [listVisible, setListVisible] = useState(true);
+  const [listSlotOpen, setListSlotOpen] = useState(true);
+  const listCloseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (listCloseTimerRef.current !== null) {
+      window.clearTimeout(listCloseTimerRef.current);
+      listCloseTimerRef.current = null;
+    }
+    if (listVisible || prefersReduced) {
+      setListSlotOpen(listVisible);
+      return;
+    }
+    listCloseTimerRef.current = window.setTimeout(() => {
+      listCloseTimerRef.current = null;
+      setListSlotOpen(false);
+    }, 100);
+    return () => {
+      if (listCloseTimerRef.current !== null) {
+        window.clearTimeout(listCloseTimerRef.current);
+        listCloseTimerRef.current = null;
+      }
+    };
+  }, [listVisible, prefersReduced]);
 
   const orbitMap = useMemo(() => {
     const map = new Map<string, OrbitDef>();
@@ -209,6 +235,59 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
     }
     return filteredNotes[0] ?? null;
   }, [draftItem, selectedNoteId, filteredNotes, items]);
+
+  const activeNoteHydrationKey = activeNote
+    ? `${activeNote.id}:${activeNote.updatedAt}:${activeNote.isCardProjection ? '1' : '0'}`
+    : '';
+  const [hydratedResult, setHydratedResult] = useState<{ key: string; item: VaultItem } | null>(null);
+  const hydrateSeqRef = useRef(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const activeNoteRef = useRef<VaultItem | null>(activeNote);
+  activeNoteRef.current = activeNote;
+  const activeNoteIdRef = useRef<string | null>(null);
+  activeNoteIdRef.current = activeNote?.id ?? null;
+  const recentlyUpdatedRef = useRef<Map<string, { item: VaultItem; baseUpdatedAt: number }>>(new Map());
+
+  useEffect(() => {
+    const seq = ++hydrateSeqRef.current;
+    const curNote = activeNoteRef.current;
+    if (!curNote || draftItem || !curNote.isCardProjection) {
+      return () => {
+        hydrateSeqRef.current += 1;
+      };
+    }
+    const key = activeNoteHydrationKey;
+    void hydrateFullVaultItem(curNote).then((full) => {
+      if (hydrateSeqRef.current !== seq) return;
+      setHydratedResult({ key, item: full });
+    });
+    return () => {
+      hydrateSeqRef.current += 1;
+    };
+  }, [activeNoteHydrationKey, draftItem]);
+
+  const editorNote = useMemo(() => {
+    if (draftItem) return draftItem;
+    if (!activeNote) return null;
+    const recent = recentlyUpdatedRef.current.get(activeNote.id);
+    if (recent) {
+      if (activeNote.updatedAt === recent.baseUpdatedAt && !recent.item.isCardProjection) {
+        return recent.item;
+      }
+      if (activeNote.updatedAt !== recent.baseUpdatedAt) {
+        recentlyUpdatedRef.current.delete(activeNote.id);
+      }
+    }
+    if (!activeNote.isCardProjection) return activeNote;
+    if (hydratedResult && hydratedResult.key === activeNoteHydrationKey) {
+      return hydratedResult.item;
+    }
+    if (hydratedResult && hydratedResult.item.id === activeNote.id && !hydratedResult.item.isCardProjection && hydratedResult.item.updatedAt >= activeNote.updatedAt) {
+      return hydratedResult.item;
+    }
+    return activeNote.isBodyTruncated ? null : activeNote;
+  }, [draftItem, activeNote, activeNoteHydrationKey, hydratedResult]);
 
   const handleStartNewDraft = () => {
     setDraftItem(makeInlineDraftItem(defaultOrbitId, defaultFocusBoardId));
@@ -436,26 +515,37 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
       data-testid="notes-hub-view"
       className="h-full w-full min-h-0 flex overflow-hidden bg-[var(--k-bg-canvas)]"
     >
-      {/* Left Document List Pane (smoothly animates width into distraction-free writing mode) */}
-      <motion.aside
+      {/* Left Document List Pane (1-frame slot snap + GPU translate3d/opacity, zero frame-by-frame width reflow) */}
+      <aside
         data-testid="notes-list-pane"
-        initial={false}
-        animate={
-          listVisible
-            ? { width: 304, opacity: 1 }
-            : { width: 0, opacity: 0 }
-        }
-        transition={
-          prefersReduced
-            ? { duration: 0.08 }
-            : { duration: 0.22, ease: [0.32, 0.72, 0, 1] }
-        }
-        style={{ pointerEvents: listVisible ? 'auto' : 'none' }}
-        className={`shrink-0 h-full min-h-0 bg-[var(--k-bg-rail)]/55 flex flex-col overflow-hidden ${
-          listVisible ? 'border-r border-[var(--k-border-hairline)]' : ''
+        aria-hidden={!listVisible}
+        style={{
+          width: listSlotOpen ? '304px' : '0px',
+          display: listSlotOpen ? 'flex' : 'none',
+          pointerEvents: listVisible ? 'auto' : 'none',
+        }}
+        className={`shrink-0 h-full min-h-0 bg-[var(--k-bg-rail)]/55 flex-col overflow-x-clip ${
+          listSlotOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
         }`}
       >
-        <div className="w-[304px] h-full min-h-0 flex flex-col overflow-hidden">
+        <motion.div
+          initial={false}
+          animate={
+            listVisible
+              ? { opacity: 1, transform: 'translate3d(0px, 0px, 0px)' }
+              : prefersReduced
+                ? { opacity: 0, transform: 'translate3d(0px, 0px, 0px)' }
+                : { opacity: 0, transform: 'translate3d(-16px, 0px, 0px)' }
+          }
+          transition={
+            prefersReduced
+              ? { duration: 0.06 }
+              : listVisible
+                ? { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
+                : { duration: 0.095, ease: [0.32, 0.72, 0, 1] }
+          }
+          className="w-[304px] h-full min-h-0 flex flex-col overflow-hidden will-change-[transform,opacity]"
+        >
           {/* Header + Create */}
           <div className="px-3.5 pt-3 pb-2.5 border-b border-[var(--k-border-hairline)] space-y-2.5 shrink-0">
             <div className="flex items-center justify-between gap-2">
@@ -615,20 +705,21 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
               </>
             )}
           </div>
-        </div>
-      </motion.aside>
+        </motion.div>
+      </aside>
 
       {/* Right Full-Height Inline Document Editor */}
       <div data-testid="notes-editor-pane" className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
-        {activeNote ? (
+        {editorNote ? (
           <NoteStudio
-            item={activeNote}
+            item={editorNote}
             isDraft={Boolean(draftItem)}
             orbits={orbits}
             focusBoards={focusBoards}
             allItemsForLinks={allItemsForLinks ?? items}
+            availableTags={availableTags}
             soundEnabled={soundEnabled}
-            layoutMode={listVisible ? 'center' : 'full'}
+            layoutMode={listSlotOpen ? 'center' : 'full'}
             leadingBarSlot={
               <TooltipHint label={listVisible ? t('notes.hub.hideList') : t('notes.hub.showList')}>
                 <button
@@ -646,7 +737,23 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
                 </button>
               </TooltipHint>
             }
-            onItemUpdated={onItemUpdated}
+            onItemUpdated={(updated) => {
+              const propItem = itemsRef.current.find((it) => it.id === updated.id);
+              if (propItem) {
+                recentlyUpdatedRef.current.set(updated.id, {
+                  item: updated,
+                  baseUpdatedAt: propItem.updatedAt,
+                });
+              }
+              setHydratedResult((prev) => {
+                if (activeNoteIdRef.current !== updated.id) return prev;
+                return {
+                  key: `${updated.id}:${updated.updatedAt}:${updated.isCardProjection ? '1' : '0'}`,
+                  item: updated,
+                };
+              });
+              onItemUpdated(updated);
+            }}
             onDraftPersisted={(created) => {
               setDraftItem(null);
               setSelectedNoteId(created.id);

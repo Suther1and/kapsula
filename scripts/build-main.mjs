@@ -24,6 +24,7 @@ await esbuild.build({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
+  minify: true,
   sourcemap: false,
   logLevel: 'info',
 });
@@ -36,6 +37,7 @@ await esbuild.build({
   format: 'cjs',
   outfile: path.join(distPreloadDir, 'index.js'),
   external: ['electron', 'node:*'],
+  minify: true,
   sourcemap: false,
   logLevel: 'info',
 });

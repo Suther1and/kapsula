@@ -35,7 +35,14 @@ import {
 } from '@phosphor-icons/react';
 import NumberFlow from '@number-flow/react';
 import { toast } from 'sonner';
-import type { CreateTaskInput, OrbitDef, TaskBoardColumn, TaskPriority, VaultTaskEntry } from '@shared/types';
+import type {
+  CreateTaskInput,
+  OrbitDef,
+  TaskBoardColumn,
+  TaskPriority,
+  VaultItem,
+  VaultTaskEntry,
+} from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { parseRussianEvent } from '@shared/russian-event-parser';
 import {
@@ -76,7 +83,12 @@ interface TasksHubViewProps {
   onCreateTask?: (input: CreateTaskInput) => Promise<void>;
   scopedOrbitId?: string | null;
   scopedBoardId?: string | null;
-  onTasksChanged?: () => void;
+  initialShowColumnIcons?: boolean;
+  onTasksChanged?: (
+    nextTasks?: VaultTaskEntry[],
+    updatedItems?: VaultItem[],
+    deletedItemIds?: string[]
+  ) => void;
 }
 
 type GroupMode = 'due' | 'orbit' | 'note';
@@ -254,6 +266,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
   onCreateTask,
   scopedOrbitId = null,
   scopedBoardId = null,
+  initialShowColumnIcons,
   onTasksChanged,
 }) => {
   const { t, locale } = useI18n();
@@ -280,7 +293,17 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       icon: savedIcons[c.id] ?? c.icon,
     }));
   });
-  const [showColumnIcons, setShowColumnIcons] = useState<boolean>(readPersistedShowColumnIcons);
+  const [showColumnIcons, setShowColumnIcons] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(TASKS_SHOW_COL_ICONS_STORAGE_KEY);
+      if (raw === '0' || raw === 'false') return false;
+      if (raw === '1' || raw === 'true') return true;
+    } catch {
+      // ignore
+    }
+    return initialShowColumnIcons ?? readPersistedShowColumnIcons();
+  });
+  const initialShowColumnIconsRef = useRef(initialShowColumnIcons);
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
   const [newColColor, setNewColColor] = useState<string>(COLUMN_COLOR_SWATCHES[4]!.hex);
@@ -408,23 +431,25 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
       })
       .catch(() => {});
 
-    window.kapsula
-      ?.getSettings?.()
-      .then((s) => {
-        if (!cancelled && typeof s?.showBoardColumnIcons === 'boolean') {
-          const hasLocalPref = (() => {
-            try {
-              return localStorage.getItem(TASKS_SHOW_COL_ICONS_STORAGE_KEY) !== null;
-            } catch {
-              return false;
+    if (initialShowColumnIconsRef.current === undefined) {
+      window.kapsula
+        ?.getSettings?.()
+        .then((s) => {
+          if (!cancelled && typeof s?.showBoardColumnIcons === 'boolean') {
+            const hasLocalPref = (() => {
+              try {
+                return localStorage.getItem(TASKS_SHOW_COL_ICONS_STORAGE_KEY) !== null;
+              } catch {
+                return false;
+              }
+            })();
+            if (!hasLocalPref) {
+              setShowColumnIcons(s.showBoardColumnIcons);
             }
-          })();
-          if (!hasLocalPref) {
-            setShowColumnIcons(s.showBoardColumnIcons);
           }
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    }
 
     return () => {
       cancelled = true;
@@ -1415,16 +1440,21 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     if (targets.length === 0) return;
     setBulkBusy(true);
     try {
-      for (const taskItem of targets) {
-        await onToggleTask(taskItem);
-      }
+      const res = await window.kapsula.bulkToggleTasks(
+        targets.map((taskItem) => ({
+          itemId: taskItem.itemId,
+          sourceType: taskItem.sourceType,
+          taskIndex: taskItem.taskIndex,
+          done: markDone,
+        }))
+      );
       setSelectedTaskIds([]);
       toast.success(
         t(markDone ? 'tasks.toast.bulkCompleted' : 'tasks.toast.bulkReopened', {
           count: targets.length,
         })
       );
-      onTasksChanged?.();
+      onTasksChanged?.(res.tasks, res.updatedItems);
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
@@ -1437,16 +1467,16 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     if (targets.length === 0) return;
     setBulkBusy(true);
     try {
-      for (const taskItem of targets) {
-        await window.kapsula.updateTaskMeta({
+      const res = await window.kapsula.bulkUpdateTasksMeta({
+        tasks: targets.map((taskItem) => ({
           itemId: taskItem.itemId,
           taskKey: getCanonicalTaskKey(taskItem),
-          ...patch,
-        });
-      }
+        })),
+        ...patch,
+      });
       setSelectedTaskIds([]);
       toast.success(t('tasks.toast.bulkMoved', { count: targets.length }));
-      onTasksChanged?.();
+      onTasksChanged?.(res.tasks, res.updatedItems);
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     } finally {
@@ -1459,15 +1489,15 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
     if (targets.length === 0) return;
     setBulkBusy(true);
     try {
-      for (const taskItem of targets) {
-        await window.kapsula.deleteVaultTask({
+      const res = await window.kapsula.bulkDeleteTasks(
+        targets.map((taskItem) => ({
           itemId: taskItem.itemId,
           taskKey: getCanonicalTaskKey(taskItem),
-        });
-      }
+        }))
+      );
       setSelectedTaskIds([]);
       toast.success(t('tasks.toast.bulkDeleted', { count: targets.length }));
-      onTasksChanged?.();
+      onTasksChanged?.(res.tasks, res.updatedItems, res.deletedItemIds);
     } catch (err) {
       toast.error(friendlyErrorMessage(err, t('tasks.err.delete'), locale));
     } finally {
@@ -2249,9 +2279,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                             />
                           ) : null}
                           <ContextMenuSurface entries={buildTaskContextMenu(task)}>
-                            <motion.div
-                              layout={!prefersReduced && !dragVisual?.active}
-                              transition={{ type: 'spring', stiffness: 460, damping: 36, mass: 0.7 }}
+                            <div
                               data-kanban-card-id={task.id}
                               data-testid={`kanban-card-${task.id}`}
                               onPointerDown={(e) => handleCardPointerDown(e, task)}
@@ -2267,7 +2295,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               }`}
                             >
                               {renderKanbanCardBody(task, false)}
-                            </motion.div>
+                            </div>
                           </ContextMenuSurface>
                         </React.Fragment>
                       );
@@ -2834,7 +2862,6 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                         return (
                           <ContextMenuSurface key={task.id} entries={buildTaskContextMenu(task)}>
                             <motion.div
-                              layout={!prefersReduced}
                               initial={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
                               animate={prefersReduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
                               exit={prefersReduced ? { opacity: 0 } : { opacity: 0, height: 0, marginBottom: 0 }}

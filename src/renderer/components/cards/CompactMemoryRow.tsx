@@ -55,7 +55,7 @@ function renderTypeBadge(item: VaultItem) {
   }
 }
 
-export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
+export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = React.memo(({
   item,
   orbit,
   selected = false,
@@ -134,7 +134,13 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
               }`}
             >
               {thumbUrl ? (
-                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 renderTypeBadge(item)
               )}
@@ -233,4 +239,4 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -209,6 +209,10 @@ export interface VaultItem {
   annotations: CanvasAnnotation[];
   linksOut: string[];
   syncVersion?: number;
+  isCardProjection?: boolean;
+  isBodyTruncated?: boolean;
+  hasCheckbox?: boolean;
+  bodyLength?: number;
 }
 
 export interface OrbitDef {
@@ -421,6 +425,7 @@ export interface VaultQuery {
   createdBefore?: number;
   limit?: number;
   offset?: number;
+  projection?: 'card' | 'full';
 }
 
 export interface AskVaultCitation {
@@ -813,4 +818,44 @@ export interface ParsedEmailSummary {
   bodyText: string;
   bodyMarkdown: string;
   attachments: ParsedEmailAttachment[];
+}
+
+export interface BulkUpdateItemsResult {
+  items: VaultItem[];
+  count: number;
+  failedIds: string[];
+}
+
+export interface BulkDeleteItemsResult {
+  deletedIds: string[];
+  purgedIds: string[];
+  failedIds: string[];
+}
+
+export interface BulkToggleTaskInput {
+  itemId: string;
+  sourceType: 'markdown' | 'voice_action';
+  taskIndex: number;
+  done: boolean;
+}
+
+export interface BulkUpdateTasksMetaInput {
+  tasks: Array<{ itemId: string; taskKey: string }>;
+  orbit?: string | null;
+  priority?: TaskPriority;
+  dueAt?: number | null;
+  columnId?: string;
+  focusBoardId?: string | null;
+  notes?: string | null;
+}
+
+export interface BulkTasksMutationResult {
+  updatedItems: VaultItem[];
+  tasks: VaultTaskEntry[];
+}
+
+export interface BulkDeleteTasksResult {
+  updatedItems: VaultItem[];
+  deletedItemIds: string[];
+  tasks: VaultTaskEntry[];
 }

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
@@ -15,6 +15,7 @@ import type { OrbitDef, VaultItem } from '@shared/types';
 import { cleanBrokenTextArtifacts } from '@shared/html-entities';
 import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, getDnaHumanLabel, getMediaUrl } from '../../lib/format';
+import { hydrateFullVaultItem } from '../../lib/hydrate-item';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
 import { InlineReferenceVideo } from './InlineReferenceVideo';
 import { SectionIcon } from './SectionIcon';
@@ -28,6 +29,7 @@ interface QuickLookModalProps {
   onClose: () => void;
   onEditInStudio: (item: VaultItem) => void;
   onTogglePin?: (item: VaultItem) => void;
+  onExited?: () => void;
 }
 
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|m4v)$/i;
@@ -40,18 +42,43 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
   onClose,
   onEditInStudio,
   onTogglePin,
+  onExited,
 }) => {
   const { t, locale } = useI18n();
   const prefersReduced = useReducedMotion();
   const scopedAccentStyle = useScopedAccentStyle();
+  const [hydratedItem, setHydratedItem] = useState<VaultItem | null>(item);
+  const hydrateSeqRef = useRef(0);
+
+  useEffect(() => {
+    const seq = ++hydrateSeqRef.current;
+    setHydratedItem(item);
+    if (!item || !item.isCardProjection) {
+      return () => {
+        hydrateSeqRef.current += 1;
+      };
+    }
+    void hydrateFullVaultItem(item).then((full) => {
+      if (hydrateSeqRef.current !== seq) return;
+      setHydratedItem(full);
+    });
+    return () => {
+      hydrateSeqRef.current += 1;
+    };
+  }, [item]);
+
+  const activeItem =
+    item && hydratedItem && hydratedItem.id === item.id && !hydratedItem.isCardProjection
+      ? hydratedItem
+      : item;
 
   const navigable = itemsList.filter((x) => x.dna !== 'secret');
-  const currentIndex = item ? navigable.findIndex((x) => x.id === item.id) : -1;
+  const currentIndex = activeItem ? navigable.findIndex((x) => x.id === activeItem.id) : -1;
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < navigable.length - 1;
 
   useEffect(() => {
-    if (!item) return;
+    if (!activeItem) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === ' ') {
         e.preventDefault();
@@ -66,27 +93,27 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
       } else if (e.key === 'Enter') {
         e.preventDefault();
         onClose();
-        onEditInStudio(item);
+        onEditInStudio(activeItem);
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [item, hasPrev, hasNext, currentIndex, navigable, onClose, onSelectItem, onEditInStudio]);
+  }, [activeItem, hasPrev, hasNext, currentIndex, navigable, onClose, onSelectItem, onEditInStudio]);
 
   if (typeof document === 'undefined') return null;
 
-  const isVideo = Boolean(item?.mediaPath && VIDEO_EXT_RE.test(item.mediaPath));
-  const imgUrl = item ? getMediaUrl(item.imagePath || item.thumbPath) : null;
-  const audioUrl = item && item.dna === 'voice' ? getMediaUrl(item.mediaPath) : null;
-  const cleanTitle = item ? cleanBrokenTextArtifacts(item.title || getDnaHumanLabel(item), true) : '';
-  const bodyText = item
-    ? cleanBrokenTextArtifacts(item.body || item.mediaMeta?.transcript || item.summary || '', false)
+  const isVideo = Boolean(activeItem?.mediaPath && VIDEO_EXT_RE.test(activeItem.mediaPath));
+  const imgUrl = activeItem ? getMediaUrl(activeItem.imagePath || activeItem.thumbPath) : null;
+  const audioUrl = activeItem && activeItem.dna === 'voice' ? getMediaUrl(activeItem.mediaPath) : null;
+  const cleanTitle = activeItem ? cleanBrokenTextArtifacts(activeItem.title || getDnaHumanLabel(activeItem), true) : '';
+  const bodyText = activeItem
+    ? cleanBrokenTextArtifacts(activeItem.body || activeItem.mediaMeta?.transcript || activeItem.summary || '', false)
     : '';
-  const urlActions = (item?.extractedActions ?? []).filter((a) => a.type === 'url').slice(0, 6);
+  const urlActions = (activeItem?.extractedActions ?? []).filter((a) => a.type === 'url').slice(0, 6);
 
   return createPortal(
-    <AnimatePresence>
-      {item ? (
+    <AnimatePresence onExitComplete={onExited}>
+      {activeItem ? (
         <motion.div
           key="quick-look-root"
           data-testid="quick-look-modal"
@@ -99,33 +126,22 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
         >
           <motion.div
             onClick={onClose}
-            initial={
-              prefersReduced
-                ? { opacity: 0 }
-                : {
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    backdropFilter: 'blur(0px)',
-                  }
-            }
-            animate={
-              prefersReduced
-                ? { opacity: 1 }
-                : {
-                    backgroundColor: 'var(--k-bg-backdrop)',
-                    backdropFilter: 'blur(6px)',
-                    transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
-                  }
-            }
-            exit={
-              prefersReduced
-                ? { opacity: 0, transition: { duration: 0.12 } }
-                : {
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    backdropFilter: 'blur(0px)',
-                    transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
-                  }
-            }
-            className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
+            initial={{ opacity: 0 }}
+            animate={{
+              opacity: 1,
+              transition: prefersReduced
+                ? { duration: 0.1 }
+                : { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+            }}
+            exit={{
+              opacity: 0,
+              transition: prefersReduced
+                ? { duration: 0.08 }
+                : { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+            }}
+            className={`fixed inset-0 bg-[var(--k-bg-backdrop)] ${
+              prefersReduced ? 'backdrop-blur-[4px]' : 'backdrop-blur-[6px]'
+            }`}
           />
 
           {/* Prev / Next floating arrows */}
@@ -152,7 +168,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
           ) : null}
 
           <motion.div
-            key={item.id}
+            key={activeItem.id}
             initial={
               prefersReduced
                 ? { opacity: 0 }
@@ -192,7 +208,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--k-border-hairline)] shrink-0">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)] shrink-0">
-                  {getDnaHumanLabel(item, locale)}
+                  {getDnaHumanLabel(activeItem, locale)}
                 </span>
                 {orbit ? (
                   <span
@@ -207,7 +223,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   </span>
                 ) : null}
                 <span className="text-[11.5px] text-[var(--k-ink-muted)] truncate">
-                  {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
+                  {formatRelativeDate(activeItem.contentUpdatedAt || activeItem.createdAt, locale)}
                 </span>
               </div>
 
@@ -215,28 +231,42 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                 {onTogglePin ? (
                   <button
                     type="button"
-                    onClick={() => onTogglePin(item)}
-                    aria-label={item.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
+                    onClick={() => onTogglePin(activeItem)}
+                    aria-label={activeItem.isPinned ? t('ui.quickLook.unpin') : t('ui.quickLook.pin')}
                     className={`k-interactive w-8 h-8 rounded-lg inline-flex items-center justify-center cursor-pointer ${
-                      item.isPinned
+                      activeItem.isPinned
                         ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                         : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
                     }`}
                   >
-                    <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-4 h-4" />
+                    <PushPin weight={activeItem.isPinned ? 'fill' : 'regular'} className="w-4 h-4" />
                   </button>
                 ) : null}
 
                 <button
                   type="button"
                   onClick={() => {
-                    if (imgUrl && item.dna === 'shot') {
-                      void window.kapsula.copyImage(item.imagePath || item.thumbPath || '');
-                      toast.success(t('ui.quickLook.imageCopied'));
-                    } else {
-                      void window.kapsula.copyText(item.url || bodyText || cleanTitle);
-                      toast.success(t('common.copied'));
-                    }
+                    void (async () => {
+                      if (imgUrl && activeItem.dna === 'shot') {
+                        await window.kapsula.copyImage(activeItem.imagePath || activeItem.thumbPath || '');
+                        toast.success(t('ui.quickLook.imageCopied'));
+                      } else {
+                        let resolved = activeItem;
+                        if (!resolved.url && resolved.isCardProjection && resolved.isBodyTruncated) {
+                          resolved = await hydrateFullVaultItem(resolved);
+                        }
+                        const resolvedTitle = cleanBrokenTextArtifacts(
+                          resolved.title || getDnaHumanLabel(resolved),
+                          true
+                        );
+                        const resolvedBody = cleanBrokenTextArtifacts(
+                          resolved.body || resolved.mediaMeta?.transcript || resolved.summary || '',
+                          false
+                        );
+                        await window.kapsula.copyText(resolved.url || resolvedBody || resolvedTitle);
+                        toast.success(t('common.copied'));
+                      }
+                    })();
                   }}
                   className="k-interactive h-8 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] inline-flex items-center gap-1.5 cursor-pointer"
                 >
@@ -249,7 +279,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                   data-testid="quick-look-edit-btn"
                   onClick={() => {
                     onClose();
-                    onEditInStudio(item);
+                    onEditInStudio(activeItem);
                   }}
                   className="k-interactive h-8 px-3 rounded-lg bg-[var(--k-accent)] hover:bg-[var(--k-accent-hover)] text-[var(--k-ink-on-accent)] text-[12px] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
@@ -270,18 +300,18 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
 
             {/* Content */}
             <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4">
-              {isVideo && item.mediaPath ? (
+              {isVideo && activeItem.mediaPath ? (
                 <InlineReferenceVideo
-                  mediaPath={item.mediaPath}
-                  posterPath={item.thumbPath || item.imagePath}
+                  mediaPath={activeItem.mediaPath}
+                  posterPath={activeItem.thumbPath || activeItem.imagePath}
                   heightClass="max-h-[420px]"
-                  onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
+                  onOpenFull={() => void window.kapsula.openMediaFile(activeItem.mediaPath!)}
                 />
-              ) : (item.mediaMeta?.cachedVideoFile || item.mediaMeta?.youtubeVideoId) ? (
+              ) : (activeItem.mediaMeta?.cachedVideoFile || activeItem.mediaMeta?.youtubeVideoId) ? (
                 <InlineReferenceVideo
-                  cachedVideoFile={item.mediaMeta?.cachedVideoFile}
-                  youtubeVideoId={item.mediaMeta?.youtubeVideoId}
-                  posterPath={item.thumbPath || item.imagePath}
+                  cachedVideoFile={activeItem.mediaMeta?.cachedVideoFile}
+                  youtubeVideoId={activeItem.mediaMeta?.youtubeVideoId}
+                  posterPath={activeItem.thumbPath || activeItem.imagePath}
                   heightClass="max-h-[420px]"
                 />
               ) : imgUrl ? (
@@ -294,10 +324,10 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                 </div>
               ) : null}
 
-              {item.colorPalette && item.colorPalette.length > 0 ? (
+              {activeItem.colorPalette && activeItem.colorPalette.length > 0 ? (
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-[var(--k-ink-muted)]">{t('ui.quickLook.palette')}</span>
-                  {item.colorPalette.slice(0, 6).map((hex) => (
+                  {activeItem.colorPalette.slice(0, 6).map((hex) => (
                     <button
                       key={hex}
                       type="button"
@@ -322,13 +352,13 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                 <h2 className="m-0 text-[20px] font-semibold tracking-[-0.02em] leading-snug text-[var(--k-ink-primary)] k-selectable">
                   {cleanTitle}
                 </h2>
-                {item.url ? (
+                {activeItem.url ? (
                   <button
                     type="button"
-                    onClick={() => void window.kapsula.openExternal(item.url!)}
+                    onClick={() => void window.kapsula.openExternal(activeItem.url!)}
                     className="k-interactive inline-flex items-center gap-1.5 text-[12.5px] text-[var(--k-accent)] hover:underline cursor-pointer max-w-full"
                   >
-                    <span className="truncate">{item.url}</span>
+                    <span className="truncate">{activeItem.url}</span>
                     <ArrowSquareOut className="w-3.5 h-3.5 shrink-0" />
                   </button>
                 ) : null}
@@ -337,9 +367,9 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
               {audioUrl ? (
                 <WaveformAudioPlayer
                   src={audioUrl}
-                  fallbackDurationSec={item.mediaDurationSec}
-                  peaks={item.mediaMeta?.waveformPeaks}
-                  seedKey={item.id}
+                  fallbackDurationSec={activeItem.mediaDurationSec}
+                  peaks={activeItem.mediaMeta?.waveformPeaks}
+                  seedKey={activeItem.id}
                 />
               ) : null}
 

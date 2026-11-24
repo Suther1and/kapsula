@@ -484,7 +484,21 @@ export class SyncEngine {
     this.repo.setMutationListener(() => {
       this.scheduleDirtyPush();
     });
+    this.updateDirtyTrackingFromRepoState();
     setSyncCryptoLocale(this.repo.getLocale());
+  }
+
+  private hasStoredSyncAccount(): boolean {
+    return Boolean(
+      this.userId ||
+        this.repo.getSyncState('last_user_id') ||
+        this.repo.getSyncState('last_data_owner_id') ||
+        this.repo.getSyncState('pending_confirm_email')
+    );
+  }
+
+  private updateDirtyTrackingFromRepoState(): void {
+    this.repo.setSyncDirtyTrackingEnabled(this.hasStoredSyncAccount());
   }
 
   public setLocale(locale: AppLocale): void {
@@ -619,6 +633,10 @@ export class SyncEngine {
           this.state = 'awaiting_email_confirm';
         } else {
           this.state = 'signed_out';
+          if (!this.hasStoredSyncAccount()) {
+            this.repo.setSyncDirtyTrackingEnabled(false);
+            this.repo.clearUnsentSyncDirty();
+          }
         }
         this.emitStatus();
         return this.getStatus();
@@ -626,6 +644,7 @@ export class SyncEngine {
 
       this.userId = data.session.user.id;
       this.email = data.session.user.email ?? null;
+      this.repo.setSyncDirtyTrackingEnabled(true);
       this.repo.deleteSyncState('pending_confirm_email');
 
       await this.resolveKeyStateAfterAuth();
@@ -653,6 +672,7 @@ export class SyncEngine {
         }
       } else {
         this.state = 'signed_out';
+        this.updateDirtyTrackingFromRepoState();
       }
       this.emitStatus();
     }
@@ -705,6 +725,7 @@ export class SyncEngine {
 
   private async resolveKeyStateAfterAuth(): Promise<void> {
     if (!this.userId) return;
+    this.repo.setSyncDirtyTrackingEnabled(true);
     this.repo.setSyncState('last_user_id', this.userId);
     this.repo.setSyncState('last_data_owner_id', this.userId);
     if (this.email) this.repo.setSyncState('last_user_email', this.email);
@@ -1531,6 +1552,7 @@ export class SyncEngine {
     this.lastError = null;
     this.devices = [];
     this.state = 'signed_out';
+    this.repo.setSyncDirtyTrackingEnabled(false);
     this.emitStatus();
     return this.getStatus();
   }
@@ -1581,6 +1603,7 @@ export class SyncEngine {
   }
 
   private ensureInitialEnqueueForUser(userId: string): void {
+    this.repo.setSyncDirtyTrackingEnabled(true);
     if (this.repo.getSyncState('initial_enqueued_user') !== userId) {
       this.repo.enqueueAllEntitiesForInitialSync();
       this.repo.setSyncState('initial_enqueued_user', userId);

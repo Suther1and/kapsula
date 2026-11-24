@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ArrowCounterClockwise,
   Bell,
@@ -22,6 +22,7 @@ import type { FocusBoard, OrbitDef, VaultItem } from '@shared/types';
 import { getRedundantCardTags, isDedicatedNote } from '@shared/item-helpers';
 import { useI18n } from '@shared/i18n/react';
 import { formatRelativeDate, formatReminderStamp } from '../../lib/format';
+import { hydrateFullVaultItem } from '../../lib/hydrate-item';
 import { type ContextMenuEntry, ContextMenuSurface } from '../ui/ContextMenuSurface';
 import { PopoverSurface } from '../ui/PopoverSurface';
 import { SectionIcon } from '../ui/SectionIcon';
@@ -95,6 +96,19 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
 }) => {
   const { t, locale } = useI18n();
   const [orbitPopoverOpen, setOrbitPopoverOpen] = useState(false);
+  const handleOpenCompactRow = useCallback(
+    (target: VaultItem) => {
+      if (target.dna === 'secret') onOpenSecretSheet?.(target);
+      else onOpenStudio(target);
+    },
+    [onOpenSecretSheet, onOpenStudio]
+  );
+  const handleOpenSecret = useCallback(
+    (sec: VaultItem) => {
+      onOpenSecretSheet?.(sec);
+    },
+    [onOpenSecretSheet]
+  );
 
   const buildContextMenuEntries = (): ContextMenuEntry[] => {
     const entries: ContextMenuEntry[] = [
@@ -227,8 +241,11 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
         label: item.url ? t('cards.copyLink') : t('cards.ctx.copyText'),
         icon: <Copy className="w-3.5 h-3.5" />,
         onSelect: () => {
-          void window.kapsula.copyText(item.url || item.body || item.title);
-          toast.success(t('common.copied'));
+          void (async () => {
+            const resolved = !item.url && item.isCardProjection ? await hydrateFullVaultItem(item) : item;
+            await window.kapsula.copyText(resolved.url || resolved.body || resolved.title);
+            toast.success(t('common.copied'));
+          })();
         },
       });
       if (onDuplicate) {
@@ -285,10 +302,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
             selected={selected}
             selectionMode={selectionMode}
             onToggleSelect={onToggleSelect}
-            onOpen={(target) => {
-              if (target.dna === 'secret') onOpenSecretSheet?.(target);
-              else onOpenStudio(target);
-            }}
+            onOpen={handleOpenCompactRow}
             onToggleMarkdownTask={onToggleMarkdownTask}
           />
         </div>
@@ -312,7 +326,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
             compactList={false}
             vaultLocked={vaultLocked}
             wipeSeconds={wipeSeconds}
-            onOpen={(sec) => onOpenSecretSheet?.(sec)}
+            onOpen={handleOpenSecret}
             onDelete={onDelete}
             onUnlockRequest={onUnlockVaultRequest}
           />

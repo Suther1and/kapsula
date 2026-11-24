@@ -106,6 +106,7 @@ export async function saveAndInsertImageFiles(
     insertPos?: number | null;
     onBeforeSave?: () => void;
     onAfterSave?: () => void;
+    shouldInsert?: () => boolean;
   }
 ): Promise<number> {
   if (!files.length) return 0;
@@ -143,7 +144,7 @@ export async function saveAndInsertImageFiles(
       insertedNodes.push({ src, alt: '' });
     }
 
-    if (insertedNodes.length > 0 && !editor.isDestroyed) {
+    if (insertedNodes.length > 0 && !editor.isDestroyed && (opts?.shouldInsert ? opts.shouldInsert() : true)) {
       // Place each inserted image in its own clean paragraph followed by an empty paragraph
       // so images never share a `<p>` with typed prose via `<br>` (keeps gutter `+` accurate).
       const content: JSONContent[] = [

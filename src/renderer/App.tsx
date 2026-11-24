@@ -12,16 +12,22 @@ import {
 } from './lib/appearance';
 import { setGlobalTactileSoundEnabled } from './lib/tactileSound';
 
-const StudioWorkspace = lazy(() =>
-  import('./surfaces/StudioWorkspace').then((m) => ({ default: m.StudioWorkspace }))
-);
-const CommandHudSurface = lazy(() =>
-  import('./surfaces/CommandHudSurface').then((m) => ({ default: m.CommandHudSurface }))
-);
+const loadStudioWorkspace = () =>
+  import('./surfaces/StudioWorkspace').then((m) => ({ default: m.StudioWorkspace }));
+const loadCommandHudSurface = () =>
+  import('./surfaces/CommandHudSurface').then((m) => ({ default: m.CommandHudSurface }));
+
+const StudioWorkspace = lazy(loadStudioWorkspace);
+const CommandHudSurface = lazy(loadCommandHudSurface);
 
 function getSurfaceKind(): 'vault' | 'hud' {
+  if (typeof window === 'undefined') return 'vault';
   const params = new URLSearchParams(window.location.search);
   return params.get('surface') === 'hud' ? 'hud' : 'vault';
+}
+
+if (typeof window !== 'undefined') {
+  void (getSurfaceKind() === 'hud' ? loadCommandHudSurface() : loadStudioWorkspace());
 }
 
 export const App: React.FC = () => {

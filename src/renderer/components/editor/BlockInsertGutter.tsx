@@ -195,6 +195,13 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const gutterWrapRef = useRef<HTMLDivElement | null>(null);
+  const caretRafRef = useRef<number | null>(null);
+  const hoverRafRef = useRef<number | null>(null);
+  const pendingHoverRef = useRef<{
+    clientX: number;
+    clientY: number;
+    target: Node | null;
+  } | null>(null);
 
   const computePosTop = useCallback(
     (pos: number): number | null => {
@@ -228,48 +235,62 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
     }
   }, [editor, containerEl, computePosTop]);
 
+  const scheduleCaretSync = useCallback(() => {
+    if (caretRafRef.current !== null) return;
+    caretRafRef.current = window.requestAnimationFrame(() => {
+      caretRafRef.current = null;
+      syncToCaret();
+    });
+  }, [syncToCaret]);
+
   useEffect(() => {
     if (!editor || !containerEl) return;
-    const onSelection = () => syncToCaret();
-    const onFocus = () => syncToCaret();
+    const onSelection = () => scheduleCaretSync();
+    const onFocus = () => scheduleCaretSync();
     editor.on('selectionUpdate', onSelection);
     editor.on('focus', onFocus);
     editor.on('update', onSelection);
 
     // Re-align after inline images finish loading or container height changes
-    const onMediaLoad = () => syncToCaret();
+    const onMediaLoad = () => scheduleCaretSync();
     containerEl.addEventListener('load', onMediaLoad, true);
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => syncToCaret());
+      ro = new ResizeObserver(() => scheduleCaretSync());
       ro.observe(containerEl);
     }
 
-    const raf = window.requestAnimationFrame(syncToCaret);
+    scheduleCaretSync();
     return () => {
-      window.cancelAnimationFrame(raf);
+      if (caretRafRef.current !== null) {
+        window.cancelAnimationFrame(caretRafRef.current);
+        caretRafRef.current = null;
+      }
       ro?.disconnect();
       containerEl.removeEventListener('load', onMediaLoad, true);
       editor.off('selectionUpdate', onSelection);
       editor.off('focus', onFocus);
       editor.off('update', onSelection);
     };
-  }, [editor, containerEl, syncToCaret]);
+  }, [editor, containerEl, scheduleCaretSync]);
 
   // Track mouse hover over exact visual lines (not just top-level `<p>` boxes, which break
   // whenever a paragraph contains an inline block image above a line of text).
   useEffect(() => {
     if (!containerEl || !editor) return;
-    const onMouseMove = (e: MouseEvent) => {
-      if (menuOpen || editor.isDestroyed) return;
-      const targetNode = e.target as Node | null;
+    const processHover = () => {
+      hoverRafRef.current = null;
+      const pending = pendingHoverRef.current;
+      pendingHoverRef.current = null;
+      if (!pending || menuOpen || editor.isDestroyed) return;
+      const { clientX, clientY, target: targetNode } = pending;
       if (gutterWrapRef.current?.contains(targetNode)) return;
 
       const proseRoot = containerEl.querySelector('.ProseMirror') as HTMLElement | null;
       if (!proseRoot) return;
       const proseRect = proseRoot.getBoundingClientRect();
       // Keep the `+` button steady while the pointer travels left into the gutter zone
-      if (e.clientX < proseRect.left - 2) return;
+      if (clientX < proseRect.left - 2) return;
 
       // If pointer is directly inside an inline image figure, align to the image figure top
       const imgFig = (targetNode instanceof Element ? targetNode : targetNode?.parentElement)?.closest(
@@ -286,8 +307,8 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
 
       // Resolve the exact ProseMirror line at pointer Y so text lines below an inline image
       // align directly next to the text instead of jumping up to the image.
-      const probeX = Math.max(proseRect.left + 8, Math.min(e.clientX, proseRect.right - 8));
-      const hit = editor.view.posAtCoords({ left: probeX, top: e.clientY });
+      const probeX = Math.max(proseRect.left + 8, Math.min(clientX, proseRect.right - 8));
+      const hit = editor.view.posAtCoords({ left: probeX, top: clientY });
       if (hit && typeof hit.pos === 'number') {
         const y = computePosTop(hit.pos);
         if (y !== null) {
@@ -302,7 +323,7 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
       const children = Array.from(proseRoot.children) as HTMLElement[];
       for (const child of children) {
         const rect = child.getBoundingClientRect();
-        if (e.clientY >= rect.top - 4 && e.clientY <= rect.bottom + 4) {
+        if (clientY >= rect.top - 4 && clientY <= rect.bottom + 4) {
           const y = Math.max(0, Math.min(Math.max(0, box.height - 26), Math.round(rect.top - box.top)));
           setTopPx(y);
           setVisible(true);
@@ -310,8 +331,27 @@ export const BlockInsertGutter: React.FC<BlockInsertGutterProps> = ({
         }
       }
     };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (menuOpen || editor.isDestroyed) return;
+      pendingHoverRef.current = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        target: e.target as Node | null,
+      };
+      if (hoverRafRef.current === null) {
+        hoverRafRef.current = window.requestAnimationFrame(processHover);
+      }
+    };
     containerEl.addEventListener('mousemove', onMouseMove);
-    return () => containerEl.removeEventListener('mousemove', onMouseMove);
+    return () => {
+      containerEl.removeEventListener('mousemove', onMouseMove);
+      pendingHoverRef.current = null;
+      if (hoverRafRef.current !== null) {
+        window.cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+    };
   }, [containerEl, editor, menuOpen, computePosTop]);
 
   // Close popover on outside click / Esc

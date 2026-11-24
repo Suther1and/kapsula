@@ -17,7 +17,9 @@ import type {
 
 export type KapsulaEventName =
   | 'onVaultItemUpserted'
+  | 'onVaultItemsBatchUpserted'
   | 'onVaultItemDeleted'
+  | 'onVaultItemsBatchDeleted'
   | 'onVaultNewNote'
   | 'onOpenCalendar'
   | 'onOrbitsChanged'
@@ -399,8 +401,23 @@ export function createMockKapsulaApi(overrides: Partial<KapsulaBridgeApi> = {}) 
         ...(patch as Partial<VaultItem>),
       })
     ),
+    bulkUpdateItems: vi.fn(async (ids: string[], patch: Record<string, unknown>) => ({
+      items: ids.map((id) => makeVaultItem({ id, ...(patch as Partial<VaultItem>) })),
+      count: ids.length,
+      failedIds: [],
+    })),
     deleteItem: vi.fn(async () => true),
+    bulkDeleteItems: vi.fn(async (ids: string[]) => ({
+      deletedIds: ids,
+      purgedIds: [],
+      failedIds: [],
+    })),
     restoreItem: vi.fn(async () => makeVaultItem()),
+    bulkRestoreItems: vi.fn(async (ids: string[]) => ({
+      items: ids.map((id) => makeVaultItem({ id, deletedAt: null })),
+      count: ids.length,
+      failedIds: [],
+    })),
     purgeItem: vi.fn(async () => true),
     emptyTrash: vi.fn(async () => ({ purgedCount: 0 })),
     duplicateItem: vi.fn(async () => makeVaultItem({ id: 'dup-1' })),
@@ -515,11 +532,14 @@ export function createMockKapsulaApi(overrides: Partial<KapsulaBridgeApi> = {}) 
     revertItemToRevision: vi.fn(async () => null),
     listTasks: vi.fn(async () => []),
     toggleTask: vi.fn(async () => null),
+    bulkToggleTasks: vi.fn(async () => ({ updatedItems: [], tasks: [] })),
     moveTaskOnBoard: vi.fn(async () => makeVaultItem()),
     createTask: vi.fn(async () => makeVaultItem()),
     updateTaskMeta: vi.fn(async () => makeVaultItem()),
+    bulkUpdateTasksMeta: vi.fn(async () => ({ updatedItems: [], tasks: [] })),
     updateVaultTaskText: vi.fn(async () => makeVaultItem()),
     deleteVaultTask: vi.fn(async () => makeVaultItem()),
+    bulkDeleteTasks: vi.fn(async () => ({ updatedItems: [], deletedItemIds: [], tasks: [] })),
     listTaskBoardColumns: vi.fn(async () => makeDefaultColumns()),
     saveTaskBoardColumns: vi.fn(async (cols) => cols),
 
@@ -677,7 +697,9 @@ export function createMockKapsulaApi(overrides: Partial<KapsulaBridgeApi> = {}) 
     getPathForFile: vi.fn(() => ''),
 
     onVaultItemUpserted: subscribe('onVaultItemUpserted'),
+    onVaultItemsBatchUpserted: subscribe('onVaultItemsBatchUpserted'),
     onVaultItemDeleted: subscribe('onVaultItemDeleted'),
+    onVaultItemsBatchDeleted: subscribe('onVaultItemsBatchDeleted'),
     onVaultNewNote: subscribe('onVaultNewNote'),
     onOpenCalendar: subscribe('onOpenCalendar'),
     onOrbitsChanged: subscribe('onOrbitsChanged'),

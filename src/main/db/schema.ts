@@ -16,6 +16,8 @@ function ensureColumn(db: DatabaseSync, table: string, column: string, ddl: stri
 export function initSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA temp_store = MEMORY;
     PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
 
@@ -104,6 +106,9 @@ export function initSchema(db: DatabaseSync): void {
       created_at INTEGER NOT NULL
     );
 
+    CREATE INDEX IF NOT EXISTS idx_ai_cache_created_at
+      ON ai_cache(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS ai_usage_log (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
@@ -113,6 +118,9 @@ export function initSchema(db: DatabaseSync): void {
       cost_usd REAL NOT NULL,
       created_at INTEGER NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at
+      ON ai_usage_log(created_at DESC);
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,

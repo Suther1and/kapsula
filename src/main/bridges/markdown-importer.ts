@@ -391,6 +391,7 @@ export async function importMarkdownFolder(
         const saved = await deps.pipeline.saveNoteImageAsset({
           filePath: diskPath,
           fileName: path.basename(diskPath),
+          generateThumb: !coverFilename,
         });
         if (!coverFilename) {
           coverFilename = saved.filename;
@@ -416,6 +417,7 @@ export async function importMarkdownFolder(
         const saved = await deps.pipeline.saveNoteImageAsset({
           filePath: diskPath,
           fileName: path.basename(diskPath),
+          generateThumb: !coverFilename,
         });
         if (!coverFilename) {
           coverFilename = saved.filename;
@@ -640,6 +642,7 @@ export async function importNotionZip(
           base64: imgEntry.data.toString('base64'),
           mimeType: MIME_BY_IMAGE_EXT[ext] ?? 'image/png',
           fileName: path.posix.basename(imgEntry.name),
+          generateThumb: !coverFilename,
         });
         if (!coverFilename) {
           coverFilename = saved.filename;

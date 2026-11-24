@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import NumberFlow from '@number-flow/react';
 import { toast } from 'sonner';
@@ -37,12 +37,218 @@ import { ContextMenuSurface, type ContextMenuEntry } from '../ui/ContextMenuSurf
 import { CopySlotPill } from '../ui/CopySlotPill';
 import { InlineReferenceVideo } from '../ui/InlineReferenceVideo';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { getMediaColumns, VirtualizedMasonryGrid } from '../ui/VirtualGrid';
 import { WaveformAudioPlayer } from '../ui/WaveformAudioPlayer';
 import { ReferenceBoardCanvas } from './ReferenceBoardCanvas';
 
 type MediaFilter = 'all' | MediaCategory;
 type MediaViewMode = 'gallery' | 'board';
 type MediaDensity = 'comfortable' | 'compact';
+
+interface MediaVisualTileProps {
+  item: VaultItem;
+  cat: MediaCategory;
+  orbit?: OrbitDef;
+  density: MediaDensity;
+  imgFailed: boolean;
+  buildContextMenu: (item: VaultItem, cat: MediaCategory) => ContextMenuEntry[];
+  onImageError: (itemId: string) => void;
+  onHoverItem?: (item: VaultItem | null) => void;
+  onOpenLightbox: (item: VaultItem) => void;
+  onOpenStudio: (item: VaultItem) => void;
+}
+
+const MediaVisualTile: React.FC<MediaVisualTileProps> = React.memo(({
+  item,
+  cat,
+  orbit,
+  density,
+  imgFailed,
+  buildContextMenu,
+  onImageError,
+  onHoverItem,
+  onOpenLightbox,
+  onOpenStudio,
+}) => {
+  const { t, locale } = useI18n();
+  const localImg = getMediaUrl(item.thumbPath || item.imagePath);
+  const imgSrc = localImg || item.ogImageUrl || null;
+  const cleanTitle = cleanBrokenTextArtifacts(
+    item.title ||
+      (cat === 'video' ? t('dna.videoRef') : cat === 'link_visual' ? item.domain || t('dna.link') : t('dna.image')),
+    true
+  );
+  const swatches = (item.colorPalette ?? []).slice(0, 4);
+  const getEntries = useCallback(() => buildContextMenu(item, cat), [buildContextMenu, item, cat]);
+
+  return (
+    <ContextMenuSurface entries={getEntries}>
+      <article
+        data-testid={`media-tile-${item.id}`}
+        onMouseEnter={() => onHoverItem?.(item)}
+        onMouseLeave={() => onHoverItem?.(null)}
+        className="group relative flex flex-col rounded-[16px] overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] shadow-[var(--k-shadow-card)] k-card-lift transition-[border-color,box-shadow] duration-170"
+      >
+        {/* Visual Surface */}
+        {cat === 'video' && item.mediaPath ? (
+          <div className="relative bg-[var(--k-bg-surface-2)]">
+            <InlineReferenceVideo
+              mediaPath={item.mediaPath}
+              posterPath={item.thumbPath || item.imagePath}
+              heightClass={density === 'compact' ? 'h-[172px]' : 'h-[214px]'}
+              onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
+            />
+          </div>
+        ) : (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenLightbox(item)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onOpenLightbox(item);
+              }
+            }}
+            className={`relative overflow-hidden bg-[var(--k-bg-surface-2)] cursor-zoom-in ${
+              density === 'compact' ? 'aspect-[4/3]' : 'aspect-[16/11]'
+            }`}
+          >
+            {imgSrc && !imgFailed ? (
+              <img
+                src={imgSrc}
+                alt={cleanTitle}
+                loading="lazy"
+                decoding="async"
+                onError={() => onImageError(item.id)}
+                className="w-full h-full object-cover block transition-transform duration-200 ease-out group-hover:scale-[1.025]"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-[var(--k-ink-muted)]">
+                {cat === 'video' ? (
+                  <FilmStrip className="w-8 h-8 opacity-50" />
+                ) : (
+                  <ImageIcon className="w-8 h-8 opacity-45" />
+                )}
+              </div>
+            )}
+
+            {cat === 'video' && !item.mediaPath ? (
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-black/74 text-white border border-white/25">
+                  <Play weight="fill" className="w-4 h-4 ml-0.5" />
+                </span>
+              </span>
+            ) : null}
+
+            {/* Subtle hover scrim */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+
+            {/* Top-left subtle badge for pinned or link source */}
+            <div className="absolute top-2 left-2 flex items-center gap-1">
+              {item.isPinned ? (
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/72 text-[var(--k-accent)]">
+                  <PushPin weight="fill" className="w-3 h-3" />
+                </span>
+              ) : null}
+              {cat === 'link_visual' && item.domain ? (
+                <span className="inline-flex items-center gap-1 h-5.5 px-2 rounded-md bg-black/72 text-[10.5px] font-medium text-white/90 max-w-[140px] truncate">
+                  <GlobeSimple className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{item.domain}</span>
+                </span>
+              ) : null}
+            </div>
+
+            {/* Bottom hover controls: color swatches + Copy / Zoom / Open Note */}
+            <div className="absolute inset-x-2.5 bottom-2.5 flex items-center justify-between gap-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+              <div className="flex items-center gap-1">
+                {swatches.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    title={t('ui.quickLook.copyColor', { hex })}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void window.kapsula.copyText(hex);
+                      toast.success(t('ui.quickLook.colorCopied', { hex }));
+                    }}
+                    className="k-interactive w-4 h-4 rounded-full border border-white/50 shadow-xs cursor-pointer"
+                    style={{ backgroundColor: hex }}
+                  />
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1">
+                {localImg ? (
+                  <CopySlotPill
+                    label={t('cards.photoLabel')}
+                    copiedLabel={t('common.done')}
+                    widthPx={84}
+                    heightPx={26}
+                    tone="secret"
+                    onCopy={() =>
+                      window.kapsula.copyImage(item.imagePath || item.thumbPath || '')
+                    }
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  aria-label={t('cards.openNote')}
+                  title={t('cards.openNote')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenStudio(item);
+                  }}
+                  className="k-interactive inline-flex items-center justify-center w-6.5 h-6.5 rounded-lg border border-white/20 bg-black/65 text-white hover:bg-black/85 cursor-pointer"
+                >
+                  <PencilSimple className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={t('cards.zoomAria')}
+                  title={t('cards.fullscreenTitle')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenLightbox(item);
+                  }}
+                  className="k-interactive inline-flex items-center justify-center w-6.5 h-6.5 rounded-lg border border-white/20 bg-black/65 text-white hover:bg-black/85 cursor-pointer"
+                >
+                  <ArrowsOutSimple className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Compact visual caption footer */}
+        <div
+          onClick={() => onOpenStudio(item)}
+          className="px-3 py-2.5 flex items-center justify-between gap-2 cursor-pointer hover:bg-[var(--k-bg-surface-2)]/45 transition-colors"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)] truncate">
+              {cleanTitle}
+            </div>
+            <div className="flex items-center gap-1.5 mt-0.5 text-[10.5px] text-[var(--k-ink-muted)]">
+              {orbit ? (
+                <span className="inline-flex items-center gap-1 truncate max-w-[110px]">
+                  <span
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ backgroundColor: orbit.color }}
+                  />
+                  <span className="truncate">{orbit.name}</span>
+                </span>
+              ) : null}
+              <span className="k-tabular shrink-0">
+                {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </ContextMenuSurface>
+  );
+});
 
 interface MediaHubViewProps {
   items: VaultItem[];
@@ -88,11 +294,13 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
   const [uploading, setUploading] = useState(false);
   const [failedImgIds, setFailedImgIds] = useState<Record<string, true>>({});
   const [transcribingIds, setTranscribingIds] = useState<Record<string, boolean>>({});
+  const transcribingRef = useRef<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleTranscribeAudio = async (e: React.MouseEvent, item: VaultItem) => {
     e.stopPropagation();
-    if (transcribingIds[item.id] || !item.mediaPath) return;
+    if (transcribingRef.current.has(item.id) || transcribingIds[item.id] || !item.mediaPath) return;
+    transcribingRef.current.add(item.id);
     setTranscribingIds((prev) => ({ ...prev, [item.id]: true }));
     try {
       const res = await transcribeItemWithWavFallback(item);
@@ -107,6 +315,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
         friendlyErrorMessage(err, t('cards.transcribeFailed'), locale)
       );
     } finally {
+      transcribingRef.current.delete(item.id);
       setTranscribingIds((prev) => {
         const copy = { ...prev };
         delete copy[item.id];
@@ -244,7 +453,11 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
     }
   };
 
-  const buildTileContextMenu = (item: VaultItem, cat: MediaCategory): ContextMenuEntry[] => {
+  const handleImageError = useCallback((itemId: string) => {
+    setFailedImgIds((prev) => (prev[itemId] ? prev : { ...prev, [itemId]: true }));
+  }, []);
+
+  const buildTileContextMenu = useCallback((item: VaultItem, cat: MediaCategory): ContextMenuEntry[] => {
     const entries: ContextMenuEntry[] = [];
     if (cat === 'photo' || cat === 'link_visual') {
       entries.push({
@@ -347,7 +560,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
     );
 
     return entries;
-  };
+  }, [orbits, focusBoards, t, onOpenLightbox, onOpenStudio, onTogglePin, onMoveToOrbit, onMoveToBoard, onDelete]);
 
   const tabs: Array<{ id: MediaFilter; label: string; count: number; icon: React.ReactNode }> = [
     { id: 'all', label: t('media.cat.all'), count: categoryCounts.all, icon: <SquaresFour className="w-3.5 h-3.5" /> },
@@ -357,10 +570,52 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
     { id: 'link_visual', label: t('media.cat.linkVisual'), count: categoryCounts.link_visual, icon: <GlobeSimple className="w-3.5 h-3.5" /> },
   ];
 
-  const gridColumnsClass =
-    density === 'compact'
-      ? 'grid-cols-2 @[640px]:grid-cols-3 @[940px]:grid-cols-4 @[1240px]:grid-cols-5'
-      : 'grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 @[1220px]:grid-cols-4';
+  const getMediaCols = useCallback(
+    (width: number) => getMediaColumns(width, density === 'compact'),
+    [density]
+  );
+  const getMediaKey = useCallback((item: VaultItem) => item.id, []);
+  const estimateMediaHeight = useCallback(
+    (item: VaultItem, colWidth: number) => {
+      const cat = getMediaCategory(item) || 'photo';
+      if (cat === 'video' && item.mediaPath) {
+        return (density === 'compact' ? 172 : 214) + 58;
+      }
+      const ratio = density === 'compact' ? 4 / 3 : 16 / 11;
+      return Math.round(colWidth / ratio) + 58;
+    },
+    [density]
+  );
+  const renderMediaTile = useCallback(
+    (item: VaultItem) => {
+      const cat = getMediaCategory(item) || 'photo';
+      const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
+      return (
+        <MediaVisualTile
+          item={item}
+          cat={cat}
+          orbit={orbit}
+          density={density}
+          imgFailed={Boolean(failedImgIds[item.id])}
+          buildContextMenu={buildTileContextMenu}
+          onImageError={handleImageError}
+          onHoverItem={onHoverItem}
+          onOpenLightbox={onOpenLightbox}
+          onOpenStudio={onOpenStudio}
+        />
+      );
+    },
+    [
+      orbitMap,
+      density,
+      failedImgIds,
+      buildTileContextMenu,
+      handleImageError,
+      onHoverItem,
+      onOpenLightbox,
+      onOpenStudio,
+    ]
+  );
 
   return (
     <div
@@ -536,195 +791,17 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
         </div>
       ) : (
         <div key="media-gallery" className="space-y-6">
-          {/* Visual Photo / Video / Link-Preview Grid */}
+          {/* Visual Photo / Video / Link-Preview Grid (JS (x,y) Virtualized) */}
           {visualTiles.length > 0 ? (
-            <div
-              data-testid="media-visual-grid"
-              className={`grid gap-3.5 items-stretch ${gridColumnsClass}`}
-            >
-              {visualTiles.map((item) => {
-                const cat = getMediaCategory(item) || 'photo';
-                const localImg = getMediaUrl(item.thumbPath || item.imagePath);
-                const imgSrc = localImg || item.ogImageUrl || null;
-                const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
-                const cleanTitle = cleanBrokenTextArtifacts(
-                  item.title ||
-                    (cat === 'video' ? t('dna.videoRef') : cat === 'link_visual' ? item.domain || t('dna.link') : t('dna.image')),
-                  true
-                );
-                const swatches = (item.colorPalette ?? []).slice(0, 4);
-
-                return (
-                  <ContextMenuSurface key={item.id} entries={buildTileContextMenu(item, cat)}>
-                    <motion.article
-                      layout={prefersReduced ? undefined : 'position'}
-                      data-testid={`media-tile-${item.id}`}
-                      onMouseEnter={() => onHoverItem?.(item)}
-                      onMouseLeave={() => onHoverItem?.(null)}
-                      className="group relative flex flex-col rounded-[16px] overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] hover:border-[var(--k-border-strong)] shadow-[var(--k-shadow-card)] k-card-lift transition-[border-color,box-shadow] duration-170"
-                    >
-                      {/* Visual Surface */}
-                      {cat === 'video' && item.mediaPath ? (
-                        <div className="relative bg-[var(--k-bg-surface-2)]">
-                          <InlineReferenceVideo
-                            mediaPath={item.mediaPath}
-                            posterPath={item.thumbPath || item.imagePath}
-                            heightClass={density === 'compact' ? 'h-[172px]' : 'h-[214px]'}
-                            onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
-                          />
-                        </div>
-                      ) : (
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => onOpenLightbox(item)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              onOpenLightbox(item);
-                            }
-                          }}
-                          className={`relative overflow-hidden bg-[var(--k-bg-surface-2)] cursor-zoom-in ${
-                            density === 'compact' ? 'aspect-[4/3]' : 'aspect-[16/11]'
-                          }`}
-                        >
-                          {imgSrc && !failedImgIds[item.id] ? (
-                            <img
-                              src={imgSrc}
-                              alt={cleanTitle}
-                              loading="lazy"
-                              onError={() =>
-                                setFailedImgIds((prev) => (prev[item.id] ? prev : { ...prev, [item.id]: true }))
-                              }
-                              className="w-full h-full object-cover block transition-transform duration-200 ease-out group-hover:scale-[1.025]"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-[var(--k-ink-muted)]">
-                              {cat === 'video' ? (
-                                <FilmStrip className="w-8 h-8 opacity-50" />
-                              ) : (
-                                <ImageIcon className="w-8 h-8 opacity-45" />
-                              )}
-                            </div>
-                          )}
-
-                          {cat === 'video' && !item.mediaPath ? (
-                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                              <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-black/74 text-white border border-white/25">
-                                <Play weight="fill" className="w-4 h-4 ml-0.5" />
-                              </span>
-                            </span>
-                          ) : null}
-
-                          {/* Subtle hover scrim */}
-                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
-
-                          {/* Top-left subtle badge for pinned or link source */}
-                          <div className="absolute top-2 left-2 flex items-center gap-1">
-                            {item.isPinned ? (
-                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-black/72 text-[var(--k-accent)]">
-                                <PushPin weight="fill" className="w-3 h-3" />
-                              </span>
-                            ) : null}
-                            {cat === 'link_visual' && item.domain ? (
-                              <span className="inline-flex items-center gap-1 h-5.5 px-2 rounded-md bg-black/72 text-[10.5px] font-medium text-white/90 max-w-[140px] truncate">
-                                <GlobeSimple className="w-3 h-3 shrink-0" />
-                                <span className="truncate">{item.domain}</span>
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {/* Bottom hover controls: color swatches + Copy / Zoom / Open Note */}
-                          <div className="absolute inset-x-2.5 bottom-2.5 flex items-center justify-between gap-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
-                            <div className="flex items-center gap-1">
-                              {swatches.map((hex) => (
-                                <button
-                                  key={hex}
-                                  type="button"
-                                  title={t('ui.quickLook.copyColor', { hex })}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    void window.kapsula.copyText(hex);
-                                    toast.success(t('ui.quickLook.colorCopied', { hex }));
-                                  }}
-                                  className="k-interactive w-4 h-4 rounded-full border border-white/50 shadow-xs cursor-pointer"
-                                  style={{ backgroundColor: hex }}
-                                />
-                              ))}
-                            </div>
-
-                            <div className="flex items-center gap-1">
-                              {localImg ? (
-                                <CopySlotPill
-                                  label={t('cards.photoLabel')}
-                                  copiedLabel={t('common.done')}
-                                  widthPx={84}
-                                  heightPx={26}
-                                  tone="secret"
-                                  onCopy={() =>
-                                    window.kapsula.copyImage(item.imagePath || item.thumbPath || '')
-                                  }
-                                />
-                              ) : null}
-                              <button
-                                type="button"
-                                aria-label={t('cards.openNote')}
-                                title={t('cards.openNote')}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenStudio(item);
-                                }}
-                                className="k-interactive inline-flex items-center justify-center w-6.5 h-6.5 rounded-lg border border-white/20 bg-black/65 text-white hover:bg-black/85 cursor-pointer"
-                              >
-                                <PencilSimple className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                aria-label={t('cards.zoomAria')}
-                                title={t('cards.fullscreenTitle')}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenLightbox(item);
-                                }}
-                                className="k-interactive inline-flex items-center justify-center w-6.5 h-6.5 rounded-lg border border-white/20 bg-black/65 text-white hover:bg-black/85 cursor-pointer"
-                              >
-                                <ArrowsOutSimple className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Compact visual caption footer */}
-                      <div
-                        onClick={() => onOpenStudio(item)}
-                        className="px-3 py-2.5 flex items-center justify-between gap-2 cursor-pointer hover:bg-[var(--k-bg-surface-2)]/45 transition-colors"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="text-[12.5px] font-medium text-[var(--k-ink-primary)] truncate">
-                            {cleanTitle}
-                          </div>
-                          <div className="flex items-center gap-1.5 mt-0.5 text-[10.5px] text-[var(--k-ink-muted)]">
-                            {orbit ? (
-                              <span className="inline-flex items-center gap-1 truncate max-w-[110px]">
-                                <span
-                                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                                  style={{ backgroundColor: orbit.color }}
-                                />
-                                <span className="truncate">{orbit.name}</span>
-                              </span>
-                            ) : null}
-                            <span className="k-tabular shrink-0">
-                              {formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.article>
-                  </ContextMenuSurface>
-                );
-              })}
-            </div>
+            <VirtualizedMasonryGrid
+              testId="media-visual-grid"
+              items={visualTiles}
+              getKey={getMediaKey}
+              estimateHeight={estimateMediaHeight}
+              getColumns={getMediaCols}
+              gapPx={14}
+              renderItem={renderMediaTile}
+            />
           ) : null}
 
           {/* Dedicated Audio & Voice Shelf (so audio memos have real waveform players instead of empty image tiles) */}
@@ -748,7 +825,7 @@ export const MediaHubView: React.FC<MediaHubViewProps> = ({
                   const isTranscribing = Boolean(transcribingIds[item.id]);
 
                   return (
-                    <ContextMenuSurface key={item.id} entries={buildTileContextMenu(item, 'audio')}>
+                    <ContextMenuSurface key={item.id} entries={() => buildTileContextMenu(item, 'audio')}>
                       <div
                         data-testid={`media-audio-card-${item.id}`}
                         onClick={() => onOpenStudio(item)}

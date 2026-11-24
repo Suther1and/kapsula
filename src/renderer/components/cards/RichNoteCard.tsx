@@ -28,16 +28,21 @@ function cleanInlineTaskLabel(raw: string): string {
 function extractCardTasks(body: string) {
   const lines = (body || '').split(/\r?\n/);
   const tasks: Array<{ taskIndex: number; done: boolean; text: string }> = [];
-  let inFence = false;
+  let activeFence: string | null = null;
   let taskIndex = 0;
 
   for (const line of lines) {
-    const t = line.trim();
-    if (t.startsWith('```') || t.startsWith('~~~')) {
-      inFence = !inFence;
+    const fenceMatch = /^\s*(```|~~~)/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      if (!activeFence) {
+        activeFence = marker;
+      } else if (activeFence === marker) {
+        activeFence = null;
+      }
       continue;
     }
-    if (inFence) continue;
+    if (activeFence) continue;
     const m = TASK_RE.exec(line);
     if (!m) continue;
     tasks.push({
@@ -110,6 +115,7 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
               src={inlineThumbUrl}
               alt=""
               loading="lazy"
+              decoding="async"
               className="w-full h-full object-cover block"
             />
           </div>
@@ -142,6 +148,7 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
             src={inlineThumbUrl}
             alt=""
             loading="lazy"
+            decoding="async"
             className="w-full h-[132px] object-cover block"
           />
           {inlineMediaFiles.length > 1 ? (

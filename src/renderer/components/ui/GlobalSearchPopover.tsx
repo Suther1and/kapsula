@@ -161,52 +161,80 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
     const out: SearchEntry[] = [];
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
 
-    const scoredItems = q
-      ? items
-          .map((item) => {
-            const orbitName = item.orbit ? orbitMap.get(item.orbit)?.name : undefined;
-            const localScore = scoreBilingualFields(
-              {
-                title: item.title,
-                tags: item.tags,
-                orbitName,
-                domain: item.domain,
-                dnaLabel: getDnaHumanLabel(item, locale),
-                summary: item.summary,
-                body: item.body,
-                ocrText: item.ocrText,
-                url: item.url,
-                extra: [
-                  item.secretMeta?.service,
-                  item.secretMeta?.loginHint,
-                  item.secretMeta?.cardBrand,
-                  item.isMuted ? 'muted' : '',
-                  item.isPinned ? 'pinned' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' '),
-                isPinned: item.isPinned,
-                updatedAt: item.contentUpdatedAt || item.createdAt,
-              },
-              q
-            );
-            const serverBonus = serverSet && serverSet.has(item.id) ? 24 : 0;
-            const score = localScore > 0 ? localScore + serverBonus : serverBonus;
-            return { item, score };
-          })
-          .filter((entry) => entry.score > 0)
-          .sort(
-            (a, b) =>
-              b.score - a.score ||
-              (b.item.contentUpdatedAt || b.item.createdAt) -
-                (a.item.contentUpdatedAt || a.item.createdAt)
-          )
-          .slice(0, 7)
-          .map((e) => e.item)
-      : items
+    const scoredItems = (() => {
+      if (!q) {
+        return items
           .slice()
           .sort((a, b) => (b.contentUpdatedAt || b.createdAt) - (a.contentUpdatedAt || a.createdAt))
           .slice(0, 5);
+      }
+
+      const matched: Array<{ item: VaultItem; score: number }> = [];
+      const remaining: Array<{
+        item: VaultItem;
+        fields: Parameters<typeof scoreBilingualFields>[0];
+        serverBonus: number;
+      }> = [];
+
+      for (const item of items) {
+        const orbitName = item.orbit ? orbitMap.get(item.orbit)?.name : undefined;
+        const fields = {
+          title: item.title,
+          tags: item.tags,
+          orbitName,
+          domain: item.domain,
+          dnaLabel: getDnaHumanLabel(item, locale),
+          summary: item.summary,
+          body: item.body,
+          ocrText: item.ocrText,
+          url: item.url,
+          extra: [
+            item.secretMeta?.service,
+            item.secretMeta?.loginHint,
+            item.secretMeta?.cardBrand,
+            item.isMuted ? 'muted' : '',
+            item.isPinned ? 'pinned' : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+          isPinned: item.isPinned,
+          updatedAt: item.contentUpdatedAt || item.createdAt,
+        };
+        const serverBonus = serverSet && serverSet.has(item.id) ? 24 : 0;
+        const localScore = scoreBilingualFields(fields, q, { allowFuzzy: false });
+        if (localScore > 0) {
+          matched.push({ item, score: localScore + serverBonus });
+        } else {
+          remaining.push({ item, fields, serverBonus });
+        }
+      }
+
+      if (matched.length < 8 && remaining.length > 0) {
+        for (const cand of remaining) {
+          const fuzzyScore = scoreBilingualFields(cand.fields, q, { allowFuzzy: true });
+          const totalScore = fuzzyScore > 0 ? fuzzyScore + cand.serverBonus : cand.serverBonus;
+          if (totalScore > 0) {
+            matched.push({ item: cand.item, score: totalScore });
+          }
+        }
+      } else {
+        for (const cand of remaining) {
+          if (cand.serverBonus > 0) {
+            matched.push({ item: cand.item, score: cand.serverBonus });
+          }
+        }
+      }
+
+      return matched
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            (b.item.contentUpdatedAt || b.item.createdAt) -
+              (a.item.contentUpdatedAt || a.item.createdAt)
+        )
+        .slice(0, 7)
+        .map((e) => e.item);
+    })();
 
     for (const item of scoredItems) {
       out.push({ kind: 'item', id: `item-${item.id}`, item });
@@ -361,7 +389,13 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                           >
                             <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0 overflow-hidden">
                               {thumb ? (
-                                <img src={thumb} alt="" className="w-full h-full object-cover" />
+                                <img
+                                  src={thumb}
+                                  alt=""
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-full h-full object-cover"
+                                />
                               ) : (
                                 renderItemIcon(it)
                               )}

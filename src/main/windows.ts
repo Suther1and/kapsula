@@ -506,6 +506,18 @@ export class WindowManager {
       }
     }
   }
+
+  public broadcastExcept(
+    excludeWebContentsId: number | undefined,
+    channel: string,
+    payload: unknown
+  ): void {
+    for (const win of [this.vault, this.hud]) {
+      if (win && !win.isDestroyed() && win.webContents.id !== excludeWebContentsId) {
+        win.webContents.send(channel, payload);
+      }
+    }
+  }
 }
 
 export function resolveIconPath(): string | undefined {

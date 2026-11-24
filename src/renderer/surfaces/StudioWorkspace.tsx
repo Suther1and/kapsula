@@ -2,6 +2,7 @@ import React, {
   Suspense,
   lazy,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,7 +10,6 @@ import React, {
   useState,
 } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useAutoAnimate } from '@formkit/auto-animate/react';
 import NumberFlow from '@number-flow/react';
 import { Highlight, HighlightItem } from '@animate-ui/react/primitives/effects/highlight';
 import { toast } from 'sonner';
@@ -42,7 +42,7 @@ import {
   Trash,
   X,
 } from '@phosphor-icons/react';
-import type { SyncStatus } from '@shared/sync-contract';
+import { extractInlineMediaFilenames, type SyncStatus } from '@shared/sync-contract';
 import type {
   AppearanceConfig,
   AppUpdaterState,
@@ -57,12 +57,17 @@ import type {
 } from '@shared/types';
 import { SECTION_COLOR_PALETTE, SECTION_ICON_CHOICES } from '@shared/constants';
 import { useI18n } from '@shared/i18n/react';
-import { scoreBilingualFields } from '@shared/bilingual-search';
+import {
+  compileBilingualSearchQuery,
+  scoreBilingualFields,
+  scoreBilingualFieldsCompiled,
+} from '@shared/bilingual-search';
 import { truncateAtWordBoundary } from '@shared/html-entities';
 import { isDedicatedNote, isMediaItem } from '@shared/item-helpers';
 import { formatShortcutCompact, isMacPlatform } from '@shared/shortcuts';
-import { toggleMarkdownTaskInBody } from '@shared/task-helpers';
+import { parseMarkdownTasks, toggleMarkdownTaskInBody } from '@shared/task-helpers';
 import { getDnaHumanLabel } from '../lib/format';
+import { hydrateFullVaultItem } from '../lib/hydrate-item';
 import { playTactileTick } from '../lib/tactileSound';
 import { KapsulaEmblem } from '../components/ui/KapsulaEmblem';
 import { GlobalSearchPopover } from '../components/ui/GlobalSearchPopover';
@@ -71,6 +76,11 @@ import { SelectMenu } from '../components/ui/SelectMenu';
 import { TooltipHint } from '../components/ui/TooltipHint';
 import { SegmentedControl } from '../components/ui/SegmentedControl';
 import { getSectionIconLabels, SectionIcon } from '../components/ui/SectionIcon';
+import {
+  getFeedColumns,
+  VirtualizedFixedList,
+  VirtualizedMasonryGrid,
+} from '../components/ui/VirtualGrid';
 import {
   ContextMenuSurface,
   type ContextMenuEntry,
@@ -156,14 +166,40 @@ const SmartTriageModal = lazy(() =>
   import('../components/modals/SmartTriageModal').then((m) => ({ default: m.SmartTriageModal }))
 );
 
-function useMountOnce(active: boolean): boolean {
-  const [mounted, setMounted] = useState(active);
+function usePresenceMount(
+  active: boolean,
+  fallbackMs = 220
+): { shouldMount: boolean; notifyExited: () => void } {
+  const [retaining, setRetaining] = useState(active);
+  const timerRef = useRef<number | null>(null);
+  if (active && !retaining) {
+    setRetaining(true);
+  }
   useEffect(() => {
-    if (active && !mounted) {
-      setMounted(true);
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-  }, [active, mounted]);
-  return active || mounted;
+    if (active || !retaining) return;
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setRetaining(false);
+    }, fallbackMs);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [active, retaining, fallbackMs]);
+  const notifyExited = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setRetaining(false);
+  }, []);
+  return { shouldMount: active || retaining, notifyExited };
 }
 import {
   computeScopedAccentTokens,
@@ -293,8 +329,6 @@ function makeBlankDraftItem(orbit: string, focusBoardId: string | null): VaultIt
   };
 }
 
-const MASONRY_ROW_UNIT_PX = 4;
-
 type PendingTaskToggle = {
   itemId: string;
   sourceType: 'markdown' | 'voice_action';
@@ -330,59 +364,400 @@ function applyOptimisticTaskToItem(
   };
 }
 
-const FEED_PAGE_SIZE = 80;
 const SERVER_ITEM_PAGE = 2000;
 
-const masonryMeasureCallbacks = new WeakMap<Element, () => void>();
-let sharedMasonryObserver: ResizeObserver | null = null;
-function getSharedMasonryObserver(): ResizeObserver | null {
-  if (sharedMasonryObserver) return sharedMasonryObserver;
-  if (typeof ResizeObserver === 'undefined') return null;
-  sharedMasonryObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      masonryMeasureCallbacks.get(entry.target)?.();
+function estimateFeedCardHeight(item: VaultItem, colWidth: number): number {
+  if (item.dna === 'secret') return 146;
+  if (item.dna === 'doc') return 158;
+  if (item.dna === 'snippet') return 260;
+  if (item.dna === 'shot') {
+    const imgH = item.imagePath || item.thumbPath ? Math.min(260, Math.round(colWidth * 0.625)) : 120;
+    return imgH + 92;
+  }
+  if (item.dna === 'link') {
+    const hasHero = Boolean(item.imagePath || item.thumbPath || item.ogImageUrl);
+    const hasDesc = Boolean(item.summary || item.body);
+    return (hasHero ? 156 : 0) + (hasDesc ? 64 : 24) + 92;
+  }
+  if (item.dna === 'voice') {
+    const actionCount = Math.min(3, item.mediaMeta?.actionItems?.length ?? 0);
+    const hasTranscript = Boolean(item.body?.trim() || item.mediaMeta?.transcript?.trim());
+    return 154 + (hasTranscript ? 48 : 0) + actionCount * 24;
+  }
+  const hasInlineImg =
+    !item.thumbPath && !item.imagePath && extractInlineMediaFilenames(item.body).length > 0;
+  const bodyLen = Math.min(item.bodyLength ?? item.body?.length ?? 0, 220);
+  const textLines = bodyLen > 0 ? Math.min(4, Math.max(1, Math.ceil(bodyLen / 42))) : 0;
+  const taskLines =
+    item.hasCheckbox || (item.body && item.body.includes('[') && item.body.includes(']'))
+      ? Math.min(4, parseMarkdownTasks(item.body || '').length)
+      : 0;
+  return 92 + (hasInlineImg ? 132 : 0) + textLines * 20 + taskLines * 24;
+}
+
+function extractTaskLinesSignature(body: string | null | undefined): string {
+  if (!body || !body.includes('[') || !body.includes(']')) return '';
+  const parsed = parseMarkdownTasks(body);
+  if (parsed.length === 0) return '';
+  return parsed.map((t) => `${t.done ? 'x' : ' '}:${t.text}`).join('\n');
+}
+
+function haveTaskRelevantFieldsChanged(prevItem: VaultItem, nextItem: VaultItem): boolean {
+  if ((prevItem.dna === 'secret') !== (nextItem.dna === 'secret')) return true;
+  if (prevItem.title !== nextItem.title) return true;
+  if (prevItem.orbit !== nextItem.orbit) return true;
+  if ((prevItem.focusBoardId ?? null) !== (nextItem.focusBoardId ?? null)) return true;
+  if ((prevItem.remindAt ?? null) !== (nextItem.remindAt ?? null)) return true;
+  if (Boolean(prevItem.mediaMeta?.isStandaloneTask) !== Boolean(nextItem.mediaMeta?.isStandaloneTask)) {
+    return true;
+  }
+  if (prevItem.body !== nextItem.body) {
+    if (prevItem.isCardProjection && prevItem.isBodyTruncated) {
+      const nextSig = extractTaskLinesSignature(nextItem.body);
+      if (prevItem.hasCheckbox === false && nextSig === '') {
+        // Pure prose edit on a note that had no checkboxes
+      } else if (extractTaskLinesSignature(prevItem.body) !== nextSig) {
+        return true;
+      }
+    } else if (extractTaskLinesSignature(prevItem.body) !== extractTaskLinesSignature(nextItem.body)) {
+      return true;
     }
-  });
-  return sharedMasonryObserver;
+  }
+  const prevActions = prevItem.mediaMeta?.actionItems ?? null;
+  const nextActions = nextItem.mediaMeta?.actionItems ?? null;
+  if (prevActions !== nextActions) {
+    if (JSON.stringify(prevActions) !== JSON.stringify(nextActions)) return true;
+  }
+  const prevCheckedRaw = prevItem.mediaMeta?.checkedActionIndices;
+  const nextCheckedRaw = nextItem.mediaMeta?.checkedActionIndices;
+  const prevChecked = Array.isArray(prevCheckedRaw) && prevCheckedRaw.length > 0 ? prevCheckedRaw : null;
+  const nextChecked = Array.isArray(nextCheckedRaw) && nextCheckedRaw.length > 0 ? nextCheckedRaw : null;
+  if (prevChecked !== nextChecked) {
+    if (JSON.stringify(prevChecked) !== JSON.stringify(nextChecked)) return true;
+  }
+  const prevTaskMeta = prevItem.mediaMeta?.taskMeta ?? null;
+  const nextTaskMeta = nextItem.mediaMeta?.taskMeta ?? null;
+  if (prevTaskMeta !== nextTaskMeta) {
+    if (JSON.stringify(prevTaskMeta) !== JSON.stringify(nextTaskMeta)) return true;
+  }
+  return false;
 }
 
-interface MasonryCardCellProps {
-  children: React.ReactNode;
+function mergeVaultItemPreservingFull(prev: VaultItem, incoming: VaultItem): VaultItem {
+  if (!incoming.isCardProjection || prev.isCardProjection) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    body: prev.body,
+    ocrText: prev.ocrText,
+    annotations: prev.annotations,
+    extractedActions:
+      prev.extractedActions.length > incoming.extractedActions.length
+        ? prev.extractedActions
+        : incoming.extractedActions,
+    mediaMeta: prev.mediaMeta
+      ? {
+          ...(incoming.mediaMeta ?? {}),
+          ...prev.mediaMeta,
+        }
+      : incoming.mediaMeta,
+    isCardProjection: false,
+    isBodyTruncated: false,
+  };
 }
 
-const MasonryCardCell: React.FC<MasonryCardCellProps> = React.memo(({ children }) => {
-  const outerRef = useRef<HTMLDivElement | null>(null);
-  const innerRef = useRef<HTMLDivElement | null>(null);
-  const [rowSpan, setRowSpan] = useState<number>(36);
-
-  useLayoutEffect(() => {
-    const inner = innerRef.current;
-    if (!inner) return;
-    const measure = () => {
-      const h = Math.ceil(inner.getBoundingClientRect().height);
-      const next = Math.max(1, Math.ceil(h / MASONRY_ROW_UNIT_PX));
-      setRowSpan((prev) => (prev === next ? prev : next));
-    };
-    measure();
-    const ro = getSharedMasonryObserver();
-    if (!ro) return;
-    masonryMeasureCallbacks.set(inner, measure);
-    ro.observe(inner);
-    return () => {
-      masonryMeasureCallbacks.delete(inner);
-      ro.unobserve(inner);
-    };
-  }, []);
-
+const SidebarSettingsButton: React.FC<{
+  sidebarRail: boolean;
+  label: string;
+  onClick: () => void;
+}> = React.memo(({ sidebarRail, label, onClick }) => {
+  const [hovered, setHovered] = useState(false);
   return (
-    <div
-      ref={outerRef}
-      style={{ gridRowEnd: `span ${rowSpan}` }}
-      className="min-w-0"
-    >
-      <div ref={innerRef} style={{ paddingBottom: 'var(--k-grid-gap)' }}>
-        {children}
-      </div>
+    <TooltipHint label={label} disabled={!sidebarRail} side="right">
+      <button
+        type="button"
+        data-testid="open-settings-btn"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={onClick}
+        className={`k-interactive flex items-center overflow-hidden ${
+          sidebarRail ? 'w-full px-[8px]' : 'flex-1 px-[8px] min-w-0'
+        } h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer`}
+      >
+        <HoverIconProvider hovered={hovered}>
+          <span className="w-[30px] h-[30px] shrink-0 flex items-center justify-center">
+            <LiveIcon icon={SettingsIcon} size={16} />
+          </span>
+          {!sidebarRail ? <span className="ml-1 truncate">{label}</span> : null}
+        </HoverIconProvider>
+      </button>
+    </TooltipHint>
+  );
+});
+
+const SidebarCustomizePopoverButton: React.FC<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  hiddenNavSections: HideableNavSection[];
+  hiddenNavSet: Set<HideableNavSection>;
+  isDefaultPrimaryNavOrder: boolean;
+  onShowAll: () => void;
+  onToggleSection: (sec: HideableNavSection) => void;
+  onResetOrder: () => void;
+}> = React.memo(
+  ({
+    open,
+    onOpenChange,
+    hiddenNavSections,
+    hiddenNavSet,
+    isDefaultPrimaryNavOrder,
+    onShowAll,
+    onToggleSection,
+    onResetOrder,
+  }) => {
+    const { t } = useI18n();
+    const [hovered, setHovered] = useState(false);
+    return (
+      <PopoverSurface
+        open={open}
+        onOpenChange={onOpenChange}
+        side="top"
+        align="start"
+        widthClass="w-[228px] !p-2"
+        trigger={
+          <button
+            type="button"
+            data-testid="customize-sidebar-btn"
+            title={t('nav.customizeSidebar')}
+            aria-label={t('nav.customizeSidebar')}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            className={`k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center cursor-pointer shrink-0 ${
+              hiddenNavSections.length > 0 || !isDefaultPrimaryNavOrder
+                ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]/70'
+                : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
+            }`}
+          >
+            <LiveIcon icon={SlidersHorizontalIcon} size={15} active={hovered} />
+          </button>
+        }
+      >
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between px-1 pb-1 border-b border-[var(--k-border-hairline)]">
+            <span className="text-[11.5px] font-semibold text-[var(--k-ink-primary)]">
+              {t('nav.customizeSidebar')}
+            </span>
+            {hiddenNavSections.length > 0 ? (
+              <button
+                type="button"
+                data-testid="customize-sidebar-show-all"
+                onClick={onShowAll}
+                className="text-[11px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer"
+              >
+                {t('nav.showAllSidebar')}
+              </button>
+            ) : null}
+          </div>
+          <div className="space-y-0.5">
+            {HIDEABLE_NAV_SECTIONS.map((sec) => {
+              const visible = !hiddenNavSet.has(sec);
+              return (
+                <button
+                  key={sec}
+                  type="button"
+                  data-testid={`customize-sidebar-toggle-${sec}`}
+                  onClick={() => onToggleSection(sec)}
+                  className="k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-[7px] text-[12px] text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                >
+                  <span>{t(HIDEABLE_SECTION_LABEL_KEYS[sec])}</span>
+                  <span
+                    className={`inline-flex items-center justify-center w-4 h-4 rounded-[5px] border ${
+                      visible
+                        ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
+                        : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-transparent'
+                    }`}
+                  >
+                    <Check size={11} weight="bold" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="pt-1 border-t border-[var(--k-border-hairline)]">
+            <button
+              type="button"
+              data-testid="customize-sidebar-reset-order"
+              disabled={isDefaultPrimaryNavOrder}
+              onClick={onResetOrder}
+              className={`k-interactive w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-[7px] text-[11.5px] font-medium ${
+                isDefaultPrimaryNavOrder
+                  ? 'text-[var(--k-ink-muted)]/60 cursor-default'
+                  : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer'
+              }`}
+            >
+              <ArrowCounterClockwise size={12} />
+              <span>{t('nav.resetOrder')}</span>
+            </button>
+          </div>
+        </div>
+      </PopoverSurface>
+    );
+  }
+);
+
+const SidebarSyncButton: React.FC<{
+  syncStatus: SyncStatus | null;
+  showSyncSpinner: boolean;
+  tooltipLabel: string;
+  ariaLabel: string;
+  onClick: () => void;
+}> = React.memo(({ syncStatus, showSyncSpinner, tooltipLabel, ariaLabel, onClick }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <TooltipHint label={tooltipLabel}>
+      <button
+        type="button"
+        data-testid="sync-status-btn"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={onClick}
+        className="k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+        aria-label={ariaLabel}
+      >
+        {syncStatus?.state === 'syncing' && showSyncSpinner ? (
+          <ArrowsClockwise size={15} className="animate-spin text-[var(--k-accent)]" />
+        ) : syncStatus?.state === 'offline' ? (
+          <CloudSlash size={15} className="text-[var(--k-amber)]" />
+        ) : syncStatus?.state === 'error' ? (
+          <CloudWarning size={15} className="text-[var(--k-danger)]" />
+        ) : syncStatus?.state === 'synced' || syncStatus?.state === 'syncing' ? (
+          <LiveIcon icon={CloudSyncIcon} size={15} active={hovered} className="text-[var(--k-emerald)]" />
+        ) : (
+          <LiveIcon icon={CloudSyncIcon} size={15} active={hovered} className="opacity-75" />
+        )}
+        {syncStatus &&
+        (syncStatus.state === 'needs_passphrase_setup' ||
+          syncStatus.state === 'needs_passphrase_unlock' ||
+          syncStatus.state === 'awaiting_email_confirm' ||
+          syncStatus.state === 'error') ? (
+          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[var(--k-accent)]" />
+        ) : null}
+      </button>
+    </TooltipHint>
+  );
+});
+
+const SidebarThemeButton: React.FC<{
+  theme: 'light' | 'dark';
+  prefersReduced: boolean;
+  tooltipLabel: string;
+  ariaLabel: string;
+  onClick: () => void;
+}> = React.memo(({ theme, prefersReduced, tooltipLabel, ariaLabel, onClick }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <TooltipHint label={tooltipLabel}>
+      <button
+        type="button"
+        data-testid="theme-toggle-btn"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={onClick}
+        className="k-interactive w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+        aria-label={ariaLabel}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {theme === 'light' ? (
+            <motion.span
+              key="moon"
+              initial={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, transform: 'rotate(-25deg) scale(0.85)' }
+              }
+              animate={
+                prefersReduced
+                  ? { opacity: 1 }
+                  : { opacity: 1, transform: 'rotate(0deg) scale(1)' }
+              }
+              exit={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, transform: 'rotate(25deg) scale(0.85)' }
+              }
+              transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
+            >
+              <LiveIcon icon={MoonIcon} size={15} active={hovered} />
+            </motion.span>
+          ) : (
+            <motion.span
+              key="sun"
+              initial={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, transform: 'rotate(25deg) scale(0.85)' }
+              }
+              animate={
+                prefersReduced
+                  ? { opacity: 1 }
+                  : { opacity: 1, transform: 'rotate(0deg) scale(1)' }
+              }
+              exit={
+                prefersReduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, transform: 'rotate(-25deg) scale(0.85)' }
+              }
+              transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
+            >
+              <LiveIcon icon={SunIcon} size={15} active={hovered} />
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </button>
+    </TooltipHint>
+  );
+});
+
+const HeaderAssistantButton: React.FC<{
+  assistantOpen: boolean;
+  prefersReduced: boolean;
+  label: string;
+  onToggle: () => void;
+}> = React.memo(({ assistantOpen, prefersReduced, label, onToggle }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      {(hovered || assistantOpen) && !prefersReduced ? (
+        <GlowEffect
+          colors={['#d95826', '#7c3aed', '#3b82f6', '#d95826']}
+          mode="rotate"
+          blur="soft"
+          duration={4}
+          scale={1.04}
+          className="rounded-[9px] opacity-40"
+        />
+      ) : null}
+      <button
+        type="button"
+        data-testid="assistant-open-btn"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={onToggle}
+        className={`relative z-10 k-interactive h-7.5 px-2.5 rounded-[8px] flex items-center gap-1.5 text-[12px] font-medium border cursor-pointer ${
+          assistantOpen
+            ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] border-[var(--k-accent)]'
+            : 'bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] border-[var(--k-border-hairline)]'
+        }`}
+      >
+        <LiveIcon
+          icon={SparklesIcon}
+          size={14}
+          active={hovered || assistantOpen}
+          className={assistantOpen ? '' : 'text-[var(--k-accent)]'}
+        />
+        <span>{label}</span>
+      </button>
     </div>
   );
 });
@@ -393,18 +768,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 }) => {
   const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
-  const [feedGridAnimRef, enableFeedGridAnim] = useAutoAnimate<HTMLDivElement>({
-    duration: prefersReduced ? 0 : 180,
-    easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-  });
-  const [feedListAnimRef, enableFeedListAnim] = useAutoAnimate<HTMLDivElement>({
-    duration: prefersReduced ? 0 : 170,
-    easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-  });
-  const [feedVisibleCount, setFeedVisibleCount] = useState(FEED_PAGE_SIZE);
   const [hasMoreServerItems, setHasMoreServerItems] = useState(false);
   const loadingMoreServerRef = useRef(false);
-  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
   const [items, setItems] = useState<VaultItem[]>([]);
   const itemsRef = useRef<VaultItem[]>([]);
   itemsRef.current = items;
@@ -466,6 +831,29 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const [nav, setNav] = useState<NavView>({ type: 'flow' });
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarSlotOpen, setSidebarSlotOpen] = useState(true);
+  const sidebarCloseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (sidebarCloseTimerRef.current !== null) {
+      window.clearTimeout(sidebarCloseTimerRef.current);
+      sidebarCloseTimerRef.current = null;
+    }
+    if (sidebarOpen || prefersReduced) {
+      setSidebarSlotOpen(sidebarOpen);
+      return;
+    }
+    sidebarCloseTimerRef.current = window.setTimeout(() => {
+      sidebarCloseTimerRef.current = null;
+      setSidebarSlotOpen(false);
+    }, 110);
+    return () => {
+      if (sidebarCloseTimerRef.current !== null) {
+        window.clearTimeout(sidebarCloseTimerRef.current);
+        sidebarCloseTimerRef.current = null;
+      }
+    };
+  }, [sidebarOpen, prefersReduced]);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
       const raw = Number(localStorage.getItem('kapsula.sidebar.width'));
@@ -619,7 +1007,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sortOrder, setSortOrder] = useState<SortMode>('flow');
 
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [serverSearchIds, setServerSearchIds] = useState<string[] | null>(null);
+  const serverSearchReqIdRef = useRef(0);
   const [filterMediaOnly, setFilterMediaOnly] = useState(false);
   const [filterPinnedOnly, setFilterPinnedOnly] = useState(false);
   const [filterUnsortedOnly, setFilterUnsortedOnly] = useState(false);
@@ -658,6 +1048,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [studioDraftMode, setStudioDraftMode] = useState(false);
   const [studioExpandedModal, setStudioExpandedModal] = useState(false);
   const [activeItem, setActiveItem] = useState<VaultItem | null>(null);
+  const activeItemRef = useRef<VaultItem | null>(null);
+  activeItemRef.current = activeItem;
+  const openItemReqRef = useRef(0);
+  const toggleNotesHubSeqRef = useRef<Map<string, number>>(new Map());
+  const toggleNotesHubQueueRef = useRef<Map<string, Promise<void>>>(new Map());
+  const latestToggledItemRef = useRef<Map<string, VaultItem>>(new Map());
 
   const [lightboxItem, setLightboxItem] = useState<VaultItem | null>(null);
   const [quickLookItem, setQuickLookItem] = useState<VaultItem | null>(null);
@@ -709,15 +1105,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     (archivedLoadedRef.current ? archivedItems.length : vaultStats.archivedCount) === 0 &&
     (trashedLoadedRef.current ? trashedItems.length : vaultStats.trashedCount) === 0 &&
     orbits.length === 0;
-  const mountAssistant = useMountOnce(assistantOpen);
-  const mountQuickLook = useMountOnce(Boolean(quickLookItem));
-  const mountLightbox = useMountOnce(Boolean(lightboxItem));
-  const mountNewSecret = useMountOnce(newSecretOpen);
-  const mountUnlock = useMountOnce(unlockOpen);
-  const mountOnboarding = useMountOnce(onboardingShouldOpen);
-  const mountSettings = useMountOnce(settingsOpen);
-  const mountSynthesize = useMountOnce(synthesizeOpen);
-  const mountTriage = useMountOnce(triageOpen);
+  const presenceFallbackMs = prefersReduced ? 140 : 220;
+  const assistantMount = usePresenceMount(assistantOpen, presenceFallbackMs);
+  const quickLookMount = usePresenceMount(Boolean(quickLookItem), presenceFallbackMs);
+  const lightboxMount = usePresenceMount(Boolean(lightboxItem), presenceFallbackMs);
+  const newSecretMount = usePresenceMount(newSecretOpen, presenceFallbackMs);
+  const unlockMount = usePresenceMount(unlockOpen, presenceFallbackMs);
+  const onboardingMount = usePresenceMount(onboardingShouldOpen, presenceFallbackMs);
+  const settingsMount = usePresenceMount(settingsOpen, presenceFallbackMs);
+  const synthesizeMount = usePresenceMount(synthesizeOpen, presenceFallbackMs);
+  const triageMount = usePresenceMount(triageOpen, presenceFallbackMs);
 
   const [sectionEditor, setSectionEditor] = useState<SectionEditorState | null>(null);
   const [sectionSaving, setSectionSaving] = useState(false);
@@ -725,11 +1122,24 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [hiddenNavSections, setHiddenNavSections] = useState<HideableNavSection[]>(readHiddenNavSections);
   const [primaryNavOrder, setPrimaryNavOrder] = useState<PrimaryNavSection[]>(readPrimaryNavOrder);
   const [customizeSidebarOpen, setCustomizeSidebarOpen] = useState(false);
-  const [assistantBtnHovered, setAssistantBtnHovered] = useState(false);
-  const [settingsBtnHovered, setSettingsBtnHovered] = useState(false);
-  const [customizeBtnHovered, setCustomizeBtnHovered] = useState(false);
-  const [syncBtnHovered, setSyncBtnHovered] = useState(false);
-  const [themeBtnHovered, setThemeBtnHovered] = useState(false);
+
+  const handleOpenSettingsAppearance = useCallback(() => {
+    setSettingsInitialTab('appearance');
+    setSettingsOpen(true);
+  }, []);
+  const handleOpenSettingsSync = useCallback(() => {
+    setSettingsInitialTab('sync');
+    setSettingsOpen(true);
+  }, []);
+  const handleShowAllNavSections = useCallback(() => {
+    setHiddenNavSections(writeHiddenNavSections([]));
+  }, []);
+  const handleResetPrimaryNavOrder = useCallback(() => {
+    setPrimaryNavOrder(resetPrimaryNavOrder());
+  }, []);
+  const handleToggleAssistant = useCallback(() => {
+    setAssistantOpen((v) => !v);
+  }, []);
 
   const hiddenNavSet = useMemo(() => new Set<HideableNavSection>(hiddenNavSections), [hiddenNavSections]);
   const visiblePrimaryNavSections = useMemo(
@@ -917,6 +1327,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, [isNoteDocumentOpen]);
 
   const closeStudioCleanly = useCallback(() => {
+    openItemReqRef.current += 1;
     if (studioCloseHandlerRef.current) {
       void studioCloseHandlerRef.current();
     } else {
@@ -928,6 +1339,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     (nextNav: NavView) => {
       if (studioOpen) {
         closeStudioCleanly();
+      } else {
+        openItemReqRef.current += 1;
       }
       setFilterDnaQuick((prev) => (prev === 'note' || prev === 'task' ? 'all' : prev));
       setNav(nextNav);
@@ -940,7 +1353,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, []);
 
   const handleStudioItemUpdated = useCallback((updated: VaultItem) => {
-    setActiveItem(updated);
+    const prevToggled = latestToggledItemRef.current.get(updated.id);
+    if (prevToggled && updated.updatedAt >= prevToggled.updatedAt) {
+      if (updated.purgedAt || updated.deletedAt) {
+        latestToggledItemRef.current.delete(updated.id);
+      } else {
+        latestToggledItemRef.current.set(updated.id, updated);
+      }
+    }
+    setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+    setActiveItem((prev) => (prev && prev.id === updated.id ? updated : prev));
   }, []);
 
   const handleStudioDraftPersisted = useCallback((created: VaultItem) => {
@@ -949,16 +1371,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, []);
 
   const handleStudioCancelDraft = useCallback(() => {
+    openItemReqRef.current += 1;
     setStudioDraftMode(false);
     setStudioOpen(false);
   }, []);
 
-  const handleStudioSelectRelated = useCallback((rel: VaultItem) => {
+  const handleStudioSelectRelated = useCallback(async (rel: VaultItem) => {
+    const reqId = ++openItemReqRef.current;
+    const resolved = rel.isCardProjection ? await hydrateFullVaultItem(rel) : rel;
+    if (openItemReqRef.current !== reqId) return;
     setStudioDraftMode(false);
-    setActiveItem(rel);
+    setActiveItem(resolved);
   }, []);
 
   const handleStudioClose = useCallback(() => {
+    openItemReqRef.current += 1;
     setStudioOpen(false);
   }, []);
 
@@ -990,11 +1417,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       const needTrashed = navRef.current.type === 'trash' || trashedLoadedRef.current;
       const [vaultRows, archivedRows, trashedRows, orbitRows, boardRows, taskRows, calRows, stats] =
         await Promise.all([
-          window.kapsula.queryVault({ includeSecrets: true, limit: SERVER_ITEM_PAGE }),
+          window.kapsula.queryVault({
+            includeSecrets: true,
+            projection: 'card',
+            limit: SERVER_ITEM_PAGE,
+          }),
           needArchived
             ? window.kapsula.queryVault({
                 archivedOnly: true,
                 includeSecrets: true,
+                projection: 'card',
                 limit: 300,
               })
             : Promise.resolve<VaultItem[] | null>(null),
@@ -1002,6 +1434,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ? window.kapsula.queryVault({
                 onlyDeleted: true,
                 includeSecrets: true,
+                projection: 'card',
                 limit: 300,
               })
             : Promise.resolve<VaultItem[] | null>(null),
@@ -1044,7 +1477,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   useEffect(() => {
     if (nav.type === 'archive' && !archivedLoadedRef.current) {
       void window.kapsula
-        .queryVault({ archivedOnly: true, includeSecrets: true, limit: 300 })
+        .queryVault({ archivedOnly: true, includeSecrets: true, projection: 'card', limit: 300 })
         .then((rows) => {
           archivedLoadedRef.current = true;
           setArchivedItems(rows.filter((r) => r.isArchived && !r.deletedAt && !r.purgedAt));
@@ -1052,7 +1485,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         .catch(() => {});
     } else if (nav.type === 'trash' && !trashedLoadedRef.current) {
       void window.kapsula
-        .queryVault({ onlyDeleted: true, includeSecrets: true, limit: 300 })
+        .queryVault({ onlyDeleted: true, includeSecrets: true, projection: 'card', limit: 300 })
         .then((rows) => {
           trashedLoadedRef.current = true;
           setTrashedItems(rows.filter((r) => Boolean(r.deletedAt) && !r.purgedAt));
@@ -1075,12 +1508,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, [refreshAll]);
 
   const handleOpenItem = useCallback((item: VaultItem) => {
-    setStudioDraftMode(false);
-    setActiveItem(item);
-    setStudioOpen(true);
+    const reqId = ++openItemReqRef.current;
+    if (!item.isCardProjection) {
+      setStudioDraftMode(false);
+      setActiveItem(item);
+      setStudioOpen(true);
+      return;
+    }
+    void hydrateFullVaultItem(item).then((full) => {
+      if (openItemReqRef.current !== reqId) return;
+      setStudioDraftMode(false);
+      setActiveItem(full);
+      setStudioOpen(true);
+    });
   }, []);
 
   const handleOpenBlankDraft = useCallback(() => {
+    openItemReqRef.current += 1;
     if (nav.type === 'notes' || isInlineNotesMode) {
       setNotesDraftTrigger((n) => n + 1);
       return;
@@ -1094,6 +1538,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const handleOpenBlankDraftRef = useRef(handleOpenBlankDraft);
   handleOpenBlankDraftRef.current = handleOpenBlankDraft;
+  const applyBatchUpsertedRef = useRef<
+    ((items: VaultItem[], opts?: { skipTaskRefresh?: boolean }) => void) | null
+  >(null);
+  const applyBatchDeletedRef = useRef<
+    ((ids: string[], opts?: { skipTaskRefresh?: boolean }) => void) | null
+  >(null);
 
   // Real-time IPC subscriptions
   useEffect(() => {
@@ -1108,93 +1558,189 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         )
         .catch(() => {});
     };
-    const itemHasTasksOrLoaded = (item: VaultItem) =>
-      navRef.current.type === 'tasks' ||
-      isInlineTasksModeRef.current ||
-      /\[[ xX]\]/.test(item.body || '') ||
-      Boolean(item.mediaMeta?.actionItems?.length) ||
-      tasksRef.current.some((t) => t.itemId === item.id);
 
-    const unsubUpsert = window.kapsula.onVaultItemUpserted((rawItem) => {
-      const item = applyPendingTaskTogglesToItem(rawItem);
-      if (item.purgedAt) {
-        setItems((prev) => prev.filter((x) => x.id !== item.id));
-        if (archivedLoadedRef.current) {
-          setArchivedItems((prev) => prev.filter((x) => x.id !== item.id));
+    const applyBatchUpsertedToState = (
+      rawItems: VaultItem[],
+      opts?: { skipTaskRefresh?: boolean }
+    ) => {
+      if (!rawItems || rawItems.length === 0) return;
+      const mapped = rawItems.map(applyPendingTaskTogglesToItem);
+      const prevById = new Map(itemsRef.current.map((x) => [x.id, x]));
+      const purgedIds = new Set<string>();
+      const deletedMap = new Map<string, VaultItem>();
+      const archivedMap = new Map<string, VaultItem>();
+      const activeMap = new Map<string, VaultItem>();
+      const mergedById = new Map<string, VaultItem>();
+
+      let shouldRefreshTasks = false;
+      let shouldRefreshStats = false;
+
+      for (const item of mapped) {
+        mergedById.set(item.id, item);
+        const prevItem = prevById.get(item.id);
+        if (!opts?.skipTaskRefresh && !shouldRefreshTasks) {
+          if (item.purgedAt || item.deletedAt || item.isArchived) {
+            shouldRefreshTasks =
+              tasksRef.current.some((t) => t.itemId === item.id) ||
+              (prevItem
+                ? extractTaskLinesSignature(prevItem.body) !== '' ||
+                  Boolean(prevItem.mediaMeta?.actionItems?.length)
+                : false);
+          } else if (!prevItem) {
+            shouldRefreshTasks =
+              (item.dna !== 'secret' &&
+                (extractTaskLinesSignature(item.body) !== '' ||
+                  Boolean(item.mediaMeta?.actionItems?.length))) ||
+              tasksRef.current.some((t) => t.itemId === item.id);
+          } else {
+            const taskComparePrev =
+              activeItemRef.current?.id === item.id && !activeItemRef.current.isCardProjection
+                ? activeItemRef.current
+                : prevItem;
+            shouldRefreshTasks = haveTaskRelevantFieldsChanged(taskComparePrev, item);
+          }
         }
-        if (trashedLoadedRef.current) {
-          setTrashedItems((prev) => prev.filter((x) => x.id !== item.id));
-        }
-        if (!archivedLoadedRef.current || !trashedLoadedRef.current) refreshStatsOnly();
-      } else if (item.deletedAt) {
-        setItems((prev) => prev.filter((x) => x.id !== item.id));
-        if (archivedLoadedRef.current) {
-          setArchivedItems((prev) => prev.filter((x) => x.id !== item.id));
-        }
-        if (trashedLoadedRef.current) {
-          setTrashedItems((prev) => [item, ...prev.filter((x) => x.id !== item.id)]);
+
+        if (item.purgedAt) {
+          purgedIds.add(item.id);
+          if (!archivedLoadedRef.current || !trashedLoadedRef.current) {
+            shouldRefreshStats = true;
+          }
+        } else if (item.deletedAt) {
+          deletedMap.set(item.id, item);
+          if (!trashedLoadedRef.current) shouldRefreshStats = true;
+        } else if (item.isArchived) {
+          archivedMap.set(item.id, item);
+          if (!archivedLoadedRef.current) shouldRefreshStats = true;
         } else {
-          refreshStatsOnly();
+          activeMap.set(item.id, item);
+          if (
+            !prevItem &&
+            ((!archivedLoadedRef.current && vaultStatsRef.current.archivedCount > 0) ||
+              (!trashedLoadedRef.current && vaultStatsRef.current.trashedCount > 0))
+          ) {
+            shouldRefreshStats = true;
+          }
         }
-      } else if (item.isArchived) {
-        setItems((prev) => prev.filter((x) => x.id !== item.id));
-        if (trashedLoadedRef.current) {
-          setTrashedItems((prev) => prev.filter((x) => x.id !== item.id));
+
+        const prevToggled = latestToggledItemRef.current.get(item.id);
+        if (prevToggled && item.updatedAt >= prevToggled.updatedAt) {
+          if (item.purgedAt || item.deletedAt) {
+            latestToggledItemRef.current.delete(item.id);
+          } else {
+            latestToggledItemRef.current.set(item.id, item);
+          }
         }
-        if (archivedLoadedRef.current) {
-          setArchivedItems((prev) => [item, ...prev.filter((x) => x.id !== item.id)]);
-        } else {
-          refreshStatsOnly();
+      }
+
+      const removeFromActive = new Set<string>([
+        ...purgedIds,
+        ...deletedMap.keys(),
+        ...archivedMap.keys(),
+      ]);
+      setItems((prev) => {
+        const next: VaultItem[] = [];
+        const seen = new Set<string>();
+        for (const existing of prev) {
+          if (removeFromActive.has(existing.id)) continue;
+          const up = activeMap.get(existing.id);
+          if (up) {
+            next.push(up);
+            seen.add(existing.id);
+          } else {
+            next.push(existing);
+          }
         }
-      } else {
-        const wasKnownActive = itemsRef.current.some((x) => x.id === item.id);
-        if (archivedLoadedRef.current) {
-          setArchivedItems((prev) => prev.filter((x) => x.id !== item.id));
+        const prepended: VaultItem[] = [];
+        for (const [id, up] of activeMap.entries()) {
+          if (!seen.has(id)) prepended.push(up);
         }
-        if (trashedLoadedRef.current) {
-          setTrashedItems((prev) => prev.filter((x) => x.id !== item.id));
-        }
-        if (
-          !wasKnownActive &&
-          ((!archivedLoadedRef.current && vaultStatsRef.current.archivedCount > 0) ||
-            (!trashedLoadedRef.current && vaultStatsRef.current.trashedCount > 0))
-        ) {
-          refreshStatsOnly();
-        }
-        setItems((prev) => {
-          const idx = prev.findIndex((x) => x.id === item.id);
-          if (idx === -1) return [item, ...prev];
-          const copy = [...prev];
-          copy[idx] = item;
-          return copy;
+        return prepended.length > 0 ? [...prepended, ...next] : next;
+      });
+
+      if (archivedLoadedRef.current) {
+        const dropFromArchive = new Set<string>([
+          ...purgedIds,
+          ...deletedMap.keys(),
+          ...activeMap.keys(),
+        ]);
+        setArchivedItems((prev) => {
+          const filtered = prev.filter(
+            (x) => !dropFromArchive.has(x.id) && !archivedMap.has(x.id)
+          );
+          const added = Array.from(archivedMap.values());
+          return added.length > 0 ? [...added, ...filtered] : filtered;
         });
       }
-      setActiveItem((prev) => (prev && prev.id === item.id ? item : prev));
-      setQuickLookItem((prev) => (prev && prev.id === item.id ? item : prev));
-      setLightboxItem((prev) => (prev && prev.id === item.id ? item : prev));
-      if (itemHasTasksOrLoaded(item)) {
+
+      if (trashedLoadedRef.current) {
+        const dropFromTrash = new Set<string>([
+          ...purgedIds,
+          ...archivedMap.keys(),
+          ...activeMap.keys(),
+        ]);
+        setTrashedItems((prev) => {
+          const filtered = prev.filter(
+            (x) => !dropFromTrash.has(x.id) && !deletedMap.has(x.id)
+          );
+          const added = Array.from(deletedMap.values());
+          return added.length > 0 ? [...added, ...filtered] : filtered;
+        });
+      }
+
+      if (shouldRefreshStats) {
+        refreshStatsOnly();
+      }
+
+      setActiveItem((prev) => {
+        if (!prev) return prev;
+        const incoming = mergedById.get(prev.id);
+        return incoming ? mergeVaultItemPreservingFull(prev, incoming) : prev;
+      });
+      setQuickLookItem((prev) => {
+        if (!prev) return prev;
+        const incoming = mergedById.get(prev.id);
+        return incoming ? mergeVaultItemPreservingFull(prev, incoming) : prev;
+      });
+      setLightboxItem((prev) => {
+        if (!prev) return prev;
+        const incoming = mergedById.get(prev.id);
+        return incoming ? mergeVaultItemPreservingFull(prev, incoming) : prev;
+      });
+
+      if (!opts?.skipTaskRefresh && shouldRefreshTasks) {
         void window.kapsula
           .listTasks()
           .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
           .catch(() => {});
       }
-    });
+    };
 
-    const unsubDelete = window.kapsula.onVaultItemDeleted((id) => {
-      setItems((prev) => prev.filter((x) => x.id !== id));
-      setArchivedItems((prev) => prev.filter((x) => x.id !== id));
-      setTrashedItems((prev) => prev.filter((x) => x.id !== id));
-      setSelectedIds((prev) => prev.filter((x) => x !== id));
-      setActiveItem((prev) => {
-        if (prev && prev.id === id) {
-          setStudioOpen(false);
-          return null;
-        }
-        return prev;
-      });
+    const applyBatchDeletedToState = (
+      ids: string[],
+      opts?: { skipTaskRefresh?: boolean }
+    ) => {
+      if (!ids || ids.length === 0) return;
+      const idSet = new Set(ids);
+      for (const id of idSet) {
+        latestToggledItemRef.current.delete(id);
+      }
+      setItems((prev) => prev.filter((x) => !idSet.has(x.id)));
+      setArchivedItems((prev) => prev.filter((x) => !idSet.has(x.id)));
+      setTrashedItems((prev) => prev.filter((x) => !idSet.has(x.id)));
+      setSelectedIds((prev) => prev.filter((x) => !idSet.has(x)));
+      if (activeItemRef.current && idSet.has(activeItemRef.current.id)) {
+        openItemReqRef.current += 1;
+        setStudioOpen(false);
+        setActiveItem(null);
+      }
+      setActiveItem((prev) => (prev && idSet.has(prev.id) ? null : prev));
+      setQuickLookItem((prev) => (prev && idSet.has(prev.id) ? null : prev));
+      setLightboxItem((prev) => (prev && idSet.has(prev.id) ? null : prev));
+
       if (trashedLoadedRef.current || navRef.current.type === 'trash') {
         void window.kapsula
-          .queryVault({ onlyDeleted: true, includeSecrets: true, limit: 300 })
+          .queryVault({ onlyDeleted: true, includeSecrets: true, projection: 'card', limit: 300 })
           .then((rows) => {
             trashedLoadedRef.current = true;
             setTrashedItems(rows.filter((r) => Boolean(r.deletedAt) && !r.purgedAt));
@@ -1203,7 +1749,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
       if (archivedLoadedRef.current || navRef.current.type === 'archive') {
         void window.kapsula
-          .queryVault({ archivedOnly: true, includeSecrets: true, limit: 300 })
+          .queryVault({ archivedOnly: true, includeSecrets: true, projection: 'card', limit: 300 })
           .then((rows) => {
             archivedLoadedRef.current = true;
             setArchivedItems(rows.filter((r) => r.isArchived && !r.deletedAt && !r.purgedAt));
@@ -1213,12 +1759,28 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       if (!trashedLoadedRef.current || !archivedLoadedRef.current) {
         refreshStatsOnly();
       }
-      if (navRef.current.type === 'tasks' || tasksRef.current.some((t) => t.itemId === id)) {
-        void window.kapsula
-          .listTasks()
-          .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-          .catch(() => {});
+      if (!opts?.skipTaskRefresh) {
+        setTasks((prev) => prev.filter((t) => !idSet.has(t.itemId)));
       }
+    };
+
+    applyBatchUpsertedRef.current = applyBatchUpsertedToState;
+    applyBatchDeletedRef.current = applyBatchDeletedToState;
+
+    const unsubUpsert = window.kapsula.onVaultItemUpserted((rawItem) => {
+      applyBatchUpsertedToState([rawItem]);
+    });
+
+    const unsubBatchUpsert = window.kapsula.onVaultItemsBatchUpserted((rawItems) => {
+      applyBatchUpsertedToState(rawItems);
+    });
+
+    const unsubDelete = window.kapsula.onVaultItemDeleted((id) => {
+      applyBatchDeletedToState([id]);
+    });
+
+    const unsubBatchDelete = window.kapsula.onVaultItemsBatchDeleted((ids) => {
+      applyBatchDeletedToState(ids);
     });
 
     const unsubOrbits = window.kapsula.onOrbitsChanged(() => {
@@ -1238,13 +1800,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     });
 
     const unsubFocus = window.kapsula.onFocusItem(async (itemId) => {
+      const reqId = ++openItemReqRef.current;
       try {
         const found = await window.kapsula.getVaultItem(itemId, { includeDeleted: true });
-        if (found) {
-          setStudioDraftMode(false);
-          setActiveItem(found);
-          setStudioOpen(true);
-        }
+        if (openItemReqRef.current !== reqId || !found) return;
+        setStudioDraftMode(false);
+        setActiveItem(found);
+        setStudioOpen(true);
       } catch {
         // ignore
       }
@@ -1255,6 +1817,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     });
 
     const unsubOpenCalendar = window.kapsula.onOpenCalendar(() => {
+      openItemReqRef.current += 1;
       setStudioOpen(false);
       setNav({ type: 'calendar' });
     });
@@ -1282,7 +1845,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
     return () => {
       unsubUpsert();
+      unsubBatchUpsert();
       unsubDelete();
+      unsubBatchDelete();
       unsubOrbits();
       unsubBoards();
       unsubCal();
@@ -1314,7 +1879,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           (target.tagName === 'INPUT' ||
             target.tagName === 'TEXTAREA' ||
             target.isContentEditable ||
-            target.closest('[contenteditable="true"]'));
+            (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')));
         if (
           !isTyping &&
           !studioOpen &&
@@ -1374,23 +1939,33 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   // Debounced bilingual backend search
   useEffect(() => {
     const q = searchQuery.trim();
+    const reqId = ++serverSearchReqIdRef.current;
     if (!q) {
       setServerSearchIds(null);
       return;
     }
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
         const res = await window.kapsula.queryVault({
           search: q,
           includeSecrets: true,
-          limit: 300,
+          projection: 'card',
+          limit: 2000,
         });
-        setServerSearchIds(res.map((r) => r.id));
+        if (!cancelled && reqId === serverSearchReqIdRef.current) {
+          setServerSearchIds(res.map((r) => r.id));
+        }
       } catch {
-        setServerSearchIds(null);
+        if (!cancelled && reqId === serverSearchReqIdRef.current) {
+          setServerSearchIds(null);
+        }
       }
     }, 120);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [searchQuery]);
 
   // Vault-wide frequency-sorted tags for smart tag autocomplete
@@ -1553,13 +2128,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         : nav.type === 'trash'
           ? trashedItems
           : items;
-    const q = searchQuery.trim();
+    const q = deferredSearchQuery.trim();
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
     const scoreMap = q ? new Map<string, number>() : null;
     const orbitNameMap = q ? new Map(orbits.map((o) => [o.id, o.name])) : null;
     const boardNameMap = q ? new Map(boards.map((b) => [b.id, b.name])) : null;
 
-    const filtered = base.filter((item) => {
+    const structuralCandidates = base.filter((item) => {
       if (nav.type === 'flow') {
         if (item.dna === 'secret') return false;
       } else if (nav.type === 'notes') {
@@ -1606,42 +2181,82 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         return false;
       }
 
-      if (q) {
-        const localScore = scoreBilingualFields(
-          {
-            title: item.title,
-            tags: item.tags,
-            orbitName: item.orbit ? orbitNameMap?.get(item.orbit) : undefined,
-            boardName: item.focusBoardId ? boardNameMap?.get(item.focusBoardId) : undefined,
-            domain: item.domain,
-            dnaLabel: getDnaHumanLabel(item, locale),
-            summary: item.summary,
-            body: item.body,
-            ocrText: item.ocrText,
-            url: item.url,
-            extra: [
-              item.secretMeta?.service,
-              item.secretMeta?.loginHint,
-              item.secretMeta?.cardBrand,
-              item.mediaMeta?.transcript,
-              item.isMuted ? 'muted' : '',
-              item.isPinned ? 'pinned' : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            isPinned: item.isPinned,
-            updatedAt: item.contentUpdatedAt || item.createdAt,
-          },
-          q
-        );
-        const serverHit = Boolean(serverSet && serverSet.has(item.id));
-        const totalScore = localScore > 0 ? localScore + (serverHit ? 24 : 0) : serverHit ? 24 : 0;
-        if (totalScore <= 0) return false;
-        scoreMap?.set(item.id, totalScore);
-      }
-
       return true;
     });
+
+    let filtered: VaultItem[];
+    if (!q) {
+      filtered = structuralCandidates;
+    } else {
+      filtered = [];
+      const remaining: Array<{
+        item: VaultItem;
+        fields: Parameters<typeof scoreBilingualFields>[0];
+        serverHit: boolean;
+      }> = [];
+
+      const compiledQuery = compileBilingualSearchQuery(q);
+      const nowMs = Date.now();
+
+      for (const item of structuralCandidates) {
+        const fields = {
+          title: item.title,
+          tags: item.tags,
+          orbitName: item.orbit ? orbitNameMap?.get(item.orbit) : undefined,
+          boardName: item.focusBoardId ? boardNameMap?.get(item.focusBoardId) : undefined,
+          domain: item.domain,
+          dnaLabel: getDnaHumanLabel(item, locale),
+          summary: item.summary,
+          body: item.body,
+          ocrText: item.ocrText,
+          url: item.url,
+          extra: [
+            item.secretMeta?.service,
+            item.secretMeta?.loginHint,
+            item.secretMeta?.cardBrand,
+            item.mediaMeta?.transcript,
+            item.isMuted ? 'muted' : '',
+            item.isPinned ? 'pinned' : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+          isPinned: item.isPinned,
+          updatedAt: item.contentUpdatedAt || item.createdAt,
+        };
+        const serverHit = Boolean(serverSet && serverSet.has(item.id));
+        const localScore = scoreBilingualFieldsCompiled(fields, compiledQuery, {
+          allowFuzzy: false,
+          nowMs,
+        });
+        if (localScore > 0) {
+          scoreMap?.set(item.id, localScore + (serverHit ? 24 : 0));
+          filtered.push(item);
+        } else {
+          remaining.push({ item, fields, serverHit });
+        }
+      }
+
+      if (filtered.length < 8 && remaining.length > 0) {
+        for (const cand of remaining) {
+          const fuzzyScore = scoreBilingualFieldsCompiled(cand.fields, compiledQuery, {
+            allowFuzzy: true,
+            nowMs,
+          });
+          const totalScore = fuzzyScore > 0 ? fuzzyScore + (cand.serverHit ? 24 : 0) : cand.serverHit ? 24 : 0;
+          if (totalScore > 0) {
+            scoreMap?.set(cand.item.id, totalScore);
+            filtered.push(cand.item);
+          }
+        }
+      } else {
+        for (const cand of remaining) {
+          if (cand.serverHit) {
+            scoreMap?.set(cand.item.id, 24);
+            filtered.push(cand.item);
+          }
+        }
+      }
+    }
 
     const sorted = [...filtered];
     sorted.sort((a, b) => {
@@ -1681,7 +2296,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     items,
     archivedItems,
     trashedItems,
-    searchQuery,
+    deferredSearchQuery,
     serverSearchIds,
     filterMediaOnly,
     filterPinnedOnly,
@@ -1731,6 +2346,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     () => visibleItems.filter((i) => i.dna !== 'secret').map((i) => i.id),
     [visibleItems],
   );
+  const selectableVisibleIdsRef = useRef(selectableVisibleIds);
+  selectableVisibleIdsRef.current = selectableVisibleIds;
 
   useEffect(() => {
     const allowed = new Set(selectableVisibleIds);
@@ -1741,13 +2358,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     });
   }, [selectableVisibleIds]);
 
-  const renderedItems = useMemo(
-    () => visibleItems.slice(0, feedVisibleCount),
-    [visibleItems, feedVisibleCount],
-  );
-
+  const navResetMountedRef = useRef(false);
   useEffect(() => {
-    setFeedVisibleCount(FEED_PAGE_SIZE);
+    if (!navResetMountedRef.current) {
+      navResetMountedRef.current = true;
+      return;
+    }
+    const scroller = feedCanvasRef.current?.querySelector('.overflow-y-auto') as HTMLElement | null;
+    if (scroller && scroller.scrollTop !== 0) {
+      scroller.scrollTop = 0;
+    }
   }, [
     nav,
     searchQuery,
@@ -1768,6 +2388,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const more = await window.kapsula.queryVault({
         includeSecrets: true,
+        projection: 'card',
         limit: 1000,
         offset: itemsRef.current.length,
       });
@@ -1782,7 +2403,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           );
           return extra.length > 0 ? [...prev, ...extra] : prev;
         });
-        setFeedVisibleCount((prev) => prev + FEED_PAGE_SIZE);
       }
     } catch {
       // ignore transient pagination fetch errors
@@ -1791,34 +2411,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }
   }, [hasMoreServerItems]);
 
-  const enableAutoAnimate = renderedItems.length <= 60 && !prefersReduced;
-  useLayoutEffect(() => {
-    enableFeedGridAnim(enableAutoAnimate);
-    enableFeedListAnim(enableAutoAnimate);
-  }, [enableAutoAnimate, enableFeedGridAnim, enableFeedListAnim]);
-
-  const showFeedPaginationSentinel =
-    feedVisibleCount < visibleItems.length ||
-    (hasMoreServerItems && nav.type !== 'archive' && nav.type !== 'trash');
-
-  useEffect(() => {
-    if (!showFeedPaginationSentinel) return;
-    const el = feedSentinelRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        if (feedVisibleCount < visibleItems.length) {
-          setFeedVisibleCount((prev) => Math.min(visibleItems.length, prev + FEED_PAGE_SIZE));
-        } else if (hasMoreServerItems && nav.type !== 'archive' && nav.type !== 'trash') {
-          void loadMoreServerItems();
-        }
-      },
-      { rootMargin: '400px' },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [showFeedPaginationSentinel, feedVisibleCount, visibleItems.length, hasMoreServerItems, nav.type, loadMoreServerItems]);
+  const handleFeedReachEnd = useCallback(() => {
+    if (hasMoreServerItems && navRef.current.type !== 'archive' && navRef.current.type !== 'trash') {
+      void loadMoreServerItems();
+    }
+  }, [hasMoreServerItems, loadMoreServerItems]);
 
   // Handlers
   const handleToggleTheme = async () => {
@@ -1869,85 +2466,89 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const handleOpenItemById = useCallback(
     async (itemId: string) => {
-      const existing = items.find((i) => i.id === itemId);
+      const existing = itemsRef.current.find((i) => i.id === itemId);
       if (existing) {
         handleOpenItem(existing);
         return;
       }
+      const reqId = ++openItemReqRef.current;
       try {
-        const all = await window.kapsula.queryVault({
-          includeSecrets: true,
-          includeArchived: true,
-          limit: 500,
-        });
-        const found = all.find((x) => x.id === itemId);
-        if (found) handleOpenItem(found);
+        const found = await window.kapsula.getVaultItem(itemId, { includeDeleted: true });
+        if (openItemReqRef.current !== reqId || !found) return;
+        const resolved = found.isCardProjection ? await hydrateFullVaultItem(found) : found;
+        if (openItemReqRef.current !== reqId) return;
+        setStudioDraftMode(false);
+        setActiveItem(resolved);
+        setStudioOpen(true);
       } catch {
         // ignore
       }
     },
-    [items, handleOpenItem],
+    [handleOpenItem],
   );
 
-  const handleToggleSelect = useCallback(
-    (item: VaultItem, shiftKey: boolean) => {
-      if (item.dna === 'secret') return;
-      setSelectedIds((prev) => {
-        if (shiftKey && lastSelectedIdRef.current) {
-          const ids = selectableVisibleIds;
-          const from = ids.indexOf(lastSelectedIdRef.current);
-          const to = ids.indexOf(item.id);
-          if (from !== -1 && to !== -1) {
-            const [start, end] = from < to ? [from, to] : [to, from];
-            const merged = new Set(prev);
-            for (const rid of ids.slice(start, end + 1)) merged.add(rid);
-            return Array.from(merged);
-          }
+  const handleToggleSelect = useCallback((item: VaultItem, shiftKey: boolean) => {
+    if (item.dna === 'secret') return;
+    setSelectedIds((prev) => {
+      if (shiftKey && lastSelectedIdRef.current) {
+        const ids = selectableVisibleIdsRef.current;
+        const from = ids.indexOf(lastSelectedIdRef.current);
+        const to = ids.indexOf(item.id);
+        if (from !== -1 && to !== -1) {
+          const [start, end] = from < to ? [from, to] : [to, from];
+          const merged = new Set(prev);
+          for (const rid of ids.slice(start, end + 1)) merged.add(rid);
+          return Array.from(merged);
         }
-        lastSelectedIdRef.current = item.id;
-        return prev.includes(item.id)
-          ? prev.filter((id) => id !== item.id)
-          : [...prev, item.id];
-      });
+      }
+      lastSelectedIdRef.current = item.id;
+      return prev.includes(item.id)
+        ? prev.filter((id) => id !== item.id)
+        : [...prev, item.id];
+    });
+  }, []);
+
+  const handleRestoreItem = useCallback(
+    async (id: string) => {
+      try {
+        const restored = await window.kapsula.restoreItem(id);
+        if (!restored) {
+          toast.error(t('workspace.toast.restoreFailed'));
+          void refreshAll();
+          return;
+        }
+        setTrashedItems((prev) => prev.filter((x) => x.id !== id));
+        toast.success(t('workspace.toast.restored'));
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
     },
-    [selectableVisibleIds],
+    [locale, t, refreshAll]
   );
 
-  const handleDeleteItem = async (id: string) => {
-    try {
-      const ok = await window.kapsula.deleteItem(id);
-      if (!ok) {
-        toast.error(t('workspace.toast.trashFailed'));
-        void refreshAll();
-        return;
-      }
-      toast(t('workspace.toast.movedToTrash'), {
-        action: {
-          label: t('common.undo'),
-          onClick: () => {
-            void handleRestoreItem(id);
+  const handleDeleteItem = useCallback(
+    async (id: string) => {
+      try {
+        const ok = await window.kapsula.deleteItem(id);
+        if (!ok) {
+          toast.error(t('workspace.toast.trashFailed'));
+          void refreshAll();
+          return;
+        }
+        toast(t('workspace.toast.movedToTrash'), {
+          action: {
+            label: t('common.undo'),
+            onClick: () => {
+              void handleRestoreItem(id);
+            },
           },
-        },
-      });
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleRestoreItem = async (id: string) => {
-    try {
-      const restored = await window.kapsula.restoreItem(id);
-      if (!restored) {
-        toast.error(t('workspace.toast.restoreFailed'));
-        void refreshAll();
-        return;
+        });
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
       }
-      setTrashedItems((prev) => prev.filter((x) => x.id !== id));
-      toast.success(t('workspace.toast.restored'));
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
+    },
+    [locale, t, refreshAll, handleRestoreItem]
+  );
 
   const handleUnarchiveItem = async (id: string) => {
     try {
@@ -1998,108 +2599,223 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }
   };
 
-  const handleTogglePin = async (item: VaultItem) => {
-    try {
-      await window.kapsula.updateItem(item.id, { isPinned: !item.isPinned });
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleToggleMute = async (item: VaultItem) => {
-    const nextMuted = !item.isMuted;
-    try {
-      const updated = await window.kapsula.updateItem(item.id, { isMuted: nextMuted });
-      if (updated) {
-        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
-        setActiveItem((prev) => (prev && prev.id === updated.id ? updated : prev));
-      }
-      playTactileTick(soundEnabled, 'soft');
-      toast(t(nextMuted ? 'workspace.toast.mutedSingle' : 'workspace.toast.unmutedSingle'));
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleMoveToOrbit = async (itemId: string, orbitId: string) => {
-    try {
-      const updated = await window.kapsula.updateItem(itemId, { orbit: orbitId });
-      if (updated) {
-        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleMoveToBoard = async (itemId: string, boardId: string | null) => {
-    try {
-      const updated = await window.kapsula.updateItem(itemId, { focusBoardId: boardId });
-      if (updated) {
-        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleToggleNotesHub = useCallback(
-    async (target: VaultItem, inNotesHub: boolean) => {
+  const handleTogglePin = useCallback(
+    async (item: VaultItem) => {
       try {
-        const updated = await window.kapsula.updateItem(target.id, {
-          mediaMeta: { ...(target.mediaMeta ?? {}), inNotesHub },
-        });
+        await window.kapsula.updateItem(item.id, { isPinned: !item.isPinned });
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
+    },
+    [locale]
+  );
+
+  const handleToggleMute = useCallback(
+    async (item: VaultItem) => {
+      const nextMuted = !item.isMuted;
+      try {
+        const updated = await window.kapsula.updateItem(item.id, { isMuted: nextMuted });
         if (updated) {
           setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
           setActiveItem((prev) => (prev && prev.id === updated.id ? updated : prev));
         }
-        toast.success(
-          t(inNotesHub ? 'notes.hub.addedToNotesToast' : 'notes.hub.removedFromNotesToast')
-        );
+        playTactileTick(soundEnabled, 'soft');
+        toast(t(nextMuted ? 'workspace.toast.mutedSingle' : 'workspace.toast.unmutedSingle'));
       } catch (err) {
         toast.error(friendlyErrorMessage(err, undefined, locale));
       }
+    },
+    [soundEnabled, t, locale]
+  );
+
+  const handleMoveToOrbit = useCallback(
+    async (itemId: string, orbitId: string) => {
+      try {
+        const updated = await window.kapsula.updateItem(itemId, { orbit: orbitId });
+        if (updated) {
+          setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+        }
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
+    },
+    [locale]
+  );
+
+  const handleMoveToBoard = useCallback(
+    async (itemId: string, boardId: string | null) => {
+      try {
+        const updated = await window.kapsula.updateItem(itemId, { focusBoardId: boardId });
+        if (updated) {
+          setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+        }
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
+    },
+    [locale]
+  );
+
+  useEffect(() => {
+    if (latestToggledItemRef.current.size === 0) return;
+    const itemById = new Map(items.map((it) => [it.id, it]));
+    for (const [id, toggled] of latestToggledItemRef.current.entries()) {
+      if (toggleNotesHubQueueRef.current.has(id)) continue;
+      const inState = itemById.get(id);
+      if (inState && inState.updatedAt >= toggled.updatedAt) {
+        latestToggledItemRef.current.delete(id);
+      }
+    }
+  }, [items]);
+
+  const handleToggleNotesHub = useCallback(
+    (target: VaultItem, inNotesHub: boolean) => {
+      const itemId = target.id;
+      const seq = (toggleNotesHubSeqRef.current.get(itemId) ?? 0) + 1;
+      toggleNotesHubSeqRef.current.set(itemId, seq);
+
+      const prev = toggleNotesHubQueueRef.current.get(itemId) ?? Promise.resolve();
+      const chained = prev
+        .catch(() => {})
+        .then(async () => {
+          if (toggleNotesHubSeqRef.current.get(itemId) !== seq) return;
+          const fromItems = itemsRef.current.find((it) => it.id === itemId);
+          const fromToggled = latestToggledItemRef.current.get(itemId);
+          const latestLocal =
+            fromToggled && (!fromItems || fromToggled.updatedAt >= fromItems.updatedAt)
+              ? fromToggled
+              : fromItems ?? target;
+          let resolved = latestLocal.isCardProjection
+            ? await hydrateFullVaultItem(latestLocal)
+            : latestLocal;
+          if (resolved.isCardProjection && resolved.isBodyTruncated) {
+            const fetched = await window.kapsula
+              .getVaultItem(itemId, { includeDeleted: Boolean(latestLocal.deletedAt) })
+              .catch(() => null);
+            if (!fetched) {
+              if (toggleNotesHubSeqRef.current.get(itemId) === seq) {
+                toast.error(friendlyErrorMessage(undefined, undefined, locale));
+              }
+              return;
+            }
+            resolved = fetched;
+          }
+          if (toggleNotesHubSeqRef.current.get(itemId) !== seq) return;
+          if (Boolean(resolved.mediaMeta?.inNotesHub) === inNotesHub) return;
+
+          const updated = await window.kapsula.updateItem(resolved.id, {
+            mediaMeta: { ...(resolved.mediaMeta ?? {}), inNotesHub },
+          });
+          if (updated) {
+            latestToggledItemRef.current.set(updated.id, updated);
+            itemsRef.current = itemsRef.current.map((it) => (it.id === updated.id ? updated : it));
+            setItems((prevItems) =>
+              prevItems.map((it) => (it.id === updated.id ? updated : it))
+            );
+            setActiveItem((prevActive) =>
+              prevActive && prevActive.id === updated.id ? updated : prevActive
+            );
+          }
+          toast.success(
+            t(inNotesHub ? 'notes.hub.addedToNotesToast' : 'notes.hub.removedFromNotesToast')
+          );
+        })
+        .catch((err) => {
+          if (toggleNotesHubSeqRef.current.get(itemId) === seq) {
+            toast.error(friendlyErrorMessage(err, undefined, locale));
+          }
+        })
+        .finally(() => {
+          if (toggleNotesHubQueueRef.current.get(itemId) === chained) {
+            toggleNotesHubQueueRef.current.delete(itemId);
+          }
+        });
+
+      toggleNotesHubQueueRef.current.set(itemId, chained);
+      return chained;
     },
     [locale, t]
   );
 
   const handleDropItemOnNotes = useCallback(
     async (itemId: string) => {
-      let target = items.find((it) => it.id === itemId);
+      const preDropSeq = toggleNotesHubSeqRef.current.get(itemId) ?? 0;
+      const fromItems = itemsRef.current.find((it) => it.id === itemId);
+      const fromToggled = latestToggledItemRef.current.get(itemId);
+      let target =
+        fromToggled && (!fromItems || fromToggled.updatedAt >= fromItems.updatedAt)
+          ? fromToggled
+          : fromItems;
       if (!target) {
         try {
-          const rows = await window.kapsula.queryVault({ includeSecrets: false, limit: 500 });
-          target = rows.find((it) => it.id === itemId);
+          target = (await window.kapsula.getVaultItem(itemId)) ?? undefined;
         } catch {
           target = undefined;
         }
+        if ((toggleNotesHubSeqRef.current.get(itemId) ?? 0) !== preDropSeq) return;
       }
-      if (!target) return;
+      if (!target || target.deletedAt) return;
       if (target.dna !== 'note' && target.dna !== 'snippet') return;
       await handleToggleNotesHub(target, true);
     },
-    [items, handleToggleNotesHub]
+    [handleToggleNotesHub]
   );
 
-  const handleDuplicateItem = async (itemId: string) => {
-    try {
-      const dup = await window.kapsula.duplicateItem(itemId);
-      if (dup) toast.success(t('workspace.toast.duplicated'));
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
-    }
-  };
-
-  const handleExportMarkdown = async (itemId: string) => {
-    try {
-      const res = await window.kapsula.exportMarkdown(itemId);
-      if (res.saved) {
-        toast.success(t('workspace.toast.exportedMd'));
+  const handleDuplicateItem = useCallback(
+    async (itemId: string) => {
+      try {
+        const dup = await window.kapsula.duplicateItem(itemId);
+        if (dup) toast.success(t('workspace.toast.duplicated'));
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
       }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, undefined, locale));
+    },
+    [t, locale]
+  );
+
+  const handleExportMarkdown = useCallback(
+    async (itemId: string) => {
+      try {
+        const res = await window.kapsula.exportMarkdown(itemId);
+        if (res.saved) {
+          toast.success(t('workspace.toast.exportedMd'));
+        }
+      } catch (err) {
+        toast.error(friendlyErrorMessage(err, undefined, locale));
+      }
+    },
+    [t, locale]
+  );
+
+  const handleNotesItemUpdated = useCallback((updated: VaultItem) => {
+    const prevToggled = latestToggledItemRef.current.get(updated.id);
+    if (prevToggled && updated.updatedAt >= prevToggled.updatedAt) {
+      if (updated.purgedAt || updated.deletedAt) {
+        latestToggledItemRef.current.delete(updated.id);
+      } else {
+        latestToggledItemRef.current.set(updated.id, updated);
+      }
     }
-  };
+    setItems((prev) =>
+      prev.some((it) => it.id === updated.id)
+        ? prev.map((it) => (it.id === updated.id ? updated : it))
+        : !updated.deletedAt && !updated.isArchived && !updated.purgedAt
+          ? [updated, ...prev]
+          : prev
+    );
+  }, []);
+
+  const handleNotesDraftPersisted = useCallback((created: VaultItem) => {
+    setItems((prev) =>
+      prev.some((it) => it.id === created.id)
+        ? prev.map((it) => (it.id === created.id ? created : it))
+        : [created, ...prev]
+    );
+  }, []);
+
+  const handleUpdateCanvasPosition = useCallback((itemId: string, x: number, y: number) => {
+    void window.kapsula.updateItem(itemId, { canvasX: x, canvasY: y });
+  }, []);
 
   const executeOptimisticTaskToggle = useCallback(
     async (
@@ -2206,29 +2922,27 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     [applyPendingTaskTogglesToTasks, locale]
   );
 
-  const handleToggleMarkdownTask = async (
-    itemId: string,
-    taskIndex: number,
-    done: boolean,
-  ) => {
-    try {
-      await executeOptimisticTaskToggle(itemId, 'markdown', taskIndex, done);
-    } catch {
-      // rollback + error toast handled inside executeOptimisticTaskToggle
-    }
-  };
+  const handleToggleMarkdownTask = useCallback(
+    async (itemId: string, taskIndex: number, done: boolean) => {
+      try {
+        await executeOptimisticTaskToggle(itemId, 'markdown', taskIndex, done);
+      } catch {
+        // rollback + error toast handled inside executeOptimisticTaskToggle
+      }
+    },
+    [executeOptimisticTaskToggle]
+  );
 
-  const handleToggleVoiceAction = async (
-    itemId: string,
-    actionIdx: number,
-    done: boolean,
-  ) => {
-    try {
-      await executeOptimisticTaskToggle(itemId, 'voice_action', actionIdx, done);
-    } catch {
-      // rollback + error toast handled inside executeOptimisticTaskToggle
-    }
-  };
+  const handleToggleVoiceAction = useCallback(
+    async (itemId: string, actionIdx: number, done: boolean) => {
+      try {
+        await executeOptimisticTaskToggle(itemId, 'voice_action', actionIdx, done);
+      } catch {
+        // rollback + error toast handled inside executeOptimisticTaskToggle
+      }
+    },
+    [executeOptimisticTaskToggle]
+  );
 
   const handleToggleVaultTask = useCallback(
     async (task: VaultTaskEntry) => {
@@ -2270,21 +2984,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const settled = await Promise.allSettled(
-        ids.map((id) => window.kapsula.updateItem(id, { orbit: orbitId }))
+      const res = await window.kapsula.bulkUpdateItems(
+        ids,
+        { orbit: orbitId },
+        { projection: 'card' }
       );
-      const okCount = settled.filter((r) => r.status === 'fulfilled' && r.value).length;
-      const failedCount = ids.length - okCount;
-      if (okCount > 0) {
-        toast.success(t('workspace.toast.movedCount', { count: okCount }));
+      if (res.items.length > 0) {
+        applyBatchUpsertedRef.current?.(res.items);
+        toast.success(t('workspace.toast.movedCount', { count: res.items.length }));
       }
-      if (failedCount > 0) {
+      if (res.failedIds.length > 0) {
         toast.error(t('common.saveError'));
       }
-      if (failedCount === 0) {
+      if (res.failedIds.length === 0) {
         setSelectedIds([]);
       }
-      void refreshAll();
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     }
@@ -2294,25 +3008,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const settled = await Promise.allSettled(
-        ids.map((id) => window.kapsula.updateItem(id, { isPinned: pin }))
+      const res = await window.kapsula.bulkUpdateItems(
+        ids,
+        { isPinned: pin },
+        { projection: 'card' }
       );
-      const okCount = settled.filter((r) => r.status === 'fulfilled' && r.value).length;
-      const failedCount = ids.length - okCount;
-      if (okCount > 0) {
+      if (res.items.length > 0) {
+        applyBatchUpsertedRef.current?.(res.items, { skipTaskRefresh: true });
         toast.success(
           pin
-            ? t('workspace.toast.pinnedCount', { count: okCount })
-            : t('workspace.toast.unpinnedCount', { count: okCount })
+            ? t('workspace.toast.pinnedCount', { count: res.items.length })
+            : t('workspace.toast.unpinnedCount', { count: res.items.length })
         );
       }
-      if (failedCount > 0) {
+      if (res.failedIds.length > 0) {
         toast.error(t('common.saveError'));
       }
-      if (failedCount === 0) {
+      if (res.failedIds.length === 0) {
         setSelectedIds([]);
       }
-      void refreshAll();
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     }
@@ -2322,25 +3036,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const settled = await Promise.allSettled(
-        ids.map((id) => window.kapsula.updateItem(id, { isMuted: mute }))
+      const res = await window.kapsula.bulkUpdateItems(
+        ids,
+        { isMuted: mute },
+        { projection: 'card' }
       );
-      const okCount = settled.filter((r) => r.status === 'fulfilled' && r.value).length;
-      const failedCount = ids.length - okCount;
-      if (okCount > 0) {
+      if (res.items.length > 0) {
+        applyBatchUpsertedRef.current?.(res.items, { skipTaskRefresh: true });
         toast.success(
           mute
-            ? t('workspace.toast.mutedCount', { count: okCount })
-            : t('workspace.toast.unmutedCount', { count: okCount })
+            ? t('workspace.toast.mutedCount', { count: res.items.length })
+            : t('workspace.toast.unmutedCount', { count: res.items.length })
         );
       }
-      if (failedCount > 0) {
+      if (res.failedIds.length > 0) {
         toast.error(t('common.saveError'));
       }
-      if (failedCount === 0) {
+      if (res.failedIds.length === 0) {
         setSelectedIds([]);
       }
-      void refreshAll();
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     }
@@ -2350,35 +3064,39 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const settled = await Promise.allSettled(ids.map((id) => window.kapsula.deleteItem(id)));
-      const deletedIds = ids.filter((_, i) => {
-        const res = settled[i];
-        return res?.status === 'fulfilled' && res.value === true;
-      });
-      if (deletedIds.length === 0) {
+      const res = await window.kapsula.bulkDeleteItems(ids);
+      const removedIds = [...res.deletedIds, ...res.purgedIds];
+      if (removedIds.length === 0) {
         toast.error(t('workspace.toast.trashBulkFailed'));
-        void refreshAll();
         return;
       }
-      if (deletedIds.length < ids.length) {
+      applyBatchDeletedRef.current?.(removedIds);
+      if (res.failedIds.length > 0) {
         toast.error(t('common.saveError'));
       }
-      toast(t('workspace.toast.movedToTrashCount', { count: deletedIds.length }), {
-        action: {
-          label: t('common.undo'),
-          onClick: () => {
-            void Promise.allSettled(deletedIds.map((id) => window.kapsula.restoreItem(id)))
-              .catch(() => {})
-              .finally(() => {
-                void refreshAll();
-              });
-          },
-        },
+      const restorableIds = res.deletedIds;
+      toast(t('workspace.toast.movedToTrashCount', { count: removedIds.length }), {
+        ...(restorableIds.length > 0
+          ? {
+              action: {
+                label: t('common.undo'),
+                onClick: () => {
+                  void window.kapsula
+                    .bulkRestoreItems(restorableIds)
+                    .then((restoreRes) => {
+                      if (restoreRes.items.length > 0) {
+                        applyBatchUpsertedRef.current?.(restoreRes.items);
+                      }
+                    })
+                    .catch(() => {});
+                },
+              },
+            }
+          : {}),
       });
-      if (deletedIds.length === ids.length) {
+      if (res.failedIds.length === 0) {
         setSelectedIds([]);
       }
-      void refreshAll();
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     }
@@ -2747,35 +3465,147 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       key={viewKey}
       items={scopedItems}
       allItemsForLinks={items}
+      availableTags={allVaultTags}
       defaultOrbitId={defaultOrbitId}
       defaultFocusBoardId={defaultFocusBoardId}
       orbits={orbits}
       focusBoards={boards}
-      globalSearchQuery={searchQuery}
+      globalSearchQuery={deferredSearchQuery}
       serverSearchIds={serverSearchIds}
       soundEnabled={soundEnabled}
       createDraftTrigger={notesDraftTrigger}
-      onItemUpdated={(updated) => {
-        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
-      }}
-      onDraftPersisted={(created) => {
-        setItems((prev) =>
-          prev.some((it) => it.id === created.id)
-            ? prev.map((it) => (it.id === created.id ? created : it))
-            : [created, ...prev]
-        );
-      }}
-      onDeleteItem={(id) => void handleDeleteItem(id)}
-      onTogglePin={(it) => void handleTogglePin(it)}
-      onToggleMute={(it) => void handleToggleMute(it)}
-      onToggleNotesHub={(it, inNotesHub) => void handleToggleNotesHub(it, inNotesHub)}
-      onMoveToOrbit={(id, orbId) => void handleMoveToOrbit(id, orbId)}
-      onMoveToBoard={(id, boardId) => void handleMoveToBoard(id, boardId)}
-      onDuplicateItem={(id) => void handleDuplicateItem(id)}
-      onExportMarkdown={(id) => void handleExportMarkdown(id)}
+      onItemUpdated={handleNotesItemUpdated}
+      onDraftPersisted={handleNotesDraftPersisted}
+      onDeleteItem={handleDeleteItem}
+      onTogglePin={handleTogglePin}
+      onToggleMute={handleToggleMute}
+      onToggleNotesHub={handleToggleNotesHub}
+      onMoveToOrbit={handleMoveToOrbit}
+      onMoveToBoard={handleMoveToBoard}
+      onDuplicateItem={handleDuplicateItem}
+      onExportMarkdown={handleExportMarkdown}
       onOpenExternalItem={handleOpenItem}
-      onOpenShotLightbox={setLightboxItem}
+      onOpenShotLightbox={handleOpenShotLightbox}
     />
+  );
+
+  const feedGridGapPx = appearanceConfig.density === 'compact' ? 10 : 14;
+  const getFeedItemKey = useCallback((item: VaultItem) => item.id, []);
+  const hasSelectionActive = selectedIds.length > 0;
+
+  const renderFeedCard = useCallback(
+    (item: VaultItem) => (
+      <MemoryCardRouter
+        item={item}
+        orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
+        orbits={orbits}
+        focusBoards={boards}
+        vaultLocked={vaultLocked}
+        wipeSeconds={wipeSeconds}
+        selected={selectedIdSet.has(item.id)}
+        selectionMode={hasSelectionActive}
+        onToggleSelect={handleToggleSelect}
+        onOpenStudio={handleOpenItem}
+        onQuickLook={handleQuickLook}
+        onHoverItem={handleHoverItem}
+        onOpenSecretSheet={handleOpenItem}
+        onOpenShotLightbox={handleOpenShotLightbox}
+        onDelete={handleDeleteItem}
+        onTogglePin={handleTogglePin}
+        onToggleMute={handleToggleMute}
+        onToggleNotesHub={handleToggleNotesHub}
+        onMoveToOrbit={handleMoveToOrbit}
+        onMoveToBoard={handleMoveToBoard}
+        onDuplicate={handleDuplicateItem}
+        onExportMarkdown={handleExportMarkdown}
+        onUnlockVaultRequest={handleUnlockVaultRequest}
+        onToggleMarkdownTask={handleToggleMarkdownTask}
+        onToggleVoiceAction={handleToggleVoiceAction}
+      />
+    ),
+    [
+      orbitMap,
+      orbits,
+      boards,
+      vaultLocked,
+      wipeSeconds,
+      selectedIdSet,
+      hasSelectionActive,
+      handleToggleSelect,
+      handleOpenItem,
+      handleQuickLook,
+      handleHoverItem,
+      handleOpenShotLightbox,
+      handleDeleteItem,
+      handleTogglePin,
+      handleToggleMute,
+      handleToggleNotesHub,
+      handleMoveToOrbit,
+      handleMoveToBoard,
+      handleDuplicateItem,
+      handleExportMarkdown,
+      handleUnlockVaultRequest,
+      handleToggleMarkdownTask,
+      handleToggleVoiceAction,
+    ]
+  );
+
+  const renderFeedListRow = useCallback(
+    (item: VaultItem) => (
+      <MemoryCardRouter
+        item={item}
+        orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
+        orbits={orbits}
+        focusBoards={boards}
+        compactList
+        vaultLocked={vaultLocked}
+        wipeSeconds={wipeSeconds}
+        selected={selectedIdSet.has(item.id)}
+        selectionMode={hasSelectionActive}
+        onToggleSelect={handleToggleSelect}
+        onOpenStudio={handleOpenItem}
+        onQuickLook={handleQuickLook}
+        onHoverItem={handleHoverItem}
+        onOpenSecretSheet={handleOpenItem}
+        onOpenShotLightbox={handleOpenShotLightbox}
+        onDelete={handleDeleteItem}
+        onTogglePin={handleTogglePin}
+        onToggleMute={handleToggleMute}
+        onToggleNotesHub={handleToggleNotesHub}
+        onMoveToOrbit={handleMoveToOrbit}
+        onMoveToBoard={handleMoveToBoard}
+        onDuplicate={handleDuplicateItem}
+        onExportMarkdown={handleExportMarkdown}
+        onUnlockVaultRequest={handleUnlockVaultRequest}
+        onToggleMarkdownTask={handleToggleMarkdownTask}
+        onToggleVoiceAction={handleToggleVoiceAction}
+      />
+    ),
+    [
+      orbitMap,
+      orbits,
+      boards,
+      vaultLocked,
+      wipeSeconds,
+      selectedIdSet,
+      hasSelectionActive,
+      handleToggleSelect,
+      handleOpenItem,
+      handleQuickLook,
+      handleHoverItem,
+      handleOpenShotLightbox,
+      handleDeleteItem,
+      handleTogglePin,
+      handleToggleMute,
+      handleToggleNotesHub,
+      handleMoveToOrbit,
+      handleMoveToBoard,
+      handleDuplicateItem,
+      handleExportMarkdown,
+      handleUnlockVaultRequest,
+      handleToggleMarkdownTask,
+      handleToggleVoiceAction,
+    ]
   );
 
   const isFullHeightCanvas = nav.type === 'notes' || isInlineNotesMode;
@@ -2837,41 +3667,54 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const glassEnabled = (appearanceConfig.glassPreset ?? 'off') !== 'off';
 
+  const effectiveSidebarWidth = sidebarRail ? 62 : sidebarWidth;
+
   return (
     <div
       data-testid="studio-workspace"
       className="relative h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
     >
       {glassEnabled ? <div aria-hidden="true" className="k-glass-mesh" /> : null}
-      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: drag-resizable down to 62px Icon-Rail or full collapse) */}
-      <motion.aside
+      {/* Full-Height Left Sidebar (1-frame slot snap + GPU translate3d/opacity, zero frame-by-frame width reflow) */}
+      <aside
         ref={sidebarElRef}
         key="workspace-sidebar"
         data-testid="workspace-sidebar"
         data-sidebar-rail={sidebarRail ? 'true' : 'false'}
         aria-hidden={!sidebarOpen}
-        initial={false}
-        animate={
-          sidebarOpen
-            ? { width: sidebarRail ? 62 : sidebarWidth, opacity: 1 }
-            : { width: 0, opacity: 0 }
-        }
-        transition={
-          sidebarDragging && !sidebarRailSnapping
-            ? { duration: 0 }
-            : prefersReduced
-              ? { duration: 0.08 }
-              : { duration: 0.27, ease: [0.22, 1, 0.36, 1] }
-        }
-        style={{ pointerEvents: sidebarOpen ? 'auto' : 'none' }}
-        className={`relative z-[2] shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
-          sidebarOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
+        style={{
+          width: sidebarSlotOpen ? `${effectiveSidebarWidth}px` : '0px',
+          display: sidebarSlotOpen ? 'flex' : 'none',
+          pointerEvents: sidebarOpen ? 'auto' : 'none',
+        }}
+        className={`relative z-[2] shrink-0 h-full overflow-x-clip bg-[var(--k-bg-rail)] flex-col ${
+          sidebarSlotOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
         }`}
       >
-        <div className="w-full min-w-0 h-full flex flex-col relative">
+        <motion.div
+          initial={false}
+          animate={
+            sidebarOpen
+              ? { opacity: 1, transform: 'translate3d(0px, 0px, 0px)' }
+              : prefersReduced
+                ? { opacity: 0, transform: 'translate3d(0px, 0px, 0px)' }
+                : { opacity: 0, transform: 'translate3d(-16px, 0px, 0px)' }
+          }
+          transition={
+            sidebarDragging && !sidebarRailSnapping
+              ? { duration: 0 }
+              : prefersReduced
+                ? { duration: 0.06 }
+                : sidebarOpen
+                  ? { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
+                  : { duration: 0.1, ease: [0.32, 0.72, 0, 1] }
+          }
+          style={{ width: `${effectiveSidebarWidth}px` }}
+          className="min-w-0 h-full flex flex-col relative will-change-[transform,opacity]"
+        >
           {/* Sidebar Integrated Top Brand Bar (draggable; reserves macOS traffic-light safe zone) */}
           <div
-            className={`h-[46px] shrink-0 flex items-center justify-between k-drag-region overflow-hidden transition-[padding] duration-180 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            className={`h-[46px] shrink-0 flex items-center justify-between k-drag-region overflow-hidden ${
               sidebarRail
                 ? 'px-[12px]'
                 : showTrafficLights
@@ -3611,119 +4454,29 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 sidebarRail ? 'flex-col items-center gap-1' : 'items-center gap-1'
               }`}
             >
-              <TooltipHint label={t('workspace.sidebar.settings')} disabled={!sidebarRail} side="right">
-                <button
-                  type="button"
-                  data-testid="open-settings-btn"
-                  onMouseEnter={() => setSettingsBtnHovered(true)}
-                  onMouseLeave={() => setSettingsBtnHovered(false)}
-                  onClick={() => {
-                    setSettingsInitialTab('appearance');
-                    setSettingsOpen(true);
-                  }}
-                  className={`k-interactive flex items-center overflow-hidden ${
-                    sidebarRail ? 'w-full px-[8px]' : 'flex-1 px-[8px] min-w-0'
-                  } h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer`}
-                >
-                  <HoverIconProvider hovered={settingsBtnHovered}>
-                    <span className="w-[30px] h-[30px] shrink-0 flex items-center justify-center">
-                      <LiveIcon icon={SettingsIcon} size={16} />
-                    </span>
-                    {!sidebarRail ? (
-                      <span className="ml-1 truncate">{t('workspace.sidebar.settings')}</span>
-                    ) : null}
-                  </HoverIconProvider>
-                </button>
-              </TooltipHint>
+              <SidebarSettingsButton
+                sidebarRail={sidebarRail}
+                label={t('workspace.sidebar.settings')}
+                onClick={handleOpenSettingsAppearance}
+              />
 
               {!sidebarRail ? (
-              <PopoverSurface
-                open={customizeSidebarOpen}
-                onOpenChange={setCustomizeSidebarOpen}
-                side="top"
-                align="start"
-                widthClass="w-[228px] !p-2"
-                trigger={
-                  <button
-                    type="button"
-                    data-testid="customize-sidebar-btn"
-                    title={t('nav.customizeSidebar')}
-                    aria-label={t('nav.customizeSidebar')}
-                    onMouseEnter={() => setCustomizeBtnHovered(true)}
-                    onMouseLeave={() => setCustomizeBtnHovered(false)}
-                    className={`k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center cursor-pointer shrink-0 ${
-                      hiddenNavSections.length > 0 || !isDefaultPrimaryNavOrder
-                        ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]/70'
-                        : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
-                    }`}
-                  >
-                    <LiveIcon icon={SlidersHorizontalIcon} size={15} active={customizeBtnHovered} />
-                  </button>
-                }
-              >
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between px-1 pb-1 border-b border-[var(--k-border-hairline)]">
-                    <span className="text-[11.5px] font-semibold text-[var(--k-ink-primary)]">
-                      {t('nav.customizeSidebar')}
-                    </span>
-                    {hiddenNavSections.length > 0 ? (
-                      <button
-                        type="button"
-                        data-testid="customize-sidebar-show-all"
-                        onClick={() => setHiddenNavSections(writeHiddenNavSections([]))}
-                        className="text-[11px] font-medium text-[var(--k-accent)] hover:underline cursor-pointer"
-                      >
-                        {t('nav.showAllSidebar')}
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="space-y-0.5">
-                    {HIDEABLE_NAV_SECTIONS.map((sec) => {
-                      const visible = !hiddenNavSet.has(sec);
-                      return (
-                        <button
-                          key={sec}
-                          type="button"
-                          data-testid={`customize-sidebar-toggle-${sec}`}
-                          onClick={() => handleToggleHiddenNavSection(sec)}
-                          className="k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-[7px] text-[12px] text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
-                        >
-                          <span>{t(HIDEABLE_SECTION_LABEL_KEYS[sec])}</span>
-                          <span
-                            className={`inline-flex items-center justify-center w-4 h-4 rounded-[5px] border ${
-                              visible
-                                ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
-                                : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-transparent'
-                            }`}
-                          >
-                            <Check size={11} weight="bold" />
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="pt-1 border-t border-[var(--k-border-hairline)]">
-                    <button
-                      type="button"
-                      data-testid="customize-sidebar-reset-order"
-                      disabled={isDefaultPrimaryNavOrder}
-                      onClick={() => setPrimaryNavOrder(resetPrimaryNavOrder())}
-                      className={`k-interactive w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-[7px] text-[11.5px] font-medium ${
-                        isDefaultPrimaryNavOrder
-                          ? 'text-[var(--k-ink-muted)]/60 cursor-default'
-                          : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer'
-                      }`}
-                    >
-                      <ArrowCounterClockwise size={12} />
-                      <span>{t('nav.resetOrder')}</span>
-                    </button>
-                  </div>
-                </div>
-              </PopoverSurface>
+                <SidebarCustomizePopoverButton
+                  open={customizeSidebarOpen}
+                  onOpenChange={setCustomizeSidebarOpen}
+                  hiddenNavSections={hiddenNavSections}
+                  hiddenNavSet={hiddenNavSet}
+                  isDefaultPrimaryNavOrder={isDefaultPrimaryNavOrder}
+                  onShowAll={handleShowAllNavSections}
+                  onToggleSection={handleToggleHiddenNavSection}
+                  onResetOrder={handleResetPrimaryNavOrder}
+                />
               ) : null}
 
-              <TooltipHint
-                label={
+              <SidebarSyncButton
+                syncStatus={syncStatus}
+                showSyncSpinner={showSyncSpinner}
+                tooltipLabel={
                   !syncStatus || syncStatus.state === 'signed_out'
                     ? t('workspace.sidebar.syncDisconnected')
                     : syncStatus.state === 'syncing' && showSyncSpinner
@@ -3739,39 +4492,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               ? t('workspace.sidebar.syncNeedsVerify')
                               : t('workspace.sidebar.syncError')
                 }
-              >
-                <button
-                  type="button"
-                  data-testid="sync-status-btn"
-                  onMouseEnter={() => setSyncBtnHovered(true)}
-                  onMouseLeave={() => setSyncBtnHovered(false)}
-                  onClick={() => {
-                    setSettingsInitialTab('sync');
-                    setSettingsOpen(true);
-                  }}
-                  className="k-interactive relative w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                  aria-label={t('workspace.sidebar.syncAria')}
-                >
-                  {syncStatus?.state === 'syncing' && showSyncSpinner ? (
-                    <ArrowsClockwise size={15} className="animate-spin text-[var(--k-accent)]" />
-                  ) : syncStatus?.state === 'offline' ? (
-                    <CloudSlash size={15} className="text-[var(--k-amber)]" />
-                  ) : syncStatus?.state === 'error' ? (
-                    <CloudWarning size={15} className="text-[var(--k-danger)]" />
-                  ) : syncStatus?.state === 'synced' || syncStatus?.state === 'syncing' ? (
-                    <LiveIcon icon={CloudSyncIcon} size={15} active={syncBtnHovered} className="text-[var(--k-emerald)]" />
-                  ) : (
-                    <LiveIcon icon={CloudSyncIcon} size={15} active={syncBtnHovered} className="opacity-75" />
-                  )}
-                  {syncStatus &&
-                  (syncStatus.state === 'needs_passphrase_setup' ||
-                    syncStatus.state === 'needs_passphrase_unlock' ||
-                    syncStatus.state === 'awaiting_email_confirm' ||
-                    syncStatus.state === 'error') ? (
-                    <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[var(--k-accent)]" />
-                  ) : null}
-                </button>
-              </TooltipHint>
+                ariaLabel={t('workspace.sidebar.syncAria')}
+                onClick={handleOpenSettingsSync}
+              />
 
               {settings.hasMasterPin ? (
                 <TooltipHint label={vaultLocked ? t('workspace.sidebar.unlockVault') : t('workspace.sidebar.lockVault')}>
@@ -3797,68 +4520,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </TooltipHint>
               ) : null}
 
-              <TooltipHint label={settings.theme === 'light' ? t('workspace.sidebar.darkTheme') : t('workspace.sidebar.lightTheme')}>
-                <button
-                  type="button"
-                  data-testid="theme-toggle-btn"
-                  onMouseEnter={() => setThemeBtnHovered(true)}
-                  onMouseLeave={() => setThemeBtnHovered(false)}
-                  onClick={handleToggleTheme}
-                  className="k-interactive w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                  aria-label={t('workspace.sidebar.toggleThemeAria')}
-                >
-                  <AnimatePresence mode="wait" initial={false}>
-                    {settings.theme === 'light' ? (
-                      <motion.span
-                        key="moon"
-                        initial={
-                          prefersReduced
-                            ? { opacity: 0 }
-                            : { opacity: 0, transform: 'rotate(-25deg) scale(0.85)' }
-                        }
-                        animate={
-                          prefersReduced
-                            ? { opacity: 1 }
-                            : { opacity: 1, transform: 'rotate(0deg) scale(1)' }
-                        }
-                        exit={
-                          prefersReduced
-                            ? { opacity: 0 }
-                            : { opacity: 0, transform: 'rotate(25deg) scale(0.85)' }
-                        }
-                        transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
-                      >
-                        <LiveIcon icon={MoonIcon} size={15} active={themeBtnHovered} />
-                      </motion.span>
-                    ) : (
-                      <motion.span
-                        key="sun"
-                        initial={
-                          prefersReduced
-                            ? { opacity: 0 }
-                            : { opacity: 0, transform: 'rotate(25deg) scale(0.85)' }
-                        }
-                        animate={
-                          prefersReduced
-                            ? { opacity: 1 }
-                            : { opacity: 1, transform: 'rotate(0deg) scale(1)' }
-                        }
-                        exit={
-                          prefersReduced
-                            ? { opacity: 0 }
-                            : { opacity: 0, transform: 'rotate(-25deg) scale(0.85)' }
-                        }
-                        transition={{ duration: 0.14, ease: [0.23, 1, 0.32, 1] }}
-                      >
-                        <LiveIcon icon={SunIcon} size={15} active={themeBtnHovered} />
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                </button>
-              </TooltipHint>
+              <SidebarThemeButton
+                theme={settings.theme}
+                prefersReduced={Boolean(prefersReduced)}
+                tooltipLabel={settings.theme === 'light' ? t('workspace.sidebar.darkTheme') : t('workspace.sidebar.lightTheme')}
+                ariaLabel={t('workspace.sidebar.toggleThemeAria')}
+                onClick={handleToggleTheme}
+              />
             </div>
           </div>
-        </div>
+        </motion.div>
         {sidebarOpen ? (
           <div
             role="separator"
@@ -3881,7 +4552,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             />
           </div>
         ) : null}
-      </motion.aside>
+      </aside>
 
       {/* Right Main Column: Seamless Slim Chrome + Smoothly Reflowing Workspace */}
       <div className="relative z-[1] flex-1 min-w-0 h-full flex flex-col overflow-hidden">
@@ -3890,40 +4561,45 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           {/* Left: Expand sidebar (smoothly revealed when collapsed) + Clean Breadcrumb Title */}
           <div
             data-testid="header-left-group"
-            className={`min-w-0 flex items-center gap-2 justify-self-start transition-[padding] duration-150 ${
+            className={`min-w-0 flex items-center gap-2 justify-self-start ${
               showTrafficLights ? (!sidebarOpen ? 'pl-[68px]' : sidebarRail ? 'pl-[20px]' : '') : ''
             }`}
           >
-            <AnimatePresence initial={false}>
-              {!sidebarOpen || sidebarRail ? (
-                <motion.div
-                  key="expand-sidebar-slot"
-                  initial={prefersReduced ? { opacity: 0 } : { opacity: 0, width: 0 }}
-                  animate={prefersReduced ? { opacity: 1 } : { opacity: 1, width: 30 }}
-                  exit={prefersReduced ? { opacity: 0 } : { opacity: 0, width: 0 }}
-                  transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
-                  className="overflow-hidden shrink-0 k-no-drag"
-                >
-                  <TooltipHint label={t('nav.showPanel')}>
-                    <button
-                      type="button"
-                      data-testid="toggle-sidebar-btn"
-                      onClick={() => {
-                        if (sidebarRail) {
-                          setSidebarRail(false);
-                        } else {
-                          setSidebarOpen(true);
-                        }
-                      }}
-                      className="k-interactive w-7.5 h-7.5 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                      aria-label={t('nav.showSidebar')}
-                    >
-                      <LiveIcon icon={PanelLeftOpenIcon} size={16} />
-                    </button>
-                  </TooltipHint>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
+            {!sidebarOpen || sidebarRail ? (
+              <motion.div
+                key="expand-sidebar-slot"
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : { opacity: 0, transform: 'translate3d(-6px, 0px, 0px)' }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : { opacity: 1, transform: 'translate3d(0px, 0px, 0px)' }
+                }
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                className="w-[30px] shrink-0 k-no-drag"
+              >
+                <TooltipHint label={t('nav.showPanel')}>
+                  <button
+                    type="button"
+                    data-testid="toggle-sidebar-btn"
+                    onClick={() => {
+                      if (sidebarRail) {
+                        setSidebarRail(false);
+                      } else {
+                        setSidebarOpen(true);
+                      }
+                    }}
+                    className="k-interactive w-7.5 h-7.5 rounded-[8px] flex items-center justify-center text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
+                    aria-label={t('nav.showSidebar')}
+                  >
+                    <LiveIcon icon={PanelLeftOpenIcon} size={16} />
+                  </button>
+                </TooltipHint>
+              </motion.div>
+            ) : null}
 
             <div className="flex items-center gap-1.5 min-w-0">
               {nav.type === 'orbit' ? (
@@ -3982,7 +4658,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
             <GlobalSearchPopover
               open={searchFocused}
-              query={searchQuery}
+              query={deferredSearchQuery}
               items={items}
               calendarEvents={calendarEvents}
               tasks={tasks}
@@ -4036,38 +4712,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               </button>
             </TooltipHint>
 
-            <div className="relative shrink-0">
-              {(assistantBtnHovered || assistantOpen) && !prefersReduced ? (
-                <GlowEffect
-                  colors={['#d95826', '#7c3aed', '#3b82f6', '#d95826']}
-                  mode="rotate"
-                  blur="soft"
-                  duration={4}
-                  scale={1.04}
-                  className="rounded-[9px] opacity-40"
-                />
-              ) : null}
-              <button
-                type="button"
-                data-testid="assistant-open-btn"
-                onMouseEnter={() => setAssistantBtnHovered(true)}
-                onMouseLeave={() => setAssistantBtnHovered(false)}
-                onClick={() => setAssistantOpen((v) => !v)}
-                className={`relative z-10 k-interactive h-7.5 px-2.5 rounded-[8px] flex items-center gap-1.5 text-[12px] font-medium border cursor-pointer ${
-                  assistantOpen
-                    ? 'bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] border-[var(--k-accent)]'
-                    : 'bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)] border-[var(--k-border-hairline)]'
-                }`}
-              >
-                <LiveIcon
-                  icon={SparklesIcon}
-                  size={14}
-                  active={assistantBtnHovered || assistantOpen}
-                  className={assistantOpen ? '' : 'text-[var(--k-accent)]'}
-                />
-                <span>{t('workspace.assistantButton')}</span>
-              </button>
-            </div>
+            <HeaderAssistantButton
+              assistantOpen={assistantOpen}
+              prefersReduced={Boolean(prefersReduced)}
+              label={t('workspace.assistantButton')}
+              onToggle={handleToggleAssistant}
+            />
 
             {!isMac ? (
               <>
@@ -4153,22 +4803,18 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     items={items}
                     orbits={orbits}
                     focusBoards={boards}
-                    searchQuery={searchQuery}
+                    searchQuery={deferredSearchQuery}
                     serverSearchIds={serverSearchIds}
                     soundEnabled={soundEnabled}
                     onOpenStudio={handleOpenItem}
-                    onOpenLightbox={setLightboxItem}
-                    onQuickLook={setQuickLookItem}
-                    onHoverItem={(it) => {
-                      hoveredItemRef.current = it;
-                    }}
-                    onTogglePin={(it) => void handleTogglePin(it)}
-                    onMoveToOrbit={(id, orbId) => void handleMoveToOrbit(id, orbId)}
-                    onMoveToBoard={(id, boardId) => void handleMoveToBoard(id, boardId)}
-                    onDelete={(id) => void handleDeleteItem(id)}
-                    onUpdateCanvasPosition={(itemId, x, y) => {
-                      void window.kapsula.updateItem(itemId, { canvasX: x, canvasY: y });
-                    }}
+                    onOpenLightbox={handleOpenShotLightbox}
+                    onQuickLook={handleQuickLook}
+                    onHoverItem={handleHoverItem}
+                    onTogglePin={handleTogglePin}
+                    onMoveToOrbit={handleMoveToOrbit}
+                    onMoveToBoard={handleMoveToBoard}
+                    onDelete={handleDeleteItem}
+                    onUpdateCanvasPosition={handleUpdateCanvasPosition}
                   />
                 </Suspense>
               </motion.div>
@@ -4186,10 +4832,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     tasks={tasks}
                     orbits={orbits}
                     viewMode={tasksViewMode}
+                    initialShowColumnIcons={settings.showBoardColumnIcons}
                     onViewModeChange={setTasksViewMode}
                     onToggleTask={handleToggleVaultTask}
                     onOpenItem={handleOpenItemById}
-                    onTasksChanged={() => {
+                    onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
+                      if (updatedItems && updatedItems.length > 0) {
+                        applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
+                      }
+                      if (deletedItemIds && deletedItemIds.length > 0) {
+                        applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
+                      }
+                      if (nextTasks) {
+                        setTasks(applyPendingTaskTogglesToTasks(nextTasks));
+                        return;
+                      }
                       void window.kapsula
                         .listTasks()
                         .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
@@ -4321,10 +4978,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         scopedOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
                         scopedBoardId={nav.type === 'board' ? nav.boardId : null}
                         viewMode={tasksViewMode}
+                        initialShowColumnIcons={settings.showBoardColumnIcons}
                         onViewModeChange={setTasksViewMode}
                         onToggleTask={handleToggleVaultTask}
                         onOpenItem={handleOpenItemById}
-                        onTasksChanged={() => {
+                        onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
+                          if (updatedItems && updatedItems.length > 0) {
+                            applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
+                          }
+                          if (deletedItemIds && deletedItemIds.length > 0) {
+                            applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
+                          }
+                          if (nextTasks) {
+                            setTasks(applyPendingTaskTogglesToTasks(nextTasks));
+                            return;
+                          }
                           void window.kapsula
                             .listTasks()
                             .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
@@ -4809,7 +5477,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     data-testid="trash-list-container"
                     className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
                   >
-                    {renderedItems.map((item) => {
+                    {visibleItems.map((item) => {
                       const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
                       const preview =
                         item.dna === 'secret'
@@ -4906,7 +5574,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     data-testid="archive-list-container"
                     className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
                   >
-                    {renderedItems.map((item) => {
+                    {visibleItems.map((item) => {
                       const orbit = item.orbit ? orbitMap.get(item.orbit) : undefined;
                       const preview =
                         item.dna === 'secret'
@@ -4998,45 +5666,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     })}
                   </div>
                 ) : effectiveLayoutMode === 'list' && showFeedToolbar ? (
-                  <div
+                  <VirtualizedFixedList
                     key="feed-list"
-                    ref={feedListAnimRef}
-                    data-testid="feed-list-container"
-                    className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
-                  >
-                    {renderedItems.map((item) => (
-                      <div key={item.id}>
-                        <MemoryCardRouter
-                          item={item}
-                          orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
-                          orbits={orbits}
-                          focusBoards={boards}
-                          compactList
-                          vaultLocked={vaultLocked}
-                          wipeSeconds={wipeSeconds}
-                          selected={selectedIdSet.has(item.id)}
-                          selectionMode={selectedIds.length > 0}
-                          onToggleSelect={handleToggleSelect}
-                          onOpenStudio={handleOpenItem}
-                          onQuickLook={handleQuickLook}
-                          onHoverItem={handleHoverItem}
-                          onOpenSecretSheet={handleOpenItem}
-                          onOpenShotLightbox={handleOpenShotLightbox}
-                          onDelete={handleDeleteItem}
-                          onTogglePin={handleTogglePin}
-                          onToggleMute={handleToggleMute}
-                          onToggleNotesHub={handleToggleNotesHub}
-                          onMoveToOrbit={handleMoveToOrbit}
-                          onMoveToBoard={handleMoveToBoard}
-                          onDuplicate={handleDuplicateItem}
-                          onExportMarkdown={handleExportMarkdown}
-                          onUnlockVaultRequest={handleUnlockVaultRequest}
-                          onToggleMarkdownTask={handleToggleMarkdownTask}
-                          onToggleVoiceAction={handleToggleVoiceAction}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                    testId="feed-list-container"
+                    items={visibleItems}
+                    getKey={getFeedItemKey}
+                    rowHeight={52}
+                    onReachEnd={handleFeedReachEnd}
+                    renderRow={renderFeedListRow}
+                    className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-hidden shadow-[var(--k-shadow-card)]"
+                  />
                 ) : nav.type === 'secrets' ? (
                   <div
                     key="feed-secrets"
@@ -5044,7 +5683,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     style={{ gap: 'var(--k-grid-gap)' }}
                     className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
                   >
-                    {renderedItems.map((item) => (
+                    {visibleItems.map((item) => (
                       <MemoryCardRouter
                         key={item.id}
                         item={item}
@@ -5054,7 +5693,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         vaultLocked={vaultLocked}
                         wipeSeconds={wipeSeconds}
                         selected={selectedIdSet.has(item.id)}
-                        selectionMode={selectedIds.length > 0}
+                        selectionMode={hasSelectionActive}
                         onToggleSelect={handleToggleSelect}
                         onOpenStudio={handleOpenItem}
                         onQuickLook={handleQuickLook}
@@ -5075,49 +5714,18 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     ))}
                   </div>
                 ) : (
-                  <div
+                  <VirtualizedMasonryGrid
                     key="feed-grid"
-                    ref={feedGridAnimRef}
-                    data-testid="feed-grid-container"
-                    style={{ gridAutoRows: `${MASONRY_ROW_UNIT_PX}px`, columnGap: 'var(--k-grid-gap)' }}
-                    className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
-                  >
-                    {renderedItems.map((item) => (
-                      <MasonryCardCell key={item.id}>
-                        <MemoryCardRouter
-                          item={item}
-                          orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
-                          orbits={orbits}
-                          focusBoards={boards}
-                          vaultLocked={vaultLocked}
-                          wipeSeconds={wipeSeconds}
-                          selected={selectedIdSet.has(item.id)}
-                          selectionMode={selectedIds.length > 0}
-                          onToggleSelect={handleToggleSelect}
-                          onOpenStudio={handleOpenItem}
-                          onQuickLook={handleQuickLook}
-                          onHoverItem={handleHoverItem}
-                          onOpenSecretSheet={handleOpenItem}
-                          onOpenShotLightbox={handleOpenShotLightbox}
-                          onDelete={handleDeleteItem}
-                          onTogglePin={handleTogglePin}
-                          onToggleMute={handleToggleMute}
-                          onToggleNotesHub={handleToggleNotesHub}
-                          onMoveToOrbit={handleMoveToOrbit}
-                          onMoveToBoard={handleMoveToBoard}
-                          onDuplicate={handleDuplicateItem}
-                          onExportMarkdown={handleExportMarkdown}
-                          onUnlockVaultRequest={handleUnlockVaultRequest}
-                          onToggleMarkdownTask={handleToggleMarkdownTask}
-                          onToggleVoiceAction={handleToggleVoiceAction}
-                        />
-                      </MasonryCardCell>
-                    ))}
-                  </div>
+                    testId="feed-grid-container"
+                    items={visibleItems}
+                    getKey={getFeedItemKey}
+                    estimateHeight={estimateFeedCardHeight}
+                    getColumns={getFeedColumns}
+                    gapPx={feedGridGapPx}
+                    onReachEnd={handleFeedReachEnd}
+                    renderItem={renderFeedCard}
+                  />
                 )}
-                {showFeedPaginationSentinel ? (
-                  <div ref={feedSentinelRef} aria-hidden="true" className="h-4 w-full" />
-                ) : null}
                 </motion.div>
               </div>
             )}
@@ -5272,11 +5880,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </div>
         </ScopedAccentContext.Provider>
 
-        {mountAssistant ? (
+        {assistantMount.shouldMount ? (
           <Suspense fallback={null}>
             <MemoryAssistantDrawer
               open={assistantOpen}
               onClose={() => setAssistantOpen(false)}
+              onExited={assistantMount.notifyExited}
               onOpenCitation={(itemId, opts) => {
                 if (!opts?.keepAssistantOpen) setAssistantOpen(false);
                 void handleOpenItemById(itemId);
@@ -5308,33 +5917,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               <motion.div
                 data-testid="studio-document-backdrop"
                 onClick={closeStudioCleanly}
-                initial={
-                  prefersReduced
-                    ? { opacity: 0 }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                      }
-                }
-                animate={
-                  prefersReduced
-                    ? { opacity: 1 }
-                    : {
-                        backgroundColor: 'var(--k-bg-backdrop)',
-                        backdropFilter: 'blur(6px)',
-                        transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
-                      }
-                }
-                exit={
-                  prefersReduced
-                    ? { opacity: 0, transition: { duration: 0.12 } }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                        transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] },
-                      }
-                }
-                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  transition: prefersReduced
+                    ? { duration: 0.1 }
+                    : { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                }}
+                exit={{
+                  opacity: 0,
+                  transition: prefersReduced
+                    ? { duration: 0.08 }
+                    : { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+                }}
+                className={`fixed inset-0 bg-[var(--k-bg-backdrop)] ${
+                  prefersReduced ? 'backdrop-blur-[4px]' : 'backdrop-blur-[6px]'
+                }`}
               />
 
               <motion.div
@@ -5401,6 +5999,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     onCancelDraft={handleStudioCancelDraft}
                     onSelectRelatedItem={handleStudioSelectRelated}
                     onDelete={async (id) => {
+                      openItemReqRef.current += 1;
                       await handleDeleteItem(id);
                       setStudioOpen(false);
                     }}
@@ -5430,33 +6029,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             >
               <motion.div
                 onClick={closeStudioCleanly}
-                initial={
-                  prefersReduced
-                    ? { opacity: 0 }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                      }
-                }
-                animate={
-                  prefersReduced
-                    ? { opacity: 1 }
-                    : {
-                        backgroundColor: 'var(--k-bg-backdrop)',
-                        backdropFilter: 'blur(4px)',
-                        transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
-                      }
-                }
-                exit={
-                  prefersReduced
-                    ? { opacity: 0, transition: { duration: 0.12 } }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                        transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
-                      }
-                }
-                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]' : ''}`}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  transition: prefersReduced
+                    ? { duration: 0.1 }
+                    : { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                }}
+                exit={{
+                  opacity: 0,
+                  transition: prefersReduced
+                    ? { duration: 0.08 }
+                    : { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+                }}
+                className={`fixed inset-0 bg-[var(--k-bg-backdrop)] ${
+                  prefersReduced ? 'backdrop-blur-[2px]' : 'backdrop-blur-[4px]'
+                }`}
               />
 
               <motion.div
@@ -5497,10 +6085,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     onUnlockRequest={() => setUnlockOpen(true)}
                     onUpdated={(updated) => setActiveItem(updated)}
                     onDelete={async (id) => {
+                      openItemReqRef.current += 1;
                       await handleDeleteItem(id);
                       setStudioOpen(false);
                     }}
-                    onClose={() => setStudioOpen(false)}
+                    onClose={() => {
+                      openItemReqRef.current += 1;
+                      setStudioOpen(false);
+                    }}
                   />
                 </Suspense>
               </motion.div>
@@ -5650,7 +6242,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
       {/* Modals & Drawers */}
       <ScopedAccentContext.Provider value={workspaceAccentStyle}>
-        {mountQuickLook ? (
+        {quickLookMount.shouldMount ? (
           <Suspense fallback={null}>
             <QuickLookModal
               item={quickLookItem}
@@ -5658,17 +6250,19 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
               onSelectItem={setQuickLookItem}
               onClose={() => setQuickLookItem(null)}
+              onExited={quickLookMount.notifyExited}
               onEditInStudio={(item) => handleOpenItem(item)}
               onTogglePin={(item) => void handleTogglePin(item)}
             />
           </Suspense>
         ) : null}
 
-        {mountLightbox ? (
+        {lightboxMount.shouldMount ? (
           <Suspense fallback={null}>
             <ShotLightbox
               item={lightboxItem}
               onClose={() => setLightboxItem(null)}
+              onExited={lightboxMount.notifyExited}
               onEditInStudio={(item) => {
                 setLightboxItem(null);
                 handleOpenItem(item);
@@ -5681,7 +6275,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         ) : null}
       </ScopedAccentContext.Provider>
 
-      {mountNewSecret ? (
+      {newSecretMount.shouldMount ? (
         <Suspense fallback={null}>
           <NewSecretModal
             open={newSecretOpen}
@@ -5695,7 +6289,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {mountUnlock ? (
+      {unlockMount.shouldMount ? (
         <Suspense fallback={null}>
           <UnlockPinDialog
             open={unlockOpen}
@@ -5795,7 +6389,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       </ModalDialog>
 
       {/* Universal First-Run Onboarding (shown once on genuinely empty vault) */}
-      {mountOnboarding ? (
+      {onboardingMount.shouldMount ? (
         <Suspense fallback={null}>
           <OnboardingModal
             open={onboardingShouldOpen}
@@ -5813,7 +6407,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {mountSettings ? (
+      {settingsMount.shouldMount ? (
         <Suspense fallback={null}>
           <SettingsModal
             open={settingsOpen}
@@ -5829,7 +6423,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {mountSynthesize ? (
+      {synthesizeMount.shouldMount ? (
         <ScopedAccentContext.Provider value={workspaceAccentStyle}>
           <Suspense fallback={null}>
             <SynthesizeNotesModal
@@ -5852,7 +6446,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </ScopedAccentContext.Provider>
       ) : null}
 
-      {mountTriage ? (
+      {triageMount.shouldMount ? (
         <Suspense fallback={null}>
           <SmartTriageModal
             open={triageOpen}

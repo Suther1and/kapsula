@@ -702,23 +702,36 @@ describe('Kapsula V8 Backend Hardening, Security, Sync, Migration & Cross-Platfo
     ).rejects.toThrow(/Сейф заблокирован/i);
     expect(repo.queryItems({ includeSecrets: true, limit: 50 })).toHaveLength(1);
 
-    // 3. P0-4b: Pre-persist OCR secret hit while locked removes temp media copy, preserves source file, persists nothing
+    // 3. P0-4b: Non-blocking OCR Secret Shield defers sync_dirty until background OCR screens,
+    // then purges persisted shot, cleans mediaDir, preserves user's external source file, and warns!
     const externalShotPath = path.join(dir, 'user-original-card.png');
     fs.writeFileSync(externalShotPath, SAMPLE_PNG_BUF);
-    const ocrSpy = vi
-      .spyOn(defaultLocalOcrAdapter, 'extractText')
-      .mockResolvedValue({ text: 'МИР 2202 2006 1234 5676 09/29 CVV 384', engine: 'mock' } as any);
+    let releaseOcr!: () => void;
+    const ocrGate = new Promise<void>((resolve) => {
+      releaseOcr = resolve;
+    });
+    const ocrSpy = vi.spyOn(defaultLocalOcrAdapter, 'extractText').mockImplementation(async () => {
+      await ocrGate;
+      return { text: 'МИР 2202 2006 1234 5676 09/29 CVV 384', engine: 'mock' } as any;
+    });
 
-    await expect(
-      pipeline.capture({
-        imageFilePath: externalShotPath,
-        source: 'clipboard_snatch',
-      })
-    ).rejects.toThrow(/Сейф заблокирован/i);
-    // Original file outside mediaDir must NOT be deleted, and mediaDir must hold zero plaintext copy!
+    const pendingShot = await pipeline.capture({
+      imageFilePath: externalShotPath,
+      source: 'clipboard_snatch',
+    });
+    // capture() returns immediately without blocking on OCR, and sync_dirty stays empty before OCR finishes
+    expect(
+      repo.db.prepare("SELECT COUNT(*) AS c FROM sync_dirty WHERE entity_id = ?").get(pendingShot.id)
+    ).toEqual({ c: 0 });
+    releaseOcr();
+    await pipeline.waitForIdle();
+    // Original file outside mediaDir must NOT be deleted, mediaDir must hold zero plaintext copy, and shot is purged!
     expect(fs.existsSync(externalShotPath)).toBe(true);
     expect(fs.readdirSync(pipeline.getMediaDir())).toHaveLength(0);
     expect(repo.queryItems({ includeSecrets: true, limit: 50 })).toHaveLength(1);
+    expect(repo.getItemById(pendingShot.id, { includeDeleted: true, includePurged: true })?.purgedAt).not.toBeNull();
+    expect(deletedIds).toContain(pendingShot.id);
+    expect(notices.some((n) => n.body.includes('Сейф'))).toBe(true);
 
     // 4. P0-4c: Background OCR secret hit while locked purges persisted shot, unlinks plaintext PNG & notifies user!
     ocrSpy.mockResolvedValueOnce({ text: '', engine: 'mock' } as any);

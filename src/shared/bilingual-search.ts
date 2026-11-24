@@ -256,7 +256,20 @@ export function detectPlatformIntent(rawQuery: string): {
 }
 
 export function normalizeSearchText(raw: string): string {
-  return (raw || '').toLowerCase().replace(/ё/g, 'е');
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  return lower.indexOf('ё') >= 0 ? lower.replace(/ё/g, 'е') : lower;
+}
+
+let dlScratch = new Int32Array(256);
+
+function getDlBuffer(needed: number): Int32Array {
+  if (dlScratch.length < needed) {
+    let nextLen = dlScratch.length || 256;
+    while (nextLen < needed) nextLen *= 2;
+    dlScratch = new Int32Array(nextLen);
+  }
+  return dlScratch;
 }
 
 /**
@@ -271,20 +284,24 @@ export function damerauDistanceWithin(a: string, b: string, maxDist: number): nu
   if (lenA === 0) return lenB <= maxDist ? lenB : maxDist + 1;
   if (lenB === 0) return lenA <= maxDist ? lenA : maxDist + 1;
 
-  const dp: number[][] = Array.from({ length: lenA + 1 }, () => new Array<number>(lenB + 1).fill(0));
-  for (let i = 0; i <= lenA; i += 1) dp[i]![0] = i;
-  for (let j = 0; j <= lenB; j += 1) dp[0]![j] = j;
+  const cols = lenB + 1;
+  const dp = getDlBuffer((lenA + 1) * cols);
+  for (let i = 0; i <= lenA; i += 1) dp[i * cols] = i;
+  for (let j = 0; j <= lenB; j += 1) dp[j] = j;
 
   for (let i = 1; i <= lenA; i += 1) {
     let rowMin = maxDist + 1;
     const chA = a.charCodeAt(i - 1);
+    const rowOffset = i * cols;
+    const prevRowOffset = (i - 1) * cols;
+    const prev2RowOffset = (i - 2) * cols;
     for (let j = 1; j <= lenB; j += 1) {
       const chB = b.charCodeAt(j - 1);
       const cost = chA === chB ? 0 : 1;
       let val = Math.min(
-        dp[i - 1]![j]! + 1,
-        dp[i]![j - 1]! + 1,
-        dp[i - 1]![j - 1]! + cost
+        dp[prevRowOffset + j]! + 1,
+        dp[rowOffset + j - 1]! + 1,
+        dp[prevRowOffset + j - 1]! + cost
       );
       if (
         i > 1 &&
@@ -292,14 +309,62 @@ export function damerauDistanceWithin(a: string, b: string, maxDist: number): nu
         chA === b.charCodeAt(j - 2) &&
         a.charCodeAt(i - 2) === chB
       ) {
-        val = Math.min(val, dp[i - 2]![j - 2]! + 1);
+        val = Math.min(val, dp[prev2RowOffset + j - 2]! + 1);
       }
-      dp[i]![j] = val;
+      dp[rowOffset + j] = val;
       if (val < rowMin) rowMin = val;
     }
     if (rowMin > maxDist) return maxDist + 1;
   }
-  return dp[lenA]![lenB]!;
+  const d = dp[lenA * cols + lenB]!;
+  return d <= maxDist ? d : maxDist + 1;
+}
+
+export function damerauDistanceWithinPrefix(
+  a: string,
+  b: string,
+  lenB: number,
+  maxDist: number
+): number {
+  const lenA = a.length;
+  if (Math.abs(lenA - lenB) > maxDist) return maxDist + 1;
+  if (lenA === 0) return lenB <= maxDist ? lenB : maxDist + 1;
+  if (lenB === 0) return lenA <= maxDist ? lenA : maxDist + 1;
+
+  const cols = lenB + 1;
+  const dp = getDlBuffer((lenA + 1) * cols);
+  for (let i = 0; i <= lenA; i += 1) dp[i * cols] = i;
+  for (let j = 0; j <= lenB; j += 1) dp[j] = j;
+
+  for (let i = 1; i <= lenA; i += 1) {
+    let rowMin = maxDist + 1;
+    const chA = a.charCodeAt(i - 1);
+    const rowOffset = i * cols;
+    const prevRowOffset = (i - 1) * cols;
+    const prev2RowOffset = (i - 2) * cols;
+    for (let j = 1; j <= lenB; j += 1) {
+      const chB = b.charCodeAt(j - 1);
+      const cost = chA === chB ? 0 : 1;
+      let val = Math.min(
+        dp[prevRowOffset + j]! + 1,
+        dp[rowOffset + j - 1]! + 1,
+        dp[prevRowOffset + j - 1]! + cost
+      );
+      if (
+        i > 1 &&
+        j > 1 &&
+        chA === b.charCodeAt(j - 2) &&
+        a.charCodeAt(i - 2) === chB
+      ) {
+        val = Math.min(val, dp[prev2RowOffset + j - 2]! + 1);
+      }
+      dp[rowOffset + j] = val;
+      if (val < rowMin) rowMin = val;
+    }
+    if (rowMin > maxDist) return maxDist + 1;
+  }
+  const d = dp[lenA * cols + lenB]!;
+  return d <= maxDist ? d : maxDist + 1;
 }
 
 function tokenizeWords(normalizedText: string): string[] {
@@ -312,51 +377,301 @@ function allowedTypoDistance(tokenLen: number): number {
   return 0;
 }
 
-function matchGroupInNormalizedText(
-  normalizedText: string,
-  words: string[],
-  group: ExpandedTokenGroup
-): 'exact' | 'variant' | 'fuzzy' | null {
-  if (!normalizedText) return null;
-  const primaryNorm = normalizeSearchText(group.primary);
-  if (primaryNorm && normalizedText.includes(primaryNorm)) {
-    return 'exact';
+const WORD_CHAR_RE = /[\p{L}\p{N}._-]/u;
+const NON_ASCII_WORD_RE = /[\p{L}\p{N}]/u;
+const ASCII_WORD_CHAR = new Uint8Array(128);
+for (let c = 0; c < 128; c += 1) {
+  if (
+    (c >= 97 && c <= 122) ||
+    (c >= 65 && c <= 90) ||
+    (c >= 48 && c <= 57) ||
+    c === 95 ||
+    c === 45 ||
+    c === 46
+  ) {
+    ASCII_WORD_CHAR[c] = 1;
   }
+}
+
+export function isSearchWordCharAt(str: string, idx: number): boolean {
+  const c = str.charCodeAt(idx);
+  if (c < 128) return ASCII_WORD_CHAR[c] === 1;
+  if ((c >= 1040 && c <= 1103) || c === 1025 || c === 1105) return true;
+  if (c >= 0xd800 && c <= 0xdfff) return false;
+  return NON_ASCII_WORD_RE.test(str[idx]!);
+}
+
+const EMPTY_STR_ARR: string[] = [];
+
+export interface CompiledCharFreq {
+  ch: string;
+  code: number;
+  count: number;
+}
+
+export interface CompiledFuzzyCandidate {
+  cand: string;
+  candLen: number;
+  maxDist: number;
+  c0: number;
+  c1: number;
+  c2: number;
+  ch0: string;
+  ch1: string;
+  ch2: string;
+  nonWordCount: number;
+  wordCharFreqs: CompiledCharFreq[];
+  allCharFreqs: CompiledCharFreq[];
+}
+
+export function passesCharFreqs(
+  text: string,
+  freqs: CompiledCharFreq[],
+  initialMisses: number,
+  maxDist: number,
+  limitEnd = text.length
+): boolean {
+  let misses = initialMisses;
+  if (misses > maxDist) return false;
+  for (let k = 0; k < freqs.length; k += 1) {
+    const f = freqs[k]!;
+    if (f.count === 1) {
+      const found = text.indexOf(f.ch);
+      if (found < 0 || found >= limitEnd) {
+        misses += 1;
+        if (misses > maxDist) return false;
+      }
+    } else {
+      let pos = 0;
+      for (let r = 0; r < f.count; r += 1) {
+        const found = text.indexOf(f.ch, pos);
+        if (found < 0 || found >= limitEnd) {
+          misses += f.count - r;
+          break;
+        }
+        pos = found + 1;
+      }
+      if (misses > maxDist) return false;
+    }
+  }
+  return true;
+}
+
+function buildSortedCharFreqs(
+  accMap: Map<string, { ch: string; code: number; count: number; lastIdx: number }>
+): CompiledCharFreq[] {
+  return Array.from(accMap.values())
+    .sort((a, b) => b.count - a.count || b.lastIdx - a.lastIdx)
+    .map(({ ch, code, count }) => ({ ch, code, count }));
+}
+
+export interface CompiledTokenGroup {
+  primaryNorm: string;
+  variantNorms: string[];
+  fuzzyCandidates: CompiledFuzzyCandidate[];
+}
+
+export interface CompiledBilingualSearchQuery {
+  trimmed: string;
+  rawTagMatches: string[];
+  cleanPhrase: string;
+  groups: CompiledTokenGroup[];
+}
+
+function compileTokenGroup(group: ExpandedTokenGroup): CompiledTokenGroup {
+  const primaryNorm = normalizeSearchText(group.primary);
+  const variantSet = new Set<string>();
   for (const v of group.variants) {
     const vNorm = normalizeSearchText(v);
-    if (vNorm && vNorm !== primaryNorm && normalizedText.includes(vNorm)) {
+    if (vNorm && vNorm !== primaryNorm) {
+      variantSet.add(vNorm);
+    }
+  }
+
+  const fuzzyRaw: string[] = [primaryNorm];
+  if (/[а-яё]/i.test(group.primary) && group.primary.length >= 4) {
+    const en = normalizeSearchText(translitRuToEn(group.primary));
+    if (en.length >= 4) fuzzyRaw.push(en);
+  } else if (/[a-z]/i.test(group.primary) && group.primary.length >= 4) {
+    const ru = normalizeSearchText(translitEnToRu(group.primary));
+    if (ru.length >= 4) fuzzyRaw.push(ru);
+  }
+  const swapped = swapKeyboardLayout(group.primary);
+  if (swapped) fuzzyRaw.push(normalizeSearchText(swapped));
+
+  const fuzzyCandidates: CompiledFuzzyCandidate[] = [];
+  for (const cand of fuzzyRaw) {
+    const maxDist = allowedTypoDistance(cand.length);
+    if (maxDist <= 0) continue;
+    const wordMap = new Map<string, { ch: string; code: number; count: number; lastIdx: number }>();
+    const allMap = new Map<string, { ch: string; code: number; count: number; lastIdx: number }>();
+    let nonWordCount = 0;
+    for (let k = cand.length - 1; k >= 0; k -= 1) {
+      const ch = cand[k]!;
+      const code = cand.charCodeAt(k);
+      const existingAll = allMap.get(ch);
+      if (existingAll) {
+        existingAll.count += 1;
+      } else {
+        allMap.set(ch, { ch, code, count: 1, lastIdx: k });
+      }
+      if (WORD_CHAR_RE.test(ch)) {
+        const existingWord = wordMap.get(ch);
+        if (existingWord) {
+          existingWord.count += 1;
+        } else {
+          wordMap.set(ch, { ch, code, count: 1, lastIdx: k });
+        }
+      } else {
+        nonWordCount += 1;
+      }
+    }
+    fuzzyCandidates.push({
+      cand,
+      candLen: cand.length,
+      maxDist,
+      c0: cand.charCodeAt(0),
+      c1: cand.charCodeAt(1),
+      c2: cand.length >= 3 ? cand.charCodeAt(2) : -1,
+      ch0: cand[0]!,
+      ch1: cand[1]!,
+      ch2: cand.length >= 3 ? cand[2]! : '',
+      nonWordCount,
+      wordCharFreqs: buildSortedCharFreqs(wordMap),
+      allCharFreqs: buildSortedCharFreqs(allMap),
+    });
+  }
+
+  return {
+    primaryNorm,
+    variantNorms: Array.from(variantSet),
+    fuzzyCandidates,
+  };
+}
+
+export function compileBilingualSearchQuery(rawQuery: string): CompiledBilingualSearchQuery {
+  const trimmed = (rawQuery || '').trim();
+  if (!trimmed) {
+    return { trimmed: '', rawTagMatches: [], cleanPhrase: '', groups: [] };
+  }
+  const rawTagMatches: string[] = [];
+  for (const m of trimmed.matchAll(/(?:^|(?<=\s))#(?=[\p{L}\p{N}_-]*\p{L})([\p{L}\p{N}_-]+)/gu)) {
+    const norm = normalizeSearchText(m[1] || '');
+    if (norm) rawTagMatches.push(norm);
+  }
+  const queryWithoutHashes = trimmed
+    .replace(/(?:^|(?<=\s))#(?=[\p{L}\p{N}_-]*\p{L})[\p{L}\p{N}_-]+/gu, ' ')
+    .trim();
+  const baseQuery = queryWithoutHashes || trimmed;
+  const groups = expandBilingualQuery(baseQuery).map(compileTokenGroup);
+  return {
+    trimmed,
+    rawTagMatches,
+    cleanPhrase: normalizeSearchText(baseQuery),
+    groups,
+  };
+}
+
+function matchCompiledGroupInNormalizedText(
+  normalizedText: string,
+  wordsOrGetter: string[] | (() => string[]),
+  group: CompiledTokenGroup,
+  allowFuzzy = true
+): 'exact' | 'variant' | 'fuzzy' | null {
+  if (!normalizedText) return null;
+  if (group.primaryNorm && normalizedText.includes(group.primaryNorm)) {
+    return 'exact';
+  }
+  for (let i = 0; i < group.variantNorms.length; i += 1) {
+    if (normalizedText.includes(group.variantNorms[i]!)) {
       return 'variant';
     }
   }
-  // Typo-tolerant fallback against words in text (primary, transliteration, and layout-swapped variant)
-  const fuzzyCandidates: string[] = [primaryNorm];
-  if (/[а-яё]/i.test(group.primary) && group.primary.length >= 4) {
-    const en = normalizeSearchText(translitRuToEn(group.primary));
-    if (en.length >= 4) fuzzyCandidates.push(en);
-  } else if (/[a-z]/i.test(group.primary) && group.primary.length >= 4) {
-    const ru = normalizeSearchText(translitEnToRu(group.primary));
-    if (ru.length >= 4) fuzzyCandidates.push(ru);
+  if (!allowFuzzy || group.fuzzyCandidates.length === 0) return null;
+
+  // Fast full-candidate multiplicity pigeonhole pre-check: at most `maxDist` character occurrences
+  // of `cand` can be missing from `normalizedText` (and non-word chars cannot appear in tokenized words).
+  // When false across all candidates, skip word tokenization and Damerau-Levenshtein entirely.
+  const isTokenizedFn = typeof wordsOrGetter === 'function';
+  let anyCandidatePossible = false;
+  for (let i = 0; i < group.fuzzyCandidates.length; i += 1) {
+    const fc = group.fuzzyCandidates[i]!;
+    const freqs = isTokenizedFn ? fc.wordCharFreqs : fc.allCharFreqs;
+    const initMisses = isTokenizedFn ? fc.nonWordCount : 0;
+    if (passesCharFreqs(normalizedText, freqs, initMisses, fc.maxDist)) {
+      anyCandidatePossible = true;
+      break;
+    }
   }
-  const swapped = swapKeyboardLayout(group.primary);
-  if (swapped) fuzzyCandidates.push(normalizeSearchText(swapped));
-  for (const cand of fuzzyCandidates) {
-    const maxDist = allowedTypoDistance(cand.length);
-    if (maxDist <= 0) continue;
-    for (const w of words) {
-      if (Math.abs(w.length - cand.length) <= maxDist) {
+  if (!anyCandidatePossible) return null;
+
+  const words = typeof wordsOrGetter === 'function' ? wordsOrGetter() : wordsOrGetter;
+  if (words.length === 0) return null;
+
+  for (let i = 0; i < group.fuzzyCandidates.length; i += 1) {
+    const fc = group.fuzzyCandidates[i]!;
+    const cand = fc.cand;
+    const candLen = cand.length;
+    const maxDist = fc.maxDist;
+    const freqs = isTokenizedFn ? fc.wordCharFreqs : fc.allCharFreqs;
+    const initMisses = isTokenizedFn ? fc.nonWordCount : 0;
+
+    for (let j = 0; j < words.length; j += 1) {
+      const w = words[j]!;
+      const wLen = w.length;
+      if (Math.abs(wLen - candLen) <= maxDist) {
+        if (wLen >= 2 && candLen >= 2) {
+          const w0 = w.charCodeAt(0);
+          const w1 = w.charCodeAt(1);
+          if (maxDist === 1) {
+            if (w0 !== fc.c0 && w0 !== fc.c1 && w1 !== fc.c0 && w1 !== fc.c1) continue;
+          } else if (maxDist === 2 && wLen >= 3 && candLen >= 3) {
+            const w2 = w.charCodeAt(2);
+            if (
+              w0 !== fc.c0 &&
+              w0 !== fc.c1 &&
+              w0 !== fc.c2 &&
+              w1 !== fc.c0 &&
+              w1 !== fc.c1 &&
+              w1 !== fc.c2 &&
+              w2 !== fc.c0 &&
+              w2 !== fc.c1 &&
+              w2 !== fc.c2
+            ) {
+              continue;
+            }
+          }
+        }
+        if (!passesCharFreqs(w, freqs, initMisses, maxDist)) continue;
         if (damerauDistanceWithin(cand, w, maxDist) <= maxDist) {
           return 'fuzzy';
         }
-      } else if (w.length > cand.length && cand.length >= 5) {
-        // Also allow 1 typo inside the prefix of a longer inflected Russian word
-        const prefix = w.slice(0, cand.length);
-        if (damerauDistanceWithin(cand, prefix, 1) <= 1) {
+      } else if (wLen > candLen && candLen >= 5) {
+        const w0 = w.charCodeAt(0);
+        const w1 = w.charCodeAt(1);
+        if (w0 !== fc.c0 && w0 !== fc.c1 && w1 !== fc.c0 && w1 !== fc.c1) continue;
+        if (!passesCharFreqs(w, freqs, initMisses, 1, candLen)) continue;
+        if (damerauDistanceWithinPrefix(cand, w, candLen, 1) <= 1) {
           return 'fuzzy';
         }
       }
     }
   }
   return null;
+}
+
+function matchGroupInNormalizedText(
+  normalizedText: string,
+  wordsOrGetter: string[] | (() => string[]),
+  group: ExpandedTokenGroup,
+  allowFuzzy = true
+): 'exact' | 'variant' | 'fuzzy' | null {
+  return matchCompiledGroupInNormalizedText(
+    normalizedText,
+    wordsOrGetter,
+    compileTokenGroup(group),
+    allowFuzzy
+  );
 }
 
 /**
@@ -394,57 +709,79 @@ export interface SmartSearchFields {
  * Computes a relevance score (> 0 when matched, 0 when not matched) across structured fields.
  * Prioritizes exact phrase in title, title tokens, tags/section names, domain/type, then body/OCR.
  */
-export function scoreBilingualFields(fields: SmartSearchFields, rawQuery: string): number {
-  const trimmed = (rawQuery || '').trim();
-  if (!trimmed) return 1;
+export function scoreBilingualFieldsCompiled(
+  fields: SmartSearchFields,
+  compiled: CompiledBilingualSearchQuery,
+  opts?: { allowFuzzy?: boolean; nowMs?: number }
+): number {
+  if (!compiled.trimmed) return 1;
+  const allowFuzzy = opts?.allowFuzzy !== false;
 
-  // Support explicit `#tag` filtering mixed with free text
-  const rawTagMatches = Array.from(trimmed.matchAll(/#([\p{L}\p{N}_-]+)/gu)).map((m) =>
-    normalizeSearchText(m[1] || '')
-  );
-  const queryWithoutHashes = trimmed.replace(/#[\p{L}\p{N}_-]+/gu, ' ').trim();
-  const tagsNorm = (fields.tags || []).map((tg) => normalizeSearchText(tg));
-  for (const wantedTag of rawTagMatches) {
-    if (!wantedTag) continue;
-    const hitTag = tagsNorm.some((tg) => tg.includes(wantedTag));
+  const tagsNorm =
+    fields.tags && fields.tags.length > 0
+      ? fields.tags.map((tg) => normalizeSearchText(tg))
+      : EMPTY_STR_ARR;
+  for (let i = 0; i < compiled.rawTagMatches.length; i += 1) {
+    const wantedTag = compiled.rawTagMatches[i]!;
+    let hitTag = false;
+    for (let j = 0; j < tagsNorm.length; j += 1) {
+      if (tagsNorm[j]!.includes(wantedTag)) {
+        hitTag = true;
+        break;
+      }
+    }
     if (!hitTag) return 0;
   }
 
-  const groups = expandBilingualQuery(queryWithoutHashes || trimmed);
-  const titleNorm = normalizeSearchText(fields.title || '');
-  const tagTextNorm = tagsNorm.join(' ');
-  const metaNorm = normalizeSearchText(
-    [fields.orbitName, fields.boardName, fields.domain, fields.dnaLabel, fields.url, fields.extra]
-      .filter(Boolean)
-      .join(' ')
-  );
-  const bodyNorm = normalizeSearchText(
-    [fields.summary, fields.body, fields.ocrText].filter(Boolean).join('\n')
-  );
-  const combinedNorm = `${titleNorm}\n${tagTextNorm}\n${metaNorm}\n${bodyNorm}`;
-
-  if (groups.length === 0) {
-    return rawTagMatches.length > 0 ? 80 : 1;
+  if (compiled.groups.length === 0) {
+    return compiled.rawTagMatches.length > 0 ? 80 : 1;
   }
 
-  const titleWords = tokenizeWords(titleNorm);
-  const metaWords = tokenizeWords(`${tagTextNorm} ${metaNorm}`);
-  const bodyWords = tokenizeWords(bodyNorm);
+  const titleNorm = normalizeSearchText(fields.title || '');
+  const tagTextNorm = tagsNorm.length > 0 ? tagsNorm.join(' ') : '';
+  let rawMeta = '';
+  if (fields.orbitName) rawMeta = fields.orbitName;
+  if (fields.boardName) rawMeta = rawMeta ? `${rawMeta} ${fields.boardName}` : fields.boardName;
+  if (fields.domain) rawMeta = rawMeta ? `${rawMeta} ${fields.domain}` : fields.domain;
+  if (fields.dnaLabel) rawMeta = rawMeta ? `${rawMeta} ${fields.dnaLabel}` : fields.dnaLabel;
+  if (fields.url) rawMeta = rawMeta ? `${rawMeta} ${fields.url}` : fields.url;
+  if (fields.extra) rawMeta = rawMeta ? `${rawMeta} ${fields.extra}` : fields.extra;
+  const metaNorm = rawMeta ? normalizeSearchText(rawMeta) : '';
+
+  let rawBody = '';
+  if (fields.summary) rawBody = fields.summary;
+  if (fields.body) rawBody = rawBody ? `${rawBody}\n${fields.body}` : fields.body;
+  if (fields.ocrText) rawBody = rawBody ? `${rawBody}\n${fields.ocrText}` : fields.ocrText;
+  const bodyNorm = rawBody ? normalizeSearchText(rawBody) : '';
+
+  let titleWordsCache: string[] | null = null;
+  let metaWordsCache: string[] | null = null;
+  let bodyWordsCache: string[] | null = null;
+  const getTitleWords = () => (titleWordsCache ??= tokenizeWords(titleNorm));
+  const getMetaWords = () => (metaWordsCache ??= tokenizeWords(`${tagTextNorm} ${metaNorm}`));
+  const getBodyWords = () => (bodyWordsCache ??= tokenizeWords(bodyNorm));
 
   let score = 0;
-  const cleanPhrase = normalizeSearchText(queryWithoutHashes || trimmed);
+  const cleanPhrase = compiled.cleanPhrase;
   if (cleanPhrase.length >= 2) {
     if (titleNorm === cleanPhrase) score += 180;
     else if (titleNorm.startsWith(cleanPhrase)) score += 135;
     else if (titleNorm.includes(cleanPhrase)) score += 105;
-    else if (combinedNorm.includes(cleanPhrase)) score += 45;
+    else if (
+      tagTextNorm.includes(cleanPhrase) ||
+      metaNorm.includes(cleanPhrase) ||
+      bodyNorm.includes(cleanPhrase)
+    ) {
+      score += 45;
+    }
   }
 
-  for (const group of groups) {
-    const titleHit = matchGroupInNormalizedText(titleNorm, titleWords, group);
-    const tagHit = matchGroupInNormalizedText(tagTextNorm, tagsNorm, group);
-    const metaHit = matchGroupInNormalizedText(metaNorm, metaWords, group);
-    const bodyHit = matchGroupInNormalizedText(bodyNorm, bodyWords, group);
+  for (let i = 0; i < compiled.groups.length; i += 1) {
+    const group = compiled.groups[i]!;
+    const titleHit = matchCompiledGroupInNormalizedText(titleNorm, getTitleWords, group, allowFuzzy);
+    const tagHit = matchCompiledGroupInNormalizedText(tagTextNorm, tagsNorm, group, allowFuzzy);
+    const metaHit = matchCompiledGroupInNormalizedText(metaNorm, getMetaWords, group, allowFuzzy);
+    const bodyHit = matchCompiledGroupInNormalizedText(bodyNorm, getBodyWords, group, allowFuzzy);
 
     if (!titleHit && !tagHit && !metaHit && !bodyHit) {
       return 0;
@@ -465,13 +802,22 @@ export function scoreBilingualFields(fields: SmartSearchFields, rawQuery: string
     else if (bodyHit === 'fuzzy') score += 9;
   }
 
-  if (rawTagMatches.length > 0) score += rawTagMatches.length * 40;
+  if (compiled.rawTagMatches.length > 0) score += compiled.rawTagMatches.length * 40;
   if (fields.isPinned) score += 4;
   if (fields.updatedAt && fields.updatedAt > 0) {
-    const ageDays = Math.max(0, (Date.now() - fields.updatedAt) / 86_400_000);
+    const nowMs = opts?.nowMs ?? Date.now();
+    const ageDays = Math.max(0, (nowMs - fields.updatedAt) / 86_400_000);
     score += Math.max(0, 6 - Math.log10(ageDays + 1) * 2.5);
   }
   return score;
+}
+
+export function scoreBilingualFields(
+  fields: SmartSearchFields,
+  rawQuery: string,
+  opts?: { allowFuzzy?: boolean }
+): number {
+  return scoreBilingualFieldsCompiled(fields, compileBilingualSearchQuery(rawQuery), opts);
 }
 
 /**

@@ -10,6 +10,24 @@ export type TextShimmerProps = {
   spread?: number;
 };
 
+const MOTION_TAG_CACHE = new Map<
+  React.ElementType,
+  React.ComponentType<Record<string, unknown>>
+>();
+
+function getMotionComponent(
+  Component: React.ElementType
+): React.ComponentType<Record<string, unknown>> {
+  let cached = MOTION_TAG_CACHE.get(Component);
+  if (!cached) {
+    cached = motion.create(
+      Component as keyof JSX.IntrinsicElements
+    ) as React.ComponentType<Record<string, unknown>>;
+    MOTION_TAG_CACHE.set(Component, cached);
+  }
+  return cached;
+}
+
 function TextShimmerComponent({
   children,
   as: Component = 'p',
@@ -17,9 +35,7 @@ function TextShimmerComponent({
   duration = 2,
   spread = 2,
 }: TextShimmerProps) {
-  const MotionComponent = motion.create(
-    Component as keyof JSX.IntrinsicElements
-  );
+  const MotionComponent = getMotionComponent(Component);
 
   const dynamicSpread = useMemo(() => {
     return children.length * spread;

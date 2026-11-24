@@ -211,6 +211,9 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
   const timeGridScrollRef = useRef<HTMLDivElement | null>(null);
   const scrolledModeRef = useRef<CalendarMode | null>(null);
   const suppressNextSlotClickRef = useRef(false);
+  const suppressNextEventClickRef = useRef(false);
+  const pendingDragMoveRef = useRef<{ clientY: number } | null>(null);
+  const dragMoveRafRef = useRef<number | null>(null);
 
   const [dragCreateDraft, setDragCreateDraft] = useState<{
     dayKey: string;
@@ -469,15 +472,54 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     return Array.from({ length: 7 }, (_, i) => new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
   }, [cursorDate]);
 
+  const entriesByDayMap = useMemo(() => {
+    const map = new Map<string, CalendarDisplayEntry[]>();
+    const minMs = windowRange.start;
+    const maxMs = windowRange.end;
+    for (const entry of combinedEntries) {
+      if (entry.endAt < minMs || entry.startAt > maxMs) continue;
+      if (entry.endAt === entry.startAt) {
+        const key = toLocalDateInput(entry.startAt);
+        let list = map.get(key);
+        if (!list) {
+          list = [];
+          map.set(key, list);
+        }
+        list.push(entry);
+        continue;
+      }
+      const clampedStart = Math.max(minMs, entry.startAt);
+      const clampedEnd = Math.min(maxMs, entry.endAt);
+      if (clampedEnd <= clampedStart) continue;
+      const firstDay = startOfDay(new Date(clampedStart));
+      const lastDayMs = startOfDay(new Date(clampedEnd - 1)).getTime();
+      let d = firstDay;
+      while (d.getTime() <= lastDayMs) {
+        const key = toLocalDateInput(d.getTime());
+        let list = map.get(key);
+        if (!list) {
+          list = [];
+          map.set(key, list);
+        }
+        list.push(entry);
+        d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+      }
+    }
+    return map;
+  }, [combinedEntries, windowRange]);
+
   const entriesForDay = useCallback(
-    (day: Date) => {
+    (day: Date): CalendarDisplayEntry[] => {
       const ds = startOfDay(day).getTime();
+      if (ds >= windowRange.start && ds < windowRange.end) {
+        return entriesByDayMap.get(toLocalDateInput(ds)) ?? [];
+      }
       const de = ds + 86_400_000 - 1;
       return combinedEntries.filter(
         (e) => e.startAt <= de && (e.endAt > ds || (e.endAt === e.startAt && e.startAt >= ds))
       );
     },
-    [combinedEntries]
+    [entriesByDayMap, combinedEntries, windowRange]
   );
 
   const selectedDayEntries = useMemo(
@@ -1116,35 +1158,64 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
 
   // Drag-to-create and bottom-edge drag-to-resize on 24h grid
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const applyDragMove = (clientY: number) => {
       const dc = dragCreateMetaRef.current;
       if (dc) {
-        const relY = Math.max(0, Math.min(24 * HOUR_ROW_PX, e.clientY - dc.columnTop));
+        const relY = Math.max(0, Math.min(24 * HOUR_ROW_PX, clientY - dc.columnTop));
         const snappedMin = Math.min(
           23 * 60 + 30,
           Math.max(0, Math.floor((relY / HOUR_ROW_PX) * 2) * 30)
         );
-        dc.currentMin = snappedMin;
-        setDragCreateDraft({
-          dayKey: dc.dayKey,
-          anchorMin: dc.anchorMin,
-          currentMin: snappedMin,
-        });
+        if (snappedMin !== dc.currentMin) {
+          dc.currentMin = snappedMin;
+          setDragCreateDraft({
+            dayKey: dc.dayKey,
+            anchorMin: dc.anchorMin,
+            currentMin: snappedMin,
+          });
+        }
       }
 
       const rs = resizeMetaRef.current;
       if (rs) {
-        const deltaSteps = Math.round((e.clientY - rs.startY) / (HOUR_ROW_PX / 4));
+        const deltaSteps = Math.round((clientY - rs.startY) / (HOUR_ROW_PX / 4));
         const nextEndMin = Math.max(
           rs.minEndMin,
           Math.min(24 * 60, rs.initialEndMin + deltaSteps * 15)
         );
-        rs.currentEndMin = nextEndMin;
-        setResizingDraft({ entryId: rs.entryId, endMin: nextEndMin });
+        if (nextEndMin !== rs.currentEndMin) {
+          rs.currentEndMin = nextEndMin;
+          setResizingDraft({ entryId: rs.entryId, endMin: nextEndMin });
+        }
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragCreateMetaRef.current && !resizeMetaRef.current) return;
+      pendingDragMoveRef.current = { clientY: e.clientY };
+      if (dragMoveRafRef.current === null) {
+        dragMoveRafRef.current = window.requestAnimationFrame(() => {
+          dragMoveRafRef.current = null;
+          const pending = pendingDragMoveRef.current;
+          pendingDragMoveRef.current = null;
+          if (pending) {
+            applyDragMove(pending.clientY);
+          }
+        });
       }
     };
 
     const handleMouseUp = (e: MouseEvent) => {
+      if (dragMoveRafRef.current !== null) {
+        window.cancelAnimationFrame(dragMoveRafRef.current);
+        dragMoveRafRef.current = null;
+      }
+      if (pendingDragMoveRef.current) {
+        const pending = pendingDragMoveRef.current;
+        pendingDragMoveRef.current = null;
+        applyDragMove(pending.clientY);
+      }
+
       const dc = dragCreateMetaRef.current;
       if (dc) {
         dragCreateMetaRef.current = null;
@@ -1176,6 +1247,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
       if (rs) {
         resizeMetaRef.current = null;
         setResizingDraft(null);
+        suppressNextEventClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextEventClickRef.current = false;
+        }, 0);
         if (rs.currentEndMin !== rs.initialEndMin) {
           const nextEndAt = Math.max(
             rs.sourceEvent.startAt + 15 * 60_000,
@@ -1204,6 +1279,11 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => {
+      if (dragMoveRafRef.current !== null) {
+        window.cancelAnimationFrame(dragMoveRafRef.current);
+        dragMoveRafRef.current = null;
+      }
+      pendingDragMoveRef.current = null;
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
@@ -2033,6 +2113,10 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
                                     }}
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      if (suppressNextEventClickRef.current) {
+                                        suppressNextEventClickRef.current = false;
+                                        return;
+                                      }
                                       setSelectedDay(startOfDay(day));
                                       handleEntryClick(ev);
                                     }}

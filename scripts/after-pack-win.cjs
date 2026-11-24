@@ -113,6 +113,30 @@ module.exports = async function afterPackUnified(context) {
   }
 
   console.log(`[afterPack:win] Embedded ${res.iconPath} + PE v${res.peVersion} into ${exePath}`);
+
+  const localesDir = path.join(context.appOutDir, 'locales');
+  if (fs.existsSync(localesDir)) {
+    const expectedPaks = ['en-GB.pak', 'en-US.pak', 'ru.pak'];
+    const actualPaks = fs
+      .readdirSync(localesDir)
+      .filter((name) => name.toLowerCase().endsWith('.pak'))
+      .sort();
+    const mismatch =
+      actualPaks.length !== expectedPaks.length ||
+      expectedPaks.some((name, idx) => actualPaks[idx] !== name);
+    if (mismatch) {
+      throw new Error(
+        `[afterPack:win] Unexpected locales/ contents: expected [${expectedPaks.join(', ')}], got [${actualPaks.join(', ')}]`
+      );
+    }
+    const totalBytes = actualPaks.reduce(
+      (sum, name) => sum + fs.statSync(path.join(localesDir, name)).size,
+      0
+    );
+    console.log(
+      `[afterPack:win] Verified pruned locales/ (${actualPaks.join(', ')}): ${(totalBytes / (1024 * 1024)).toFixed(2)} MiB`
+    );
+  }
 };
 
 module.exports.embedWindowsMetadata = embedWindowsMetadata;

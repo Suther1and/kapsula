@@ -82,12 +82,13 @@ export const VisualShotCard: React.FC<VisualShotCardProps> = React.memo(({
           onOpenFull={() => void window.kapsula.openMediaFile(item.mediaPath!)}
         />
       ) : imgSrc ? (
-        <div className="group/shot relative rounded-xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]">
+        <div className="group/shot relative aspect-[16/10] max-h-[260px] w-full rounded-xl overflow-hidden border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]">
           <img
             src={imgSrc}
             alt={cleanTitle}
             loading="lazy"
-            className="w-full max-h-[260px] object-cover block"
+            decoding="async"
+            className="w-full h-full object-cover block"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover/shot:opacity-100 transition-opacity duration-150 pointer-events-none" />
           <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 pointer-events-none group-hover/shot:opacity-100 group-hover/shot:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">

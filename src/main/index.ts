@@ -163,7 +163,7 @@ if (!singleInstanceLock) {
             ? u.pathname.replace(/^\/+/, '')
             : u.hostname || u.pathname.replace(/^\/+/, '');
         const resolved = isCacheHost
-          ? videoCache.resolveSafePath(rawPart)
+          ? await videoCache.resolveSafePathAsync(rawPart)
           : await resolveSafeMediaFilePathAsync(mediaDir, rawPart, cachedRealMediaDir);
         if (!resolved.ok) {
           return new Response(
@@ -177,7 +177,7 @@ if (!singleInstanceLock) {
         }
         const { safeName, filePath: target, stat } = resolved;
         if (isCacheHost) {
-          videoCache.touch(safeName);
+          await videoCache.touchAsync(safeName);
         }
 
         const ext = path.extname(safeName).toLowerCase();
@@ -187,12 +187,7 @@ if (!singleInstanceLock) {
             : MEDIA_MIME_TYPES[ext] ?? 'application/octet-stream';
         const totalSize = stat.size;
         const rangeHeader = request.headers.get('range');
-        const isImmutableMediaName = /^(?:[a-f0-9]{16,}|(?:shot|thumb|img|vid|vc|aud|doc|voice|noteimg|media|clip|tg|og|file|att|cam)_)/i.test(
-          safeName
-        );
-        const cacheHeader = isImmutableMediaName
-          ? 'private, max-age=31536000, immutable'
-          : 'private, max-age=3600';
+        const cacheHeader = 'no-store';
 
         const range = parseHttpByteRange(rangeHeader, totalSize);
         if (range.status === 416) {
@@ -235,7 +230,7 @@ if (!singleInstanceLock) {
 
     repo = new VaultRepository(path.join(dataDir, 'kapsula-vault.sqlite'));
     repo.setDefaultOsLocale(app.getLocale());
-    videoCache.setLimitMb(sanitizeVideoCacheLimitMb(repo.getSetting('video_cache_limit_mb')));
+    await videoCache.setLimitMbAsync(sanitizeVideoCacheLimitMb(repo.getSetting('video_cache_limit_mb')));
     const getLocale = (): AppLocale => repo?.getLocale() ?? 'ru';
     let cryptoVault: VaultCrypto;
     try {
@@ -666,12 +661,21 @@ if (!singleInstanceLock) {
       }
     );
 
-    if (process.env.KAPSULA_DISABLE_CLIPPER !== '1') {
-      try {
-        boundClipperPort = await clipper.start();
-      } catch {
-        boundClipperPort = 0;
-      }
+    if (process.env.KAPSULA_DISABLE_CLIPPER === '1') {
+      boundClipperPort = 0;
+    } else {
+      void clipper
+        .start()
+        .then((port) => {
+          boundClipperPort = port;
+          if (port !== CLIPPER_PORT_BASE) {
+            windows?.broadcast('settings:updated', getSettingsState());
+          }
+        })
+        .catch(() => {
+          boundClipperPort = 0;
+          windows?.broadcast('settings:updated', getSettingsState());
+        });
     }
 
     let vaultViewActive = false;
@@ -702,6 +706,15 @@ if (!singleInstanceLock) {
 
     windows.createAll();
     applyWindowBackground();
+    windows.vault?.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        try {
+          repo?.warmupSearchIndex();
+        } catch {
+          // Non-fatal background search warmup
+        }
+      }, 1200).unref?.();
+    });
     // Default OFF on startup (Notes/Feed/Tasks/Calendar/Settings remain screenshot-friendly);
     // protection engages dynamically ONLY while viewing Vault / Secrets / Recovery Key.
     syncContentProtection();

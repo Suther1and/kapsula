@@ -13,6 +13,12 @@ import type {
   ArchiveImportResult,
   AskVaultResult,
   BudgetSummary,
+  BulkDeleteItemsResult,
+  BulkDeleteTasksResult,
+  BulkTasksMutationResult,
+  BulkToggleTaskInput,
+  BulkUpdateItemsResult,
+  BulkUpdateTasksMetaInput,
   CalendarEvent,
   CalendarEventInput,
   CalendarSyncStatus,
@@ -77,8 +83,15 @@ export interface KapsulaBridgeApi {
   ): Promise<VaultItem | null>;
   captureScreen(opts?: { reopenHud?: boolean }): Promise<VaultItem>;
   updateItem(id: string, patch: Record<string, unknown>): Promise<VaultItem | null>;
+  bulkUpdateItems(
+    ids: string[],
+    patch: Record<string, unknown>,
+    opts?: { projection?: 'card' | 'full' }
+  ): Promise<BulkUpdateItemsResult>;
   deleteItem(id: string): Promise<boolean>;
+  bulkDeleteItems(ids: string[]): Promise<BulkDeleteItemsResult>;
   restoreItem(id: string): Promise<VaultItem | null>;
+  bulkRestoreItems(ids: string[]): Promise<BulkUpdateItemsResult>;
   purgeItem(id: string): Promise<boolean>;
   emptyTrash(): Promise<{ purgedCount: number }>;
   duplicateItem(id: string): Promise<VaultItem | null>;
@@ -152,6 +165,7 @@ export interface KapsulaBridgeApi {
     taskIndex: number;
     done: boolean;
   }): Promise<{ item: VaultItem; tasks: VaultTaskEntry[] } | null>;
+  bulkToggleTasks(inputs: BulkToggleTaskInput[]): Promise<BulkTasksMutationResult>;
   moveTaskOnBoard(input: {
     itemId: string;
     taskKey: string;
@@ -169,12 +183,14 @@ export interface KapsulaBridgeApi {
     focusBoardId?: string | null;
     notes?: string | null;
   }): Promise<VaultItem | null>;
+  bulkUpdateTasksMeta(input: BulkUpdateTasksMetaInput): Promise<BulkTasksMutationResult>;
   updateVaultTaskText(input: {
     itemId: string;
     taskKey: string;
     text: string;
   }): Promise<VaultItem | null>;
   deleteVaultTask(input: { itemId: string; taskKey: string }): Promise<VaultItem | null>;
+  bulkDeleteTasks(inputs: Array<{ itemId: string; taskKey: string }>): Promise<BulkDeleteTasksResult>;
   listTaskBoardColumns(): Promise<TaskBoardColumn[]>;
   saveTaskBoardColumns(columns: TaskBoardColumn[]): Promise<TaskBoardColumn[]>;
 
@@ -266,7 +282,9 @@ export interface KapsulaBridgeApi {
   getPathForFile(file: File): string;
 
   onVaultItemUpserted(cb: (item: VaultItem) => void): () => void;
+  onVaultItemsBatchUpserted(cb: (items: VaultItem[]) => void): () => void;
   onVaultItemDeleted(cb: (id: string) => void): () => void;
+  onVaultItemsBatchDeleted(cb: (ids: string[]) => void): () => void;
   onVaultNewNote(cb: () => void): () => void;
   onOpenCalendar(cb: () => void): () => void;
   onOrbitsChanged(cb: () => void): () => void;
@@ -301,8 +319,12 @@ const api: KapsulaBridgeApi = {
   captureClipboard: (opts) => ipcRenderer.invoke('vault:capture-clipboard', opts),
   captureScreen: (opts) => ipcRenderer.invoke('system:capture-screen', opts),
   updateItem: (id, patch) => ipcRenderer.invoke('vault:update-item', id, patch),
+  bulkUpdateItems: (ids, patch, opts) =>
+    ipcRenderer.invoke('vault:bulk-update-items', ids, patch, opts),
   deleteItem: (id) => ipcRenderer.invoke('vault:delete-item', id),
+  bulkDeleteItems: (ids) => ipcRenderer.invoke('vault:bulk-delete-items', ids),
   restoreItem: (id) => ipcRenderer.invoke('vault:restore-item', id),
+  bulkRestoreItems: (ids) => ipcRenderer.invoke('vault:bulk-restore-items', ids),
   purgeItem: (id) => ipcRenderer.invoke('vault:purge-item', id),
   emptyTrash: () => ipcRenderer.invoke('vault:empty-trash'),
   duplicateItem: (id) => ipcRenderer.invoke('vault:duplicate-item', id),
@@ -358,11 +380,14 @@ const api: KapsulaBridgeApi = {
     ipcRenderer.invoke('vault:revert-revision', itemId, revisionId),
   listTasks: () => ipcRenderer.invoke('vault:list-tasks'),
   toggleTask: (payload) => ipcRenderer.invoke('vault:toggle-task', payload),
+  bulkToggleTasks: (inputs) => ipcRenderer.invoke('tasks:bulk-toggle', inputs),
   moveTaskOnBoard: (input) => ipcRenderer.invoke('tasks:move-on-board', input),
   createTask: (input) => ipcRenderer.invoke('tasks:create', input),
   updateTaskMeta: (input) => ipcRenderer.invoke('tasks:update-meta', input),
+  bulkUpdateTasksMeta: (input) => ipcRenderer.invoke('tasks:bulk-update-meta', input),
   updateVaultTaskText: (input) => ipcRenderer.invoke('tasks:update-text', input),
   deleteVaultTask: (input) => ipcRenderer.invoke('tasks:delete', input),
+  bulkDeleteTasks: (inputs) => ipcRenderer.invoke('tasks:bulk-delete', inputs),
   listTaskBoardColumns: () => ipcRenderer.invoke('tasks:list-columns'),
   saveTaskBoardColumns: (columns) => ipcRenderer.invoke('tasks:save-columns', columns),
 
@@ -446,7 +471,9 @@ const api: KapsulaBridgeApi = {
   },
 
   onVaultItemUpserted: (cb) => subscribe('vault:item-upserted', cb),
+  onVaultItemsBatchUpserted: (cb) => subscribe('vault:items-batch-upserted', cb),
   onVaultItemDeleted: (cb) => subscribe('vault:item-deleted', cb),
+  onVaultItemsBatchDeleted: (cb) => subscribe('vault:items-batch-deleted', cb),
   onVaultNewNote: (cb) => subscribe('vault:new-note', cb),
   onOpenCalendar: (cb) => subscribe('vault:open-calendar', cb),
   onOrbitsChanged: (cb) => subscribe('vault:orbits-changed', cb),

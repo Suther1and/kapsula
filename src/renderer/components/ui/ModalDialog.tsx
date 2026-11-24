@@ -1,5 +1,6 @@
 import React from 'react';
 import { Dialog } from '@animate-ui/react/primitives/base-ui/dialog';
+import { useReducedMotion } from 'motion/react';
 import { X } from '@phosphor-icons/react';
 import { useI18n } from '@shared/i18n/react';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
@@ -28,6 +29,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
   children,
 }) => {
   const { t } = useI18n();
+  const prefersReduced = useReducedMotion();
   const scopedAccentStyle = useScopedAccentStyle();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -40,8 +42,16 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
         >
           <Dialog.Popup
             from="top"
-            transition={{ type: 'spring', stiffness: 420, damping: 32, mass: 0.78 }}
-            exitTransition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
+            transition={
+              prefersReduced
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 420, damping: 32, mass: 0.78 }
+            }
+            exitTransition={
+              prefersReduced
+                ? { duration: 0 }
+                : { duration: 0.12, ease: [0.23, 1, 0.32, 1] }
+            }
             style={scopedAccentStyle}
             className={`pointer-events-auto w-[calc(100vw-36px)] ${maxWidthClass} max-h-[calc(100vh-44px)] flex flex-col rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-primary)] shadow-[var(--k-shadow-sheet)] outline-none overflow-hidden ${className}`}
           >

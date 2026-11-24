@@ -200,13 +200,16 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       }
     };
 
+    let pendingResetBlink = false;
+
     const scheduleRafCompute = (resetBlink: boolean) => {
-      if (rafRef.current !== null) {
-        window.cancelAnimationFrame(rafRef.current);
-      }
+      if (resetBlink) pendingResetBlink = true;
+      if (rafRef.current !== null) return;
       rafRef.current = window.requestAnimationFrame(() => {
         rafRef.current = null;
-        compute(resetBlink);
+        const shouldReset = pendingResetBlink;
+        pendingResetBlink = false;
+        compute(shouldReset);
       });
     };
 
@@ -218,32 +221,33 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
     };
 
     const onActivity = () => {
-      compute(true);
-      scheduleRafCompute(false);
+      scheduleRafCompute(true);
     };
 
     const onFocus = () => {
-      compute(true);
-      scheduleRafCompute(false);
+      scheduleRafCompute(true);
       // Re-sync once after any parent modal/sheet entrance transform (~175ms) settles
       clearSettleTimer();
       settleTimerRef.current = window.setTimeout(() => {
         settleTimerRef.current = null;
-        compute(false);
+        scheduleRafCompute(false);
       }, 210);
     };
 
     const onTransaction = ({ transaction }: { transaction: Transaction }) => {
-      const didChange = transaction.docChanged || transaction.selectionSet;
-      compute(didChange);
-      if (didChange) {
-        scheduleRafCompute(false);
+      if (transaction.docChanged || transaction.selectionSet) {
+        scheduleRafCompute(true);
       }
     };
 
     const onBlur = () => {
       clearBlinkTimer();
       clearSettleTimer();
+      pendingResetBlink = false;
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       setCaret(null);
       setBlinking(false);
     };
@@ -261,14 +265,18 @@ export const ProseCaretOverlay: React.FC<ProseCaretOverlayProps> = ({
       isComposingRef.current = true;
       clearBlinkTimer();
       clearSettleTimer();
+      pendingResetBlink = false;
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       setCaret(null);
       setBlinking(false);
     };
 
     const onCompositionEnd = () => {
       isComposingRef.current = false;
-      compute(true);
-      scheduleRafCompute(false);
+      scheduleRafCompute(true);
     };
 
     editor.on('selectionUpdate', onActivity);
