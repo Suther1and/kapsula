@@ -2190,6 +2190,7 @@ export class MobileVaultStore {
     mediaDurationSec?: number | null;
     mediaMeta?: MediaMeta | null;
     isPinned?: boolean;
+    isMuted?: boolean;
     preserveEmptyTitle?: boolean;
     linksOut?: string[];
   }): Promise<VaultItem> {
@@ -2243,6 +2244,7 @@ export class MobileVaultStore {
       aiStatus: 'local',
       aiConfidence: null,
       isPinned: Boolean(input.isPinned),
+      isMuted: Boolean(input.isMuted),
       isArchived: false,
       isDemo: false,
       remindAt: input.remindAt ?? null,
@@ -2283,6 +2285,7 @@ export class MobileVaultStore {
         | 'focusBoardId'
         | 'tags'
         | 'isPinned'
+        | 'isMuted'
         | 'isArchived'
         | 'remindAt'
         | 'mediaMeta'
@@ -3825,6 +3828,7 @@ export class MobileVaultStore {
       aiStatus: payload.aiStatus,
       aiConfidence: payload.aiConfidence,
       isPinned: payload.isPinned,
+      isMuted: Boolean(payload.isMuted),
       isArchived: payload.isArchived,
       isDemo: false,
       remindAt: payload.remindAt,

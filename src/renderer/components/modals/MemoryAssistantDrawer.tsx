@@ -225,31 +225,18 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
             prefersReduced
               ? { opacity: 0 }
               : widthMode === 'full'
-                ? {
-                    opacity: 0,
-                    filter: 'blur(3px)',
-                    transform: 'perspective(950px) rotateX(-8deg) scale(0.94)',
-                  }
-                : {
-                    opacity: 0,
-                    filter: 'blur(2px)',
-                    transform: 'perspective(950px) translate3d(48px, 0, 0) rotateY(6deg) scale(0.97)',
-                  }
+                ? { opacity: 0, scale: 0.975, y: 6 }
+                : { opacity: 0, x: 28 }
           }
           animate={
             prefersReduced
               ? { opacity: 1 }
               : {
                   opacity: 1,
-                  filter: 'blur(0px)',
-                  transform: 'perspective(950px) translate3d(0px, 0, 0) rotateX(0deg) rotateY(0deg) scale(1)',
-                  transition: {
-                    type: 'spring',
-                    stiffness: 410,
-                    damping: 30,
-                    mass: 0.76,
-                    opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
-                  },
+                  x: 0,
+                  y: 0,
+                  scale: 1,
+                  transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
                 }
           }
           exit={
@@ -258,15 +245,14 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
               : widthMode === 'full'
                 ? {
                     opacity: 0,
-                    filter: 'blur(2px)',
-                    transform: 'perspective(950px) rotateX(-5deg) scale(0.96)',
-                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                    scale: 0.98,
+                    y: 4,
+                    transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
                   }
                 : {
                     opacity: 0,
-                    filter: 'blur(2px)',
-                    transform: 'perspective(950px) translate3d(36px, 0, 0) rotateY(4deg) scale(0.98)',
-                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                    x: 24,
+                    transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
                   }
           }
           style={

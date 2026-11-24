@@ -816,6 +816,7 @@ export function initSchema(db: DatabaseSync): void {
 
   // Wave 3 (PERF-02 / PERF-03): additive composite, partial & normalized title indexes for 10k+ vaults
   ensureColumn(db, 'items', 'title_norm', 'TEXT');
+  ensureColumn(db, 'items', 'is_muted', 'INTEGER NOT NULL DEFAULT 0');
   try {
     db.exec(`UPDATE items SET title_norm = lower_utf(trim(title)) WHERE title_norm IS NULL;`);
   } catch {

@@ -273,26 +273,16 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
               initial={
                 prefersReduced
                   ? { opacity: 0 }
-                  : {
-                      opacity: 0,
-                      filter: 'blur(4px)',
-                      transform: 'perspective(900px) rotateX(-11deg) scale(0.89)',
-                    }
+                  : { opacity: 0, scale: 0.955, y: 6 }
               }
               animate={
                 prefersReduced
                   ? { opacity: 1 }
                   : {
                       opacity: 1,
-                      filter: 'blur(0px)',
-                      transform: 'perspective(900px) rotateX(0deg) scale(1)',
-                      transition: {
-                        type: 'spring',
-                        stiffness: 400,
-                        damping: 28,
-                        mass: 0.78,
-                        opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
-                      },
+                      scale: 1,
+                      y: 0,
+                      transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
                     }
               }
               exit={
@@ -300,9 +290,9 @@ export const ShotLightbox: React.FC<ShotLightboxProps> = ({
                   ? { opacity: 0 }
                   : {
                       opacity: 0,
-                      filter: 'blur(3px)',
-                      transform: 'perspective(900px) rotateX(-7deg) scale(0.93)',
-                      transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                      scale: 0.965,
+                      y: 4,
+                      transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
                     }
               }
               onClick={(e) => {

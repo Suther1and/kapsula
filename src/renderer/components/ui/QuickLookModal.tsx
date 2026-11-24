@@ -87,19 +87,19 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
   return createPortal(
     <AnimatePresence>
       {item ? (
-        <div
+        <motion.div
           key="quick-look-root"
           data-testid="quick-look-modal"
           style={scopedAccentStyle}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
           className="fixed inset-0 z-[105] flex items-center justify-center p-6"
         >
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.14 }}
+          <div
             onClick={onClose}
-            className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[6px]"
+            className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]"
           />
 
           {/* Prev / Next floating arrows */}
@@ -130,26 +130,16 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : {
-                    opacity: 0,
-                    filter: 'blur(4px)',
-                    transform: 'perspective(850px) rotateX(-12deg) scale(0.89)',
-                  }
+                : { opacity: 0, scale: 0.965, y: 8 }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
                 : {
                     opacity: 1,
-                    filter: 'blur(0px)',
-                    transform: 'perspective(850px) rotateX(0deg) scale(1)',
-                    transition: {
-                      type: 'spring',
-                      stiffness: 410,
-                      damping: 29,
-                      mass: 0.76,
-                      opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
-                    },
+                    scale: 1,
+                    y: 0,
+                    transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
                   }
             }
             exit={
@@ -157,9 +147,9 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
                 ? { opacity: 0 }
                 : {
                     opacity: 0,
-                    filter: 'blur(3px)',
-                    transform: 'perspective(850px) rotateX(-8deg) scale(0.93)',
-                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                    scale: 0.975,
+                    y: 5,
+                    transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
                   }
             }
             className="relative z-10 w-full max-w-[780px] max-h-[84vh] rounded-2xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden text-[var(--k-ink-primary)]"
@@ -397,7 +387,7 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
               ) : null}
             </div>
           </motion.div>
-        </div>
+        </motion.div>
       ) : null}
     </AnimatePresence>,
     document.body

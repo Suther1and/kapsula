@@ -155,16 +155,16 @@ export const TaskDetailSheet: React.FC<TaskDetailSheetProps> = ({
   return createPortal(
     <AnimatePresence>
       {task ? (
-        <div
+        <motion.div
           key="task-detail-sheet-portal"
           style={scopedAccentStyle}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
           className="fixed inset-0 z-[92] flex justify-end overflow-hidden"
         >
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.13 }}
+          <div
             onClick={handleRequestClose}
             className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]"
           />
@@ -175,21 +175,15 @@ export const TaskDetailSheet: React.FC<TaskDetailSheetProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : { opacity: 0, transform: 'translate3d(42px, 0, 0) scale(0.985)' }
+                : { opacity: 0, x: 32 }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
                 : {
                     opacity: 1,
-                    transform: 'translate3d(0px, 0, 0) scale(1)',
-                    transition: {
-                      type: 'spring',
-                      stiffness: 520,
-                      damping: 36,
-                      mass: 0.65,
-                      opacity: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
-                    },
+                    x: 0,
+                    transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
                   }
             }
             exit={
@@ -197,8 +191,8 @@ export const TaskDetailSheet: React.FC<TaskDetailSheetProps> = ({
                 ? { opacity: 0 }
                 : {
                     opacity: 0,
-                    transform: 'translate3d(32px, 0, 0) scale(0.99)',
-                    transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                    x: 24,
+                    transition: { duration: 0.13, ease: [0.22, 1, 0.36, 1] },
                   }
             }
             onClick={(e) => e.stopPropagation()}
@@ -495,7 +489,7 @@ export const TaskDetailSheet: React.FC<TaskDetailSheetProps> = ({
               </div>
             </div>
           </motion.div>
-        </div>
+        </motion.div>
       ) : null}
     </AnimatePresence>,
     document.body

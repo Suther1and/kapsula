@@ -10,13 +10,13 @@ import TaskItem from '@tiptap/extension-task-item';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
-import Highlight from '@tiptap/extension-highlight';
 import { common, createLowlight } from 'lowlight';
 import {
   Archive,
   ArrowCounterClockwise,
   ArrowLeft,
   ArrowSquareOut,
+  ArrowsInSimple,
   ArrowsOutSimple,
   Check,
   CheckSquare,
@@ -38,9 +38,9 @@ import {
   Microphone,
   Minus,
   NotePencil,
-  Plus,
   Quotes,
   RocketLaunch,
+  SpeakerSlash,
   Sparkle,
   Star,
   SunHorizon,
@@ -50,6 +50,7 @@ import {
   TextHTwo,
   TextItalic,
   TextStrikethrough,
+  TextUnderline,
   Trash,
   UsersThree,
   X,
@@ -68,22 +69,32 @@ import { getMediaCategory, isGenericDraftTitle, isUntitledPlaceholderTitle } fro
 import { getNoteTemplates, type NoteTemplate } from '@shared/note-templates';
 import { isMacPlatform } from '@shared/shortcuts';
 import { extractWikiLinkTitles } from '@shared/task-helpers';
+import {
+  KapsulaHighlight,
+  TEXT_COLOR_SWATCHES,
+  TextColorMark,
+  TextSizeMark,
+  type TextSizeKey,
+} from '@shared/tiptap-rich-marks';
 import '../../styles/editor.css';
 import {
   formatFileSize,
   formatRelativeDate,
   friendlyErrorMessage,
   getMediaUrl,
+  stripMarkdownPreview,
   transcribeItemWithWavFallback,
 } from '../../lib/format';
 import { playTactileTick } from '../../lib/tactileSound';
 import { ShotLightbox } from '../cards/ShotLightbox';
+import { BlockInsertGutter } from '../editor/BlockInsertGutter';
 import {
   KapsulaImage,
   extractImageFilesFromDataTransfer,
   saveAndInsertImageFiles,
   type KapsulaImageLightboxInfo,
 } from '../editor/KapsulaImageNode';
+import { NoteFormatDock } from '../editor/NoteFormatDock';
 import { RevisionHistoryModal } from '../editor/RevisionHistoryModal';
 import { ProseCaretOverlay } from '../editor/ProseCaretOverlay';
 import { WikiLink } from '../editor/WikiLinkNode';
@@ -103,6 +114,11 @@ function getLowlight() {
     cachedLowlight = createLowlight(common);
   }
   return cachedLowlight;
+}
+
+/** Pre-warms syntax highlighting grammars on idle so first NoteStudio open has zero main-thread hitch. */
+export function warmNoteStudioRuntime(): void {
+  getLowlight();
 }
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 const AUDIO_PATH_RE = /\.(?:wav|webm|ogg|oga|mp3|m4a)$/i;
@@ -153,6 +169,8 @@ interface NoteStudioProps {
   soundEnabled: boolean;
   layoutMode?: StudioLayoutMode;
   presentation?: 'page' | 'modal';
+  expandedModal?: boolean;
+  onToggleExpandedModal?: () => void;
   reserveTrafficLights?: boolean;
   leadingBarSlot?: React.ReactNode;
   onChangeLayoutMode?: (mode: StudioLayoutMode) => void;
@@ -175,6 +193,8 @@ function deriveTitleFromBody(md: string, fallbackTitle: string): string {
         .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
         .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, '$2')
         .replace(/\[\[([^\]\n]+)\]\]/g, '$1')
+        .replace(/<\/?(?:span|mark|u)(?:\s+[^>]*)?>/gi, '')
+        .replace(/==([^=\n]+)==/g, '$1')
         .replace(/^#{1,6}\s+/, '')
         .replace(/^[-*]\s+\[[ xX]\]\s+/, '')
         .replace(/^[-*]\s+/, '')
@@ -195,6 +215,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   soundEnabled,
   layoutMode = 'full',
   presentation = 'page',
+  expandedModal = false,
+  onToggleExpandedModal,
   reserveTrafficLights = false,
   leadingBarSlot,
   onItemUpdated,
@@ -360,8 +382,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<TextTransformPreset[]>(['structure']);
   const [createdOrbits, setCreatedOrbits] = useState<OrbitDef[]>([]);
-  const [insertMenuOpen, setInsertMenuOpen] = useState(false);
+  const [aiMenuOpen, setAiMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [bubbleColorOpen, setBubbleColorOpen] = useState(false);
   const [bubbleLinkEditing, setBubbleLinkEditing] = useState(false);
   const [bubbleLinkUrl, setBubbleLinkUrl] = useState('');
   const [editorBoundaryEl, setEditorBoundaryEl] = useState<HTMLDivElement | null>(null);
@@ -562,7 +585,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         placeholder: () => bodyPlaceholderRef.current,
       }),
       Typography,
-      Highlight,
+      KapsulaHighlight,
+      TextColorMark,
+      TextSizeMark,
       KapsulaImage.configure({
         onOpenLightbox: (info) => openInlineImageLightboxRef.current(info),
       }),
@@ -770,7 +795,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   const toolbarState = useEditorState({
     editor,
     selector: (ctx) => ({
+      h1: ctx.editor?.isActive('heading', { level: 1 }) ?? false,
       h2: ctx.editor?.isActive('heading', { level: 2 }) ?? false,
+      h3: ctx.editor?.isActive('heading', { level: 3 }) ?? false,
       task: ctx.editor?.isActive('taskList') ?? false,
       bullet: ctx.editor?.isActive('bulletList') ?? false,
       ordered: ctx.editor?.isActive('orderedList') ?? false,
@@ -778,8 +805,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       codeBlock: ctx.editor?.isActive('codeBlock') ?? false,
       bold: ctx.editor?.isActive('bold') ?? false,
       italic: ctx.editor?.isActive('italic') ?? false,
+      underline: ctx.editor?.isActive('underline') ?? false,
       strike: ctx.editor?.isActive('strike') ?? false,
       highlight: ctx.editor?.isActive('highlight') ?? false,
+      highlightColor: (ctx.editor?.getAttributes('highlight')?.color as string | null) ?? null,
+      textColor: (ctx.editor?.getAttributes('textColor')?.color as string | null) ?? null,
+      textSize: (ctx.editor?.getAttributes('textSize')?.size as TextSizeKey | null) ?? null,
       code: ctx.editor?.isActive('code') ?? false,
       link: ctx.editor?.isActive('link') ?? false,
     }),
@@ -1073,7 +1104,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setInlineLightboxItem(null);
       setBubbleLinkEditing(false);
       setBubbleLinkUrl('');
-      setInsertMenuOpen(false);
+      setBubbleColorOpen(false);
+      setAiMenuOpen(false);
       setMoreMenuOpen(false);
       if (liveBodyTimerRef.current) {
         window.clearTimeout(liveBodyTimerRef.current);
@@ -1829,6 +1861,13 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       item.dna !== 'doc'
   );
 
+  const bodyStats = useMemo(() => {
+    const plain = stripMarkdownPreview(liveBody).trim();
+    if (!plain) return { words: 0, chars: 0 };
+    const words = plain.split(/\s+/).filter(Boolean).length;
+    return { words, chars: plain.length };
+  }, [liveBody]);
+
   const portalPlacement = useMemo(() => {
     if (!caretRect) return null;
     const menuW = 324;
@@ -1890,12 +1929,12 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }}
       />
 
-      {/* Serene Minimal Document Header */}
+      {/* Redesigned Serene Editorial Document Header — clean hierarchy, dedicated AI, zero duplicates */}
       <div
         data-testid="note-studio-header"
-        className={`flex items-center justify-between gap-3 h-[48px] border-b border-[var(--k-border-hairline)]/70 shrink-0 ${
+        className={`flex items-center justify-between gap-3 h-[50px] border-b border-[var(--k-border-hairline)]/75 shrink-0 ${
           presentation === 'modal'
-            ? 'bg-[var(--k-bg-surface-1)] px-5'
+            ? 'bg-[var(--k-bg-surface-1)] px-4 sm:px-5'
             : reserveTrafficLights
               ? 'bg-[var(--k-bg-canvas)] pl-[82px] pr-5 k-drag-region'
               : 'bg-[var(--k-bg-canvas)] px-5'
@@ -1953,9 +1992,21 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   ? `· ${formatRelativeDate(item.contentUpdatedAt || item.createdAt, locale)}`
                   : t('note.studio.statusNew')}
           </span>
+
+          {!isDraft && item.isMuted ? (
+            <button
+              type="button"
+              onClick={() => void applyMetaPatch({ isMuted: false })}
+              title={t('cards.unmuteHint')}
+              className="k-interactive hidden @[560px]:inline-flex items-center gap-1 h-6 px-2 rounded-full border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/75 text-[11px] font-medium text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
+            >
+              <SpeakerSlash weight="fill" className="w-3 h-3" />
+              <span>{t('cards.mutedBadge')}</span>
+            </button>
+          ) : null}
         </div>
 
-        {/* Right: ONLY Compact Low-Contrast Icon Controls */}
+        {/* Right: Focused, Uncluttered Action Group (Zero Duplicate Controls) */}
         <div className="flex items-center gap-1 shrink-0 k-no-drag">
           {quickRevertRevId || quickRevertSnapshot ? (
             <button
@@ -1967,91 +2018,39 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               className="k-interactive inline-flex items-center gap-1 h-7.5 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[11.5px] font-medium text-[var(--k-accent)] hover:border-[var(--k-border-strong)] cursor-pointer mr-0.5"
             >
               <ArrowCounterClockwise weight="bold" className="w-3.5 h-3.5" />
-              <span className="hidden @[520px]:inline">{t('note.studio.revertOriginal')}</span>
+              <span className="hidden @[560px]:inline">{t('note.studio.revertOriginal')}</span>
             </button>
           ) : null}
 
-          {!isDraft ? (
-            <button
-              type="button"
-              data-testid="studio-favorite-btn"
-              onClick={() => void applyMetaPatch({ isPinned: !item.isPinned })}
-              aria-label={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
-              title={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
-              className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
-                item.isPinned
-                  ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
-                  : 'text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
-              }`}
-            >
-              <Star weight={item.isPinned ? 'fill' : 'regular'} className="w-4 h-4" />
-            </button>
-          ) : null}
-
-          <ReminderPopover
-            remindAt={activeRemindAt}
-            className={
-              activeRemindAt
-                ? '!h-7.5 !px-2 !rounded-lg'
-                : '!h-7.5 !w-7.5 !px-0 justify-center !border-transparent !bg-transparent hover:!bg-[var(--k-bg-surface-2)] !text-[var(--k-ink-muted)] hover:!text-[var(--k-ink-primary)] !rounded-lg'
-            }
-            labelClassName={activeRemindAt ? 'max-w-[110px]' : 'hidden'}
-            onChange={(nextMs) => void applyMetaPatch({ remindAt: nextMs })}
-          />
-
-          {!isDraft && (revisions.length > 0 || Boolean(liveBody.trim())) ? (
-            <button
-              type="button"
-              data-testid="studio-history-btn"
-              title={
-                revisions.length > 0
-                  ? t('note.studio.versionHistoryCount', { count: revisions.length })
-                  : t('rev.title')
-              }
-              aria-label={t('rev.title')}
-              onClick={() => void handleOpenHistoryModal()}
-              className="k-interactive relative inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
-            >
-              <ClockCounterClockwise className="w-4 h-4" />
-              {revisions.length > 0 ? (
-                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--k-accent)]" />
-              ) : null}
-            </button>
-          ) : null}
-
+          {/* Dedicated AI Assistant Popover (promoted out of the overflow `...` menu) */}
           <PopoverSurface
-            open={moreMenuOpen}
-            onOpenChange={setMoreMenuOpen}
+            open={aiMenuOpen}
+            onOpenChange={setAiMenuOpen}
             align="end"
-            widthClass="w-[292px] !p-2"
+            widthClass="w-[290px] !p-2.5"
             trigger={
               <button
                 type="button"
-                data-testid="studio-more-menu-btn"
-                aria-label={t('common.moreActions')}
-                title={t('common.moreActions')}
-                className="k-interactive inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+                data-testid="studio-ai-menu-btn"
+                title={t('note.studio.ai.heading')}
+                aria-label={t('note.studio.ai.heading')}
+                className={`k-interactive k-focus-ring inline-flex items-center gap-1.5 h-7.5 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer ${
+                  beautifying || aiMenuOpen
+                    ? 'border-[var(--k-accent)]/45 bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                    : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)]/65 text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)]'
+                }`}
               >
-                <DotsThree weight="bold" className="w-4.5 h-4.5" />
+                {beautifying ? (
+                  <CircleNotch weight="bold" className="w-3.5 h-3.5 animate-spin text-[var(--k-accent)]" />
+                ) : (
+                  <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)]" />
+                )}
+                <span className="hidden @[500px]:inline">{t('note.studio.aiShort')}</span>
               </button>
             }
           >
-            <div className="space-y-0.5 text-[12.5px]">
-              <button
-                type="button"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  void handleCopyNote();
-                }}
-                className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                <span>{t('cards.ctx.copyText')}</span>
-              </button>
-
-              <div className="h-px bg-[var(--k-border-hairline)] my-1" />
-
-              <div className="px-1.5 pt-0.5 pb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
+            <div className="space-y-1.5">
+              <div className="px-1 pt-0.5 pb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
                 <Sparkle weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />
                 <span>{t('note.studio.ai.heading')}</span>
               </div>
@@ -2102,10 +2101,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 data-testid="studio-beautify-btn"
                 disabled={beautifying || selectedPresets.length === 0}
                 onClick={() => {
-                  setMoreMenuOpen(false);
+                  setAiMenuOpen(false);
                   void handleBeautify(selectedPresets);
                 }}
-                className={`mt-1.5 k-interactive w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium hover:brightness-105 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`mt-1 k-interactive w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-xl bg-[var(--k-accent)] text-[var(--k-ink-on-accent)] text-[12.5px] font-medium hover:brightness-105 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                   beautifying ? 'k-beautify-shimmer' : ''
                 }`}
               >
@@ -2122,8 +2121,107 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                       : t('note.studio.ai.apply')}
                 </span>
               </button>
+            </div>
+          </PopoverSurface>
 
-              <div className="h-px bg-[var(--k-border-hairline)] my-1" />
+          {!isDraft ? (
+            <>
+              <button
+                type="button"
+                data-testid="studio-favorite-btn"
+                onClick={() => void applyMetaPatch({ isPinned: !item.isPinned })}
+                aria-label={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
+                title={item.isPinned ? t('note.studio.removeFavorite') : t('note.studio.addFavorite')}
+                className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
+                  item.isPinned
+                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                    : 'text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                }`}
+              >
+                <Star weight={item.isPinned ? 'fill' : 'regular'} className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                data-testid="studio-mute-btn"
+                onClick={() => void applyMetaPatch({ isMuted: !item.isMuted })}
+                aria-label={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                title={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                className={`k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg cursor-pointer ${
+                  item.isMuted
+                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                    : 'text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                }`}
+              >
+                <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-4 h-4" />
+              </button>
+            </>
+          ) : null}
+
+          <ReminderPopover
+            remindAt={activeRemindAt}
+            className={
+              activeRemindAt
+                ? '!h-7.5 !px-2 !rounded-lg'
+                : '!h-7.5 !w-7.5 !px-0 justify-center !border-transparent !bg-transparent hover:!bg-[var(--k-bg-surface-2)] !text-[var(--k-ink-muted)] hover:!text-[var(--k-ink-primary)] !rounded-lg'
+            }
+            labelClassName={activeRemindAt ? 'max-w-[110px]' : 'hidden'}
+            onChange={(nextMs) => void applyMetaPatch({ remindAt: nextMs })}
+          />
+
+          {/* Single authoritative Version History button (duplicate removed from overflow menu) */}
+          {!isDraft && (revisions.length > 0 || Boolean(liveBody.trim())) ? (
+            <button
+              type="button"
+              data-testid="studio-history-btn"
+              title={
+                revisions.length > 0
+                  ? t('note.studio.versionHistoryCount', { count: revisions.length })
+                  : t('rev.title')
+              }
+              aria-label={t('rev.title')}
+              onClick={() => void handleOpenHistoryModal()}
+              className="k-interactive relative inline-flex items-center justify-center gap-1 h-7.5 px-2 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+            >
+              <ClockCounterClockwise className="w-4 h-4 shrink-0" />
+              {revisions.length > 0 ? (
+                <span className="text-[11px] font-medium k-tabular text-[var(--k-ink-secondary)]">
+                  {revisions.length}
+                </span>
+              ) : null}
+            </button>
+          ) : null}
+
+          {/* Lean Overflow `...` Menu — Zero Duplicates, Zero Clutter */}
+          <PopoverSurface
+            open={moreMenuOpen}
+            onOpenChange={setMoreMenuOpen}
+            align="end"
+            widthClass="w-[236px] !p-1.5"
+            trigger={
+              <button
+                type="button"
+                data-testid="studio-more-menu-btn"
+                aria-label={t('common.moreActions')}
+                title={t('common.moreActions')}
+                className="k-interactive inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+              >
+                <DotsThree weight="bold" className="w-4.5 h-4.5" />
+              </button>
+            }
+          >
+            <div className="space-y-0.5 text-[12.5px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  void handleCopyNote();
+                }}
+                className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
+                <span>{t('cards.ctx.copyText')}</span>
+              </button>
 
               <button
                 type="button"
@@ -2207,17 +2305,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                     type="button"
                     onClick={() => {
                       setMoreMenuOpen(false);
-                      void handleOpenHistoryModal();
-                    }}
-                    className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                  >
-                    <ClockCounterClockwise className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                    <span>{t('note.studio.versionHistoryCount', { count: revisions.length })}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMoreMenuOpen(false);
                       void applyMetaPatch({ isArchived: !item.isArchived });
                     }}
                     className="k-interactive w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
@@ -2240,6 +2327,27 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               ) : null}
             </div>
           </PopoverSurface>
+
+          {presentation === 'modal' && onToggleExpandedModal ? (
+            <button
+              type="button"
+              data-testid="note-studio-expand-btn"
+              onClick={onToggleExpandedModal}
+              aria-label={
+                expandedModal ? t('note.studio.exitFullscreen') : t('note.studio.expandFullscreen')
+              }
+              title={
+                expandedModal ? t('note.studio.exitFullscreen') : t('note.studio.expandFullscreen')
+              }
+              className="k-interactive k-focus-ring inline-flex items-center justify-center w-7.5 h-7.5 rounded-lg text-[var(--k-ink-muted)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
+            >
+              {expandedModal ? (
+                <ArrowsInSimple weight="bold" className="w-4 h-4" />
+              ) : (
+                <ArrowsOutSimple weight="bold" className="w-4 h-4" />
+              )}
+            </button>
+          ) : null}
 
           {presentation === 'modal' && onClose ? (
             <>
@@ -2264,8 +2372,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         <div
           className={`${
             presentation === 'modal'
-              ? 'max-w-[720px] mx-auto px-7 py-6'
-              : 'max-w-[760px] mx-auto px-8 py-8'
+              ? expandedModal
+                ? 'max-w-[820px] mx-auto px-6 sm:pl-14 sm:pr-10 py-7'
+                : 'max-w-[740px] mx-auto px-6 sm:pl-14 sm:pr-9 py-6'
+              : 'max-w-[780px] mx-auto px-6 sm:pl-14 sm:pr-10 py-8'
           } flex flex-col gap-5 transition-colors duration-140 ${
             isDraggingImage ? 'k-editor-drop-active' : ''
           }`}
@@ -2587,7 +2697,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               className="w-full resize-none overflow-hidden bg-transparent border-none outline-none text-[28px] sm:text-[31px] font-bold tracking-[-0.006em] leading-[1.22] text-[var(--k-ink-primary)] placeholder:text-[var(--k-ink-muted)]/55 k-selectable"
             />
 
-            {/* Quiet Metadata, Smart Tags & On-Demand `+` Insert Pill */}
+            {/* Quiet Metadata & Smart Tags (insert moved to cursor-following Notion `+` gutter + always-reachable bottom dock) */}
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5 border-b border-[var(--k-border-hairline)]/65">
               <InlineTagEditor
                 tags={tags}
@@ -2597,148 +2707,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   void applyMetaPatch({ tags: nextTags });
                 }}
               />
-
-              {editor ? (
-                <PopoverSurface
-                  open={insertMenuOpen}
-                  onOpenChange={setInsertMenuOpen}
-                  align="end"
-                  widthClass="w-56 !p-1.5"
-                  trigger={
-                    <button
-                      type="button"
-                      data-testid="studio-insert-menu-btn"
-                      title={t('note.studio.insertTitle')}
-                      className="k-interactive inline-flex items-center gap-1 h-[26px] px-2 rounded-full border border-transparent hover:border-[var(--k-border-hairline)] hover:bg-[var(--k-bg-surface-2)]/80 text-[11.5px] text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer shrink-0"
-                    >
-                      {insertingImage ? (
-                        <CircleNotch weight="bold" className="w-3 h-3 animate-spin text-[var(--k-accent)]" />
-                      ) : (
-                        <Plus weight="bold" className="w-3 h-3" />
-                      )}
-                      <span>{t('note.studio.insertShort')}</span>
-                    </button>
-                  }
-                >
-                  <div className="space-y-0.5 text-[12.5px]">
-                    <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      {t('note.studio.insertHeading')}
-                    </div>
-                    <button
-                      type="button"
-                      data-testid="studio-insert-image-btn"
-                      disabled={insertingImage}
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        imageInputRef.current?.click();
-                      }}
-                      className="k-interactive w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer disabled:opacity-55"
-                    >
-                      <span className="inline-flex items-center gap-2">
-                        <ImageSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                        <span>{t('note.studio.insert.photo')}</span>
-                      </span>
-                      <span className="k-mono text-[10px] text-[var(--k-ink-muted)]">
-                        {isMacPlatform(window.kapsula?.platform) ? '⌘V' : 'Ctrl+V'}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        editor.chain().focus().toggleTaskList().run();
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <CheckSquare className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.checklist')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        editor.chain().focus().toggleHeading({ level: 2 }).run();
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <TextHTwo className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.heading')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        editor.chain().focus().toggleBulletList().run();
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <ListBullets className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.list')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        editor.chain().focus().toggleBlockquote().run();
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <Quotes className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.quote')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        editor.chain().focus().toggleCodeBlock().run();
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <Code className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.code')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setInsertMenuOpen(false);
-                        setShowVoiceStudio(true);
-                      }}
-                      className="k-interactive w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--k-bg-surface-2)] text-left cursor-pointer"
-                    >
-                      <Microphone className="w-3.5 h-3.5 text-[var(--k-ink-secondary)]" />
-                      <span>{t('note.studio.insert.voice')}</span>
-                    </button>
-
-                    <div className="h-px bg-[var(--k-border-hairline)] my-1" />
-                    <div className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--k-ink-muted)]">
-                      {t('note.studio.templates')}
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 px-1 pb-0.5">
-                      {noteTemplates.map((tpl) => {
-                        const Icon = TEMPLATE_ICON_MAP[tpl.id];
-                        return (
-                          <button
-                            key={tpl.id}
-                            type="button"
-                            onClick={() => {
-                              setInsertMenuOpen(false);
-                              applyNoteTemplate(tpl);
-                            }}
-                            className="k-interactive inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-[var(--k-bg-surface-2)]/75 hover:bg-[var(--k-accent-soft)] text-[11.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-accent)] cursor-pointer"
-                          >
-                            <Icon weight="duotone" className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate">{tpl.shortLabel}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="px-2 pt-1 text-[10.5px] text-[var(--k-ink-muted)] border-t border-[var(--k-border-hairline)]">
-                      {t('note.studio.slashHint')}
-                    </div>
-                  </div>
-                </PopoverSurface>
-              ) : null}
             </div>
           </div>
 
@@ -2874,6 +2842,19 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
+                    title={`${t('note.studio.toolbar.underline')} (${isMacPlatform(window.kapsula?.platform) ? '⌘U' : 'Ctrl+U'})`}
+                    aria-label={t('note.studio.toolbar.underline')}
+                    onClick={() => editor.chain().focus().toggleUnderline().run()}
+                    className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
+                      toolbarState?.underline
+                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                        : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                    }`}
+                  >
+                    <TextUnderline weight="bold" className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
                     title={t('note.studio.toolbar.strike')}
                     aria-label={t('note.studio.toolbar.strike')}
                     onClick={() => editor.chain().focus().toggleStrike().run()}
@@ -2900,9 +2881,68 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                   </button>
                   <button
                     type="button"
+                    title={t('note.studio.toolbar.textColor')}
+                    aria-label={t('note.studio.toolbar.textColor')}
+                    onClick={() => setBubbleColorOpen((v) => !v)}
+                    className={`k-interactive inline-flex flex-col items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
+                      toolbarState?.textColor || bubbleColorOpen
+                        ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)]'
+                        : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)] hover:text-[var(--k-ink-primary)]'
+                    }`}
+                  >
+                    <span className="text-[12px] font-bold leading-none">A</span>
+                    <span
+                      className="w-3 h-[2px] rounded-full mt-0.5"
+                      style={{
+                        backgroundColor:
+                          TEXT_COLOR_SWATCHES.find((s) => s.key === toolbarState?.textColor)?.dot ??
+                          'var(--k-accent)',
+                      }}
+                    />
+                  </button>
+                  {bubbleColorOpen ? (
+                    <div className="flex items-center gap-0.5 px-1 border-l border-[var(--k-border-hairline)]">
+                      {TEXT_COLOR_SWATCHES.slice(0, 6).map((sw) => (
+                        <button
+                          key={sw.key}
+                          type="button"
+                          title={locale === 'en' ? sw.labelEn : sw.labelRu}
+                          onClick={() => {
+                            if (toolbarState?.textColor === sw.key) {
+                              editor.chain().focus().unsetTextColor().run();
+                            } else {
+                              editor.chain().focus().setTextColor(sw.key).run();
+                            }
+                            setBubbleColorOpen(false);
+                          }}
+                          className="k-interactive w-5 h-5 rounded-md flex items-center justify-center hover:bg-[var(--k-bg-surface-2)] cursor-pointer"
+                        >
+                          <span
+                            className="w-3 h-3 rounded-full ring-1 ring-black/15"
+                            style={{ backgroundColor: sw.dot }}
+                          />
+                        </button>
+                      ))}
+                      {toolbarState?.textColor ? (
+                        <button
+                          type="button"
+                          title={t('note.studio.toolbar.defaultColor')}
+                          onClick={() => {
+                            editor.chain().focus().unsetTextColor().run();
+                            setBubbleColorOpen(false);
+                          }}
+                          className="k-interactive w-5 h-5 rounded-md flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] cursor-pointer"
+                        >
+                          <X weight="bold" className="w-2.5 h-2.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
                     title={t('note.studio.toolbar.highlight')}
                     aria-label={t('note.studio.toolbar.highlight')}
-                    onClick={() => editor.chain().focus().toggleHighlight().run()}
+                    onClick={() => editor.chain().focus().toggleHighlight({ color: 'amber' }).run()}
                     className={`k-interactive inline-flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer ${
                       toolbarState?.highlight
                         ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
@@ -2943,8 +2983,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             </BubbleMenu>
           ) : null}
 
-          {/* TipTap Rich Markdown Canvas */}
+          {/* TipTap Rich Markdown Canvas with Notion-style cursor-following `+` gutter */}
           <div ref={setEditorBoundaryEl} className="relative min-w-0">
+            <BlockInsertGutter
+              editor={editor}
+              containerEl={editorBoundaryEl}
+              insertingImage={insertingImage}
+              noteTemplates={noteTemplates}
+              onPickImage={() => imageInputRef.current?.click()}
+              onStartDictation={() => setShowVoiceStudio(true)}
+              onOpenAiMenu={() => setAiMenuOpen(true)}
+              onApplyTemplate={(tpl) => applyNoteTemplate(tpl)}
+            />
             <EditorContent editor={editor} />
             <ProseCaretOverlay editor={editor} containerEl={editorBoundaryEl} />
           </div>
@@ -3001,6 +3051,23 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           ) : null}
         </div>
       </div>
+
+      {/* Always-Reachable Bottom Formatting & Quick-Insert Dock */}
+      <NoteFormatDock
+        editor={editor}
+        state={toolbarState}
+        insertingImage={insertingImage}
+        noteTemplates={noteTemplates}
+        wordCount={bodyStats.words}
+        charCount={bodyStats.chars}
+        onPickImage={() => imageInputRef.current?.click()}
+        onStartDictation={() => setShowVoiceStudio(true)}
+        onOpenAiMenu={() => setAiMenuOpen(true)}
+        onApplyTemplate={(tpl) => applyNoteTemplate(tpl)}
+        onOpenLinkEditor={() => {
+          handleOpenBubbleLink();
+        }}
+      />
 
       {/* Inline Photo Lightbox */}
       <ShotLightbox item={inlineLightboxItem} onClose={() => setInlineLightboxItem(null)} />

@@ -231,6 +231,7 @@ export function sanitizeUpdateItemPatch(raw: unknown): UpdateItemPatch {
     out.tags = src.tags.filter((t): t is string => typeof t === 'string');
   }
   if (typeof src.isPinned === 'boolean') out.isPinned = src.isPinned;
+  if (typeof src.isMuted === 'boolean') out.isMuted = src.isMuted;
   if (typeof src.isArchived === 'boolean') out.isArchived = src.isArchived;
   if (src.remindAt === null || (typeof src.remindAt === 'number' && Number.isFinite(src.remindAt))) {
     out.remindAt = src.remindAt;

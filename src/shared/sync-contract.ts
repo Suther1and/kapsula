@@ -215,6 +215,7 @@ export interface SyncedItemPayload {
   aiStatus: AiStatus;
   aiConfidence: number | null;
   isPinned: boolean;
+  isMuted?: boolean;
   isArchived: boolean;
   remindAt: number | null;
   remindedAt: number | null;

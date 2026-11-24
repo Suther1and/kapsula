@@ -13,6 +13,7 @@ import {
   PencilSimple,
   Plus,
   PushPin,
+  SpeakerSlash,
   Swatches,
   Trash,
 } from '@phosphor-icons/react';
@@ -52,6 +53,7 @@ interface MemoryCardRouterProps {
   onDelete: (id: string) => void;
   onRestore?: (id: string) => void;
   onTogglePin: (item: VaultItem) => void;
+  onToggleMute?: (item: VaultItem) => void;
   onToggleNotesHub?: (item: VaultItem, inNotesHub: boolean) => void;
   onMoveToOrbit?: (itemId: string, orbitId: string) => void;
   onMoveToBoard?: (itemId: string, boardId: string | null) => void;
@@ -81,6 +83,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
   onDelete,
   onRestore,
   onTogglePin,
+  onToggleMute,
   onToggleNotesHub,
   onMoveToOrbit,
   onMoveToBoard,
@@ -127,6 +130,17 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
         icon: <PushPin weight={item.isPinned ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
         onSelect: () => onTogglePin(item),
       },
+      ...(item.dna !== 'secret' && onToggleMute
+        ? [
+            {
+              type: 'item' as const,
+              id: 'mute',
+              label: item.isMuted ? t('cards.ctx.unmute') : t('cards.ctx.mute'),
+              icon: <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
+              onSelect: () => onToggleMute(item),
+            },
+          ]
+        : []),
     ];
 
     if (item.dna !== 'secret' && onToggleSelect) {
@@ -363,6 +377,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
       <article
         data-testid={`memory-card-${item.id}`}
         data-selection-active={selectionMode || selected ? 'true' : undefined}
+        data-muted={item.isMuted ? 'true' : undefined}
         draggable
         onMouseEnter={() => onHoverItem?.(item)}
         onMouseLeave={() => onHoverItem?.(null)}
@@ -384,8 +399,12 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
           onOpenStudio(item);
         }}
         style={{ padding: 'var(--k-card-pad)' }}
-        className={`group relative k-card-surface k-card-lift rounded-2xl flex flex-col gap-3 cursor-pointer select-none ${
+        className={`group relative k-card-surface k-card-lift rounded-2xl flex flex-col gap-3 cursor-pointer select-none transition-[opacity,filter,border-color,background-color] duration-180 ${
           selected ? 'ring-1 ring-[var(--k-accent)] !border-[var(--k-accent)] bg-[var(--k-accent-soft)]/14' : ''
+        } ${
+          item.isMuted && !selected
+            ? 'opacity-[0.52] saturate-[0.3] hover:opacity-[0.9] hover:saturate-[0.88] border-dashed'
+            : ''
         }`}
       >
         <div>{renderBody()}</div>
@@ -548,6 +567,13 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
                   : 'group-hover:opacity-0 group-hover:pointer-events-none'
               }`}
             >
+              {item.isMuted ? (
+                <SpeakerSlash
+                  weight="fill"
+                  className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0"
+                  aria-label={t('cards.mutedBadge')}
+                />
+              ) : null}
               {item.isPinned ? (
                 <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)] shrink-0" />
               ) : null}
@@ -559,7 +585,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
               </span>
             </div>
 
-            {/* Unified bottom-right pill: clean circular checkbox + hover Pin/Trash over timestamp slot */}
+            {/* Unified bottom-right pill: clean circular checkbox + hover Mute/Pin/Trash over timestamp slot */}
             <div
               data-testid={onToggleSelect ? `card-select-badge-${item.id}` : undefined}
               onClick={(e) => e.stopPropagation()}
@@ -573,14 +599,20 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
                 data-testid={`card-hover-actions-${item.id}`}
                 className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-140 ease-[var(--k-ease-out)]"
               >
-                {onQuickLook ? (
+                {onToggleMute ? (
                   <button
                     type="button"
-                    title={t('cards.quickLookHint')}
-                    onClick={() => onQuickLook(item)}
-                    className="k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)] cursor-pointer"
+                    data-testid={`card-mute-btn-${item.id}`}
+                    title={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                    aria-label={item.isMuted ? t('cards.unmuteHint') : t('cards.muteHint')}
+                    onClick={() => onToggleMute(item)}
+                    className={`k-interactive inline-flex items-center justify-center w-5 h-5 rounded-full cursor-pointer ${
+                      item.isMuted
+                        ? 'text-[var(--k-accent)] bg-[var(--k-accent-soft)]'
+                        : 'text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-3)]'
+                    }`}
                   >
-                    <Eye className="w-3 h-3" />
+                    <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-3 h-3" />
                   </button>
                 ) : null}
                 <button

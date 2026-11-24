@@ -9,6 +9,7 @@ import {
   NotePencil,
   PushPin,
   ShieldCheck,
+  SpeakerSlash,
   VideoCamera,
 } from '@phosphor-icons/react';
 import type { OrbitDef, VaultItem } from '@shared/types';
@@ -89,6 +90,7 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
   return (
     <div
       data-testid={`compact-row-${item.id}`}
+      data-muted={item.isMuted ? 'true' : undefined}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/kapsula-item-id', item.id);
@@ -102,11 +104,11 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
         }
         onOpen(item);
       }}
-      className={`group h-[52px] px-4 grid grid-cols-[28px_minmax(0,1fr)_auto_68px] items-center gap-3 cursor-pointer select-none transition-[background-color,border-color] duration-[145ms] ease-[var(--k-ease-out)] active:duration-[75ms] ${
+      className={`group h-[52px] px-4 grid grid-cols-[28px_minmax(0,1fr)_auto_68px] items-center gap-3 cursor-pointer select-none transition-[background-color,border-color,opacity] duration-[145ms] ease-[var(--k-ease-out)] active:duration-[75ms] ${
         selected
           ? 'bg-[var(--k-accent-soft)]/55'
           : 'hover:bg-[var(--k-bg-surface-2)] active:bg-[color-mix(in_srgb,var(--k-bg-surface-2)_88%,var(--k-accent)_12%)]'
-      }`}
+      } ${item.isMuted && !selected ? 'opacity-[0.52] hover:opacity-[0.9]' : ''}`}
     >
       {/* Fixed 28px slot on left: task checkbox stays permanently clickable when present; otherwise swaps media/type icon to selection checkbox on hover */}
       <div className="relative w-7 h-7 flex items-center justify-center shrink-0">
@@ -180,6 +182,9 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = ({
             <SectionIcon name={orbit.icon} className="w-3 h-3 shrink-0" color={orbit.color} />
             <span className="truncate">{orbit.name}</span>
           </span>
+        ) : null}
+        {item.isMuted ? (
+          <SpeakerSlash weight="fill" className="w-3.5 h-3.5 text-[var(--k-ink-muted)] shrink-0" />
         ) : null}
         {item.isPinned ? (
           <PushPin weight="fill" className="w-3.5 h-3.5 text-[var(--k-accent)] shrink-0" />

@@ -12,6 +12,7 @@ import {
   Plus,
   PushPin,
   SidebarSimple,
+  SpeakerSlash,
   Swatches,
   Trash,
   X,
@@ -49,6 +50,7 @@ interface NotesHubViewProps {
   onDraftPersisted: (created: VaultItem) => void;
   onDeleteItem: (id: string) => void;
   onTogglePin: (item: VaultItem) => void;
+  onToggleMute?: (item: VaultItem) => void;
   onToggleNotesHub?: (item: VaultItem, inNotesHub: boolean) => void;
   onMoveToOrbit: (itemId: string, orbitId: string) => void;
   onMoveToBoard: (itemId: string, boardId: string | null) => void;
@@ -128,6 +130,7 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
   onDraftPersisted,
   onDeleteItem,
   onTogglePin,
+  onToggleMute,
   onToggleNotesHub,
   onMoveToOrbit,
   onMoveToBoard,
@@ -226,6 +229,17 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
         icon: <PushPin weight={note.isPinned ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
         onSelect: () => onTogglePin(note),
       },
+      ...(onToggleMute
+        ? [
+            {
+              type: 'item' as const,
+              id: 'mute',
+              label: note.isMuted ? t('cards.ctx.unmute') : t('cards.ctx.mute'),
+              icon: <SpeakerSlash weight={note.isMuted ? 'fill' : 'regular'} className="w-3.5 h-3.5" />,
+              onSelect: () => onToggleMute(note),
+            },
+          ]
+        : []),
     ];
 
     if (note.dna === 'note' || note.dna === 'snippet') {
@@ -333,12 +347,13 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
         <button
           type="button"
           data-testid={`notes-list-item-${note.id}`}
+          data-muted={note.isMuted ? 'true' : undefined}
           onClick={() => handleSelectRow(note)}
-          className={`group relative w-full text-left rounded-[12px] px-3 py-2.5 cursor-pointer transition-colors duration-140 ${
+          className={`group relative w-full text-left rounded-[12px] px-3 py-2.5 cursor-pointer transition-[color,background-color,opacity] duration-140 ${
             isActive
               ? 'text-[var(--k-ink-primary)]'
               : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-2)]/75 hover:text-[var(--k-ink-primary)]'
-          }`}
+          } ${note.isMuted && !isActive ? 'opacity-[0.54] hover:opacity-[0.9]' : ''}`}
         >
           {isActive ? (
             <motion.span
@@ -355,6 +370,12 @@ export const NotesHubView: React.FC<NotesHubViewProps> = ({
 
           <div className="relative z-10 flex flex-col gap-1 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
+              {note.isMuted ? (
+                <SpeakerSlash
+                  weight="fill"
+                  className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0"
+                />
+              ) : null}
               {note.isPinned ? (
                 <PushPin
                   weight="fill"

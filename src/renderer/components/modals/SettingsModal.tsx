@@ -130,10 +130,10 @@ function formatSyncTimestamp(
 
 const SETTINGS_TAB_VARIANTS = {
   enter: (custom: { dir: number; skip: boolean }) =>
-    custom.skip ? { opacity: 1 } : { opacity: 0, x: custom.dir * 20, filter: 'blur(1.5px)' },
-  center: { opacity: 1, x: 0, filter: 'blur(0px)' },
+    custom.skip ? { opacity: 1 } : { opacity: 0, x: custom.dir * 16 },
+  center: { opacity: 1, x: 0 },
   exit: (custom: { dir: number; skip: boolean }) =>
-    custom.skip ? { opacity: 0 } : { opacity: 0, x: custom.dir * -14, filter: 'blur(1.5px)' },
+    custom.skip ? { opacity: 0 } : { opacity: 0, x: custom.dir * -12 },
 };
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({

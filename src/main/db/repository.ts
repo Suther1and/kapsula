@@ -100,6 +100,7 @@ export interface CreateItemRecordInput {
   aiStatus?: AiStatus;
   aiConfidence?: number | null;
   isPinned?: boolean;
+  isMuted?: boolean;
   isDemo?: boolean;
   remindAt?: number | null;
   remindedAt?: number | null;
@@ -141,6 +142,7 @@ export interface UpdateItemPatch {
   aiStatus?: AiStatus;
   aiConfidence?: number | null;
   isPinned?: boolean;
+  isMuted?: boolean;
   isArchived?: boolean;
   remindAt?: number | null;
   remindedAt?: number | null;
@@ -306,6 +308,7 @@ interface ItemRow {
   ai_status: AiStatus;
   ai_confidence: number | null;
   is_pinned: number;
+  is_muted?: number;
   is_archived: number;
   is_demo: number;
   remind_at: number | null;
@@ -369,6 +372,7 @@ function mapRowToItem(row: ItemRow): VaultItem {
     aiStatus: row.ai_status,
     aiConfidence: row.ai_confidence,
     isPinned: row.is_pinned === 1,
+    isMuted: row.is_muted === 1,
     isArchived: row.is_archived === 1,
     isDemo: row.is_demo === 1,
     remindAt: row.remind_at ?? null,
@@ -711,11 +715,11 @@ export class VaultRepository {
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
-            content_hash, ai_status, ai_confidence, is_pinned, is_archived, is_demo,
+            content_hash, ai_status, ai_confidence, is_pinned, is_muted, is_archived, is_demo,
             remind_at, reminded_at, created_at, updated_at, content_updated_at,
             deleted_at, purged_at, canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame,
             annotations_json, links_out_json, sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
         )
         .run(
           id,
@@ -750,6 +754,7 @@ export class VaultRepository {
           input.aiStatus ?? 'local',
           input.aiConfidence ?? null,
           input.isPinned ? 1 : 0,
+          input.isMuted ? 1 : 0,
           input.isDemo ? 1 : 0,
           input.remindAt ?? null,
           input.remindedAt ?? null,
@@ -912,11 +917,11 @@ export class VaultRepository {
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
-            content_hash, ai_status, ai_confidence, is_pinned, is_archived, is_demo,
+            content_hash, ai_status, ai_confidence, is_pinned, is_muted, is_archived, is_demo,
             remind_at, reminded_at, created_at, updated_at, content_updated_at, deleted_at, purged_at,
             canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame, annotations_json, links_out_json,
             sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           row.id,
@@ -951,6 +956,7 @@ export class VaultRepository {
           row.ai_status,
           row.ai_confidence,
           row.is_pinned,
+          row.is_muted ?? 0,
           row.is_archived,
           row.is_demo,
           row.remind_at ?? null,
@@ -1164,6 +1170,7 @@ export class VaultRepository {
             ai_status = ?,
             ai_confidence = ?,
             is_pinned = ?,
+            is_muted = ?,
             is_archived = ?,
             remind_at = ?,
             reminded_at = ?,
@@ -1220,6 +1227,7 @@ export class VaultRepository {
           patch.aiStatus ?? current.ai_status,
           patch.aiConfidence !== undefined ? patch.aiConfidence : current.ai_confidence,
           patch.isPinned !== undefined ? (patch.isPinned ? 1 : 0) : current.is_pinned,
+          patch.isMuted !== undefined ? (patch.isMuted ? 1 : 0) : (current.is_muted ?? 0),
           patch.isArchived !== undefined ? (patch.isArchived ? 1 : 0) : current.is_archived,
           patch.remindAt !== undefined ? patch.remindAt : current.remind_at,
           patch.remindedAt !== undefined ? patch.remindedAt : current.reminded_at,
@@ -5392,11 +5400,11 @@ export class VaultRepository {
             image_path, thumb_path, media_path, media_type, media_duration_sec, media_meta_json, og_image_url,
             ocr_text, extracted_actions_json, color_palette_json,
             encrypted_payload, secret_meta_json, tags_json, source, external_id,
-            content_hash, ai_status, ai_confidence, is_pinned, is_archived, is_demo,
+            content_hash, ai_status, ai_confidence, is_pinned, is_muted, is_archived, is_demo,
             remind_at, reminded_at, created_at, updated_at, content_updated_at,
             deleted_at, purged_at, canvas_x, canvas_y, canvas_w, canvas_h, canvas_frame,
             annotations_json, links_out_json, sync_version, last_device_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           payload.id,
@@ -5431,6 +5439,7 @@ export class VaultRepository {
           payload.aiStatus,
           isPurged ? null : payload.aiConfidence,
           isPurged ? 0 : payload.isPinned ? 1 : 0,
+          isPurged ? 0 : payload.isMuted ? 1 : 0,
           isPurged ? 0 : payload.isArchived ? 1 : 0,
           isPurged ? null : payload.remindAt,
           isPurged ? null : payload.remindedAt,

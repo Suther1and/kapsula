@@ -210,11 +210,59 @@
 }
 
 .k-prose mark {
-  background: rgba(232, 106, 51, 0.24);
+  background: color-mix(in srgb, var(--k-accent) 22%, transparent);
   color: var(--k-ink-primary);
   border-radius: 4px;
   padding: 0.06em 0.25em;
 }
+
+.k-prose u {
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+/* Rich text sizes (theme-agnostic relative scale) */
+.k-prose span[data-k-size="sm"] { font-size: 0.85em; }
+.k-prose span[data-k-size="lg"] { font-size: 1.2em; line-height: 1.48; }
+.k-prose span[data-k-size="xl"] { font-size: 1.42em; line-height: 1.36; font-weight: 500; }
+
+/* Rich text colors — high contrast on dark theme */
+.k-prose span[data-k-color="accent"] { color: var(--k-accent); }
+.k-prose span[data-k-color="red"]    { color: #f87171; }
+.k-prose span[data-k-color="orange"] { color: #fb923c; }
+.k-prose span[data-k-color="amber"]  { color: #facc15; }
+.k-prose span[data-k-color="green"]  { color: #4ade80; }
+.k-prose span[data-k-color="teal"]   { color: #2dd4bf; }
+.k-prose span[data-k-color="blue"]   { color: #60a5fa; }
+.k-prose span[data-k-color="violet"] { color: #c084fc; }
+.k-prose span[data-k-color="pink"]   { color: #f472b6; }
+.k-prose span[data-k-color="muted"]  { color: var(--k-ink-muted); }
+
+/* Rich text colors — deepened for crisp legibility on light theme */
+:root[data-theme="light"] .k-prose span[data-k-color="red"]    { color: #dc2626; }
+:root[data-theme="light"] .k-prose span[data-k-color="orange"] { color: #ea580c; }
+:root[data-theme="light"] .k-prose span[data-k-color="amber"]  { color: #a16207; }
+:root[data-theme="light"] .k-prose span[data-k-color="green"]  { color: #15803d; }
+:root[data-theme="light"] .k-prose span[data-k-color="teal"]   { color: #0f766e; }
+:root[data-theme="light"] .k-prose span[data-k-color="blue"]   { color: #2563eb; }
+:root[data-theme="light"] .k-prose span[data-k-color="violet"] { color: #7e22ce; }
+:root[data-theme="light"] .k-prose span[data-k-color="pink"]   { color: #db2777; }
+
+/* Multi-color highlight markers — balanced for dark & light */
+.k-prose mark[data-k-bg="amber"]  { background: rgba(245, 158, 11, 0.28); }
+.k-prose mark[data-k-bg="green"]  { background: rgba(34, 197, 94, 0.25); }
+.k-prose mark[data-k-bg="blue"]   { background: rgba(59, 130, 246, 0.26); }
+.k-prose mark[data-k-bg="violet"] { background: rgba(168, 85, 247, 0.27); }
+.k-prose mark[data-k-bg="pink"]   { background: rgba(236, 72, 153, 0.25); }
+.k-prose mark[data-k-bg="red"]    { background: rgba(239, 68, 68, 0.25); }
+
+:root[data-theme="light"] .k-prose mark[data-k-bg="amber"]  { background: rgba(245, 158, 11, 0.24); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="green"]  { background: rgba(34, 197, 94, 0.22); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="blue"]   { background: rgba(59, 130, 246, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="violet"] { background: rgba(168, 85, 247, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="pink"]   { background: rgba(236, 72, 153, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="red"]    { background: rgba(239, 68, 68, 0.20); }
 
 .k-prose a {
   color: var(--k-accent);

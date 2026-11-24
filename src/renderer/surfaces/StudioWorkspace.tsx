@@ -34,6 +34,7 @@ import {
   PencilSimple,
   Plus,
   PushPin,
+  SpeakerSlash,
   Sparkle,
   Square,
   SquaresFour,
@@ -62,6 +63,7 @@ import { truncateAtWordBoundary } from '@shared/html-entities';
 import { isDedicatedNote, isMediaItem } from '@shared/item-helpers';
 import { formatShortcutCompact, isMacPlatform } from '@shared/shortcuts';
 import { toggleMarkdownTaskInBody } from '@shared/task-helpers';
+import { playTactileTick } from '../lib/tactileSound';
 import { KapsulaEmblem } from '../components/ui/KapsulaEmblem';
 import { GlobalSearchPopover } from '../components/ui/GlobalSearchPopover';
 import { PopoverSurface } from '../components/ui/PopoverSurface';
@@ -491,7 +493,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
       const raw = Number(localStorage.getItem('kapsula.sidebar.width'));
-      if (Number.isFinite(raw) && raw >= 188 && raw <= 340) return Math.round(raw);
+      if (Number.isFinite(raw) && raw >= 192 && raw <= 340) return Math.round(raw);
     } catch {
       // ignore
     }
@@ -505,6 +507,45 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }
   });
   const [sidebarDragging, setSidebarDragging] = useState(false);
+  const [sidebarRailSnapping, setSidebarRailSnapping] = useState(false);
+  const sidebarRailSnapTimerRef = useRef<number | null>(null);
+
+  // Pre-warm NoteStudio chunk + syntax highlighter on idle so first card open on macOS has zero lag
+  useEffect(() => {
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      void import('../components/studio/NoteStudio')
+        .then((mod) => {
+          if (!cancelled) mod.warmNoteStudioRuntime?.();
+        })
+        .catch(() => {});
+    };
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(warm, { timeout: 1400 });
+      return () => {
+        cancelled = true;
+        w.cancelIdleCallback?.(id);
+      };
+    }
+    const timer = window.setTimeout(warm, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (sidebarRailSnapTimerRef.current) {
+        window.clearTimeout(sidebarRailSnapTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -529,26 +570,50 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       e.stopPropagation();
       const startX = e.clientX;
       const startRail = sidebarRail;
-      const startEffectiveWidth = startRail ? 60 : sidebarWidth;
+      const RAIL_W = 62;
+      const MIN_W = 192;
+      const MAX_W = 340;
+      // Strict hysteresis: EXPAND_THRESHOLD (164) > COLLAPSE_THRESHOLD (128) prevents oscillation flicker
+      const COLLAPSE_THRESHOLD = 128;
+      const EXPAND_THRESHOLD = 164;
+      const startEffectiveWidth = startRail ? RAIL_W : sidebarWidth;
       let curWidth = sidebarWidth;
       let curRail = sidebarRail;
       setSidebarDragging(true);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const triggerRailSnapTransition = () => {
+        setSidebarRailSnapping(true);
+        if (sidebarRailSnapTimerRef.current) {
+          window.clearTimeout(sidebarRailSnapTimerRef.current);
+        }
+        sidebarRailSnapTimerRef.current = window.setTimeout(() => {
+          sidebarRailSnapTimerRef.current = null;
+          setSidebarRailSnapping(false);
+        }, 210);
+      };
 
       const onMove = (ev: PointerEvent) => {
         const nextRaw = startEffectiveWidth + (ev.clientX - startX);
         if (curRail) {
-          if (nextRaw > 112) {
+          if (nextRaw >= EXPAND_THRESHOLD) {
             curRail = false;
-            curWidth = Math.max(188, Math.min(340, Math.round(nextRaw)));
+            curWidth = Math.max(MIN_W, Math.min(MAX_W, Math.round(nextRaw)));
+            triggerRailSnapTransition();
             setSidebarRail(false);
             setSidebarWidth(curWidth);
           }
-        } else if (nextRaw < 164) {
+        } else if (nextRaw <= COLLAPSE_THRESHOLD) {
           curRail = true;
+          triggerRailSnapTransition();
           setSidebarRail(true);
         } else {
-          curWidth = Math.max(188, Math.min(340, Math.round(nextRaw)));
-          setSidebarWidth(curWidth);
+          const clamped = Math.max(MIN_W, Math.min(MAX_W, Math.round(nextRaw)));
+          if (clamped !== curWidth) {
+            curWidth = clamped;
+            setSidebarWidth(clamped);
+          }
         }
       };
 
@@ -556,6 +621,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
         setSidebarDragging(false);
       };
 
@@ -580,6 +647,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [filterMediaOnly, setFilterMediaOnly] = useState(false);
   const [filterPinnedOnly, setFilterPinnedOnly] = useState(false);
   const [filterUnsortedOnly, setFilterUnsortedOnly] = useState(false);
+  const [filterMuteMode, setFilterMuteMode] = useState<'all' | 'active' | 'muted'>('all');
   const [filterDnaQuick, setFilterDnaQuick] = useState<QuickDnaFilter>('all');
   const [secretKindFilter, setSecretKindFilter] = useState<SecretKindFilter>('all');
   const [notesDraftTrigger, setNotesDraftTrigger] = useState(0);
@@ -612,6 +680,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   // Document View (Notes) / Secret Sheet / Modals
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioDraftMode, setStudioDraftMode] = useState(false);
+  const [studioExpandedModal, setStudioExpandedModal] = useState(false);
   const [activeItem, setActiveItem] = useState<VaultItem | null>(null);
 
   const [lightboxItem, setLightboxItem] = useState<VaultItem | null>(null);
@@ -1455,6 +1524,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     [inlineNotesItems]
   );
 
+  const scopedMutedCount = useMemo(
+    () => inlineNotesItems.filter((it) => Boolean(it.isMuted)).length,
+    [inlineNotesItems]
+  );
+
   const scopedTasks = useMemo(() => {
     if (nav.type === 'orbit') {
       return tasks.filter((tk) => tk.orbit === nav.orbitId);
@@ -1509,6 +1583,14 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
       if (filterUnsortedOnly && item.orbit) {
         return false;
+      }
+      if (showFeedToolbar) {
+        if (filterMuteMode === 'active' && item.isMuted) {
+          return false;
+        }
+        if (filterMuteMode === 'muted' && !item.isMuted) {
+          return false;
+        }
       }
       if (filterDnaQuick === 'link' && item.dna !== 'link') {
         return false;
@@ -1581,6 +1663,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     filterMediaOnly,
     filterPinnedOnly,
     filterUnsortedOnly,
+    filterMuteMode,
+    showFeedToolbar,
     filterDnaQuick,
     secretKindFilter,
     sortOrder,
@@ -1644,6 +1728,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     filterMediaOnly,
     filterPinnedOnly,
     filterUnsortedOnly,
+    filterMuteMode,
+    showFeedToolbar,
     filterDnaQuick,
     secretKindFilter,
     sortOrder,
@@ -1889,6 +1975,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const handleTogglePin = async (item: VaultItem) => {
     try {
       await window.kapsula.updateItem(item.id, { isPinned: !item.isPinned });
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
+  };
+
+  const handleToggleMute = async (item: VaultItem) => {
+    const nextMuted = !item.isMuted;
+    try {
+      const updated = await window.kapsula.updateItem(item.id, { isMuted: nextMuted });
+      if (updated) {
+        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+        setActiveItem((prev) => (prev && prev.id === updated.id ? updated : prev));
+      }
+      playTactileTick(soundEnabled, 'soft');
+      toast(t(nextMuted ? 'workspace.toast.mutedSingle' : 'workspace.toast.unmutedSingle'));
     } catch (err) {
       toast.error(friendlyErrorMessage(err, undefined, locale));
     }
@@ -2177,6 +2278,34 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           pin
             ? t('workspace.toast.pinnedCount', { count: okCount })
             : t('workspace.toast.unpinnedCount', { count: okCount })
+        );
+      }
+      if (failedCount > 0) {
+        toast.error(t('common.saveError'));
+      }
+      if (failedCount === 0) {
+        setSelectedIds([]);
+      }
+      void refreshAll();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, undefined, locale));
+    }
+  };
+
+  const handleBulkMute = async (mute: boolean) => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    try {
+      const settled = await Promise.allSettled(
+        ids.map((id) => window.kapsula.updateItem(id, { isMuted: mute }))
+      );
+      const okCount = settled.filter((r) => r.status === 'fulfilled' && r.value).length;
+      const failedCount = ids.length - okCount;
+      if (okCount > 0) {
+        toast.success(
+          mute
+            ? t('workspace.toast.mutedCount', { count: okCount })
+            : t('workspace.toast.unmutedCount', { count: okCount })
         );
       }
       if (failedCount > 0) {
@@ -2538,6 +2667,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }}
       onDeleteItem={(id) => void handleDeleteItem(id)}
       onTogglePin={(it) => void handleTogglePin(it)}
+      onToggleMute={(it) => void handleToggleMute(it)}
       onToggleNotesHub={(it, inNotesHub) => void handleToggleNotesHub(it, inNotesHub)}
       onMoveToOrbit={(id, orbId) => void handleMoveToOrbit(id, orbId)}
       onMoveToBoard={(id, boardId) => void handleMoveToBoard(id, boardId)}
@@ -2613,7 +2743,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       className="relative h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
     >
       {glassEnabled ? <div aria-hidden="true" className="k-glass-mesh" /> : null}
-      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: drag-resizable down to 60px Icon-Rail or full collapse) */}
+      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: drag-resizable down to 62px Icon-Rail or full collapse) */}
       <motion.aside
         ref={sidebarElRef}
         key="workspace-sidebar"
@@ -2623,15 +2753,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         initial={false}
         animate={
           sidebarOpen
-            ? { width: sidebarRail ? 60 : sidebarWidth, opacity: 1 }
+            ? { width: sidebarRail ? 62 : sidebarWidth, opacity: 1 }
             : { width: 0, opacity: 0 }
         }
         transition={
-          sidebarDragging
+          sidebarDragging && !sidebarRailSnapping
             ? { duration: 0 }
             : prefersReduced
               ? { duration: 0.08 }
-              : { duration: 0.22, ease: [0.32, 0.72, 0, 1] }
+              : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }
         }
         style={{ pointerEvents: sidebarOpen ? 'auto' : 'none' }}
         className={`relative z-[2] shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
@@ -2641,43 +2771,53 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         <div className="w-full min-w-0 h-full flex flex-col relative">
           {/* Sidebar Integrated Top Brand Bar (draggable; reserves macOS traffic-light safe zone) */}
           <div
-            className={`h-[46px] shrink-0 flex items-center ${
-              sidebarRail ? 'justify-center px-1.5' : 'justify-between'
-            } k-drag-region transition-[padding] duration-150 ${
-              !sidebarRail ? (showTrafficLights ? 'pl-[82px] pr-3' : 'px-3') : ''
+            className={`h-[46px] shrink-0 flex items-center justify-between k-drag-region overflow-hidden transition-[padding] duration-180 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              sidebarRail
+                ? 'px-[12px]'
+                : showTrafficLights
+                  ? 'pl-[82px] pr-3'
+                  : 'px-[12px]'
             }`}
           >
-            {!(sidebarRail && showTrafficLights) ? (
+            <button
+              type="button"
+              onClick={() => navigateTo({ type: 'flow' })}
+              aria-hidden={sidebarRail && showTrafficLights}
+              tabIndex={sidebarRail && showTrafficLights ? -1 : 0}
+              className={`k-no-drag flex items-center gap-2 min-w-0 rounded-lg px-1 py-1 hover:bg-[var(--k-bg-surface-2)]/70 transition-[opacity,background-color] duration-150 cursor-pointer ${
+                sidebarRail && showTrafficLights ? 'opacity-0 pointer-events-none' : 'opacity-100'
+              }`}
+            >
+              <span className="w-[30px] h-[30px] shrink-0 flex items-center justify-center">
+                <KapsulaEmblem size={19} className="shrink-0 text-[var(--k-ink-primary)]" />
+              </span>
+              <span
+                className={`k-display font-semibold text-[13.5px] tracking-[-0.02em] text-[var(--k-ink-primary)] whitespace-nowrap transition-opacity duration-150 ${
+                  sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                }`}
+              >
+                Kapsula
+              </span>
+            </button>
+
+            <TooltipHint label={t('nav.collapseSidebar')} disabled={sidebarRail}>
               <button
                 type="button"
-                onClick={() => navigateTo({ type: 'flow' })}
-                className="k-no-drag flex items-center gap-2 min-w-0 rounded-lg px-1 py-1 hover:bg-[var(--k-bg-surface-2)]/70 transition-colors cursor-pointer"
+                data-testid="toggle-sidebar-btn"
+                aria-hidden={sidebarRail}
+                tabIndex={sidebarRail ? -1 : 0}
+                onClick={() => setSidebarOpen(false)}
+                className={`k-no-drag k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0 transition-opacity duration-150 ${
+                  sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                }`}
+                aria-label={t('nav.collapseSidebar')}
               >
-                <KapsulaEmblem size={19} className="shrink-0 text-[var(--k-ink-primary)]" />
-                {!sidebarRail ? (
-                  <span className="k-display font-semibold text-[13.5px] tracking-[-0.02em] text-[var(--k-ink-primary)]">
-                    Kapsula
-                  </span>
-                ) : null}
+                <LiveIcon icon={PanelLeftCloseIcon} size={16} />
               </button>
-            ) : null}
-
-            {!sidebarRail ? (
-              <TooltipHint label={t('nav.collapseSidebar')}>
-                <button
-                  type="button"
-                  data-testid="toggle-sidebar-btn"
-                  onClick={() => setSidebarOpen(false)}
-                  className="k-no-drag k-interactive w-7 h-7 rounded-[7px] flex items-center justify-center text-[var(--k-ink-muted)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer shrink-0"
-                  aria-label={t('nav.collapseSidebar')}
-                >
-                  <LiveIcon icon={PanelLeftCloseIcon} size={16} />
-                </button>
-              </TooltipHint>
-            ) : null}
+            </TooltipHint>
           </div>
 
-          <div className={`flex-1 min-h-0 flex flex-col ${sidebarRail ? 'px-1.5' : 'px-2.5'} pb-2.5 pt-1 gap-3`}>
+          <div className="flex-1 min-h-0 flex flex-col px-[8px] pb-2.5 pt-1 gap-3">
             {/* Core views pinned cleanly above scrollable sections */}
             <div className="shrink-0 flex flex-col gap-1" data-testid="sidebar-primary-nav-list">
               {visiblePrimaryNavSections.map((sec, visIdx) => {
@@ -3042,9 +3182,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           onDragEnd={clearSidebarDragStates}
                           onClick={() => navigateTo({ type: 'orbit', orbitId: orbit.id })}
                           title={sidebarRail ? orbit.name : undefined}
-                          className={`k-interactive group relative z-[1] flex items-center h-8 ${
-                            sidebarRail ? 'justify-center px-0' : 'px-2'
-                          } rounded-[8px] cursor-pointer ${
+                          className={`k-interactive group relative z-[1] flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
                             active
                               ? 'text-[var(--k-ink-primary)] font-medium'
                               : isCardDropOver
@@ -3057,7 +3195,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             <motion.span
                               layoutId="sidebar-active-pill"
                               transition={
-                                prefersReduced
+                                prefersReduced || sidebarDragging
                                   ? { duration: 0 }
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
@@ -3066,23 +3204,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
-                          <span
-                            className={`relative z-10 shrink-0 w-4 h-4 ${
-                              sidebarRail ? 'mr-0' : 'mr-2'
-                            } flex items-center justify-center`}
-                          >
+                          <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
                             <SectionIcon
                               name={orbit.icon || 'Folder'}
                               color={orbit.color}
-                              className="w-[15px] h-[15px]"
+                              className="w-[16px] h-[16px]"
                             />
                           </span>
+                          <span
+                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-150 ${
+                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                            }`}
+                          >
+                            {orbit.name}
+                          </span>
+
                           {!sidebarRail ? (
                             <>
-                              <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
-                                {orbit.name}
-                              </span>
-
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -3314,9 +3452,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             navigateTo({ type: 'board', boardId: board.id });
                           }}
                           title={sidebarRail ? board.name : undefined}
-                          className={`k-interactive group relative z-[1] flex items-center h-8 ${
-                            sidebarRail ? 'justify-center px-0' : 'px-2'
-                          } rounded-[8px] cursor-pointer ${
+                          className={`k-interactive group relative z-[1] flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
                             active
                               ? 'text-[var(--k-ink-primary)] font-medium'
                               : isCardDropOver
@@ -3329,7 +3465,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             <motion.span
                               layoutId="sidebar-active-pill"
                               transition={
-                                prefersReduced
+                                prefersReduced || sidebarDragging
                                   ? { duration: 0 }
                                   : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
                               }
@@ -3338,22 +3474,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
                             />
                           ) : null}
-                          <span
-                            className={`relative z-10 shrink-0 w-4 h-4 ${
-                              sidebarRail ? 'mr-0' : 'mr-2'
-                            } flex items-center justify-center`}
-                          >
+                          <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
                             <Swatches
-                              size={14}
+                              size={16}
                               weight={active ? 'fill' : 'duotone'}
                               style={{ color: board.color || SECTION_COLOR_PALETTE[2]! }}
                             />
                           </span>
+                          <span
+                            className={`relative z-10 ml-1.5 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-150 ${
+                              sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                            }`}
+                          >
+                            {board.name}
+                          </span>
                           {!sidebarRail ? (
                             <>
-                              <span className="relative z-10 flex-1 min-w-0 truncate text-[13px]">
-                                {board.name}
-                              </span>
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -3474,27 +3610,29 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 sidebarRail ? 'flex-col items-center gap-1' : 'items-center gap-1'
               }`}
             >
-              <TooltipHint label={sidebarRail ? t('workspace.sidebar.settings') : ''}>
-                <HoverIconProvider hovered={settingsBtnHovered}>
-                  <button
-                    type="button"
-                    data-testid="open-settings-btn"
-                    onMouseEnter={() => setSettingsBtnHovered(true)}
-                    onMouseLeave={() => setSettingsBtnHovered(false)}
-                    onClick={() => {
-                      setSettingsInitialTab('appearance');
-                      setSettingsOpen(true);
-                    }}
-                    className={`k-interactive flex items-center ${
-                      sidebarRail ? 'w-8 justify-center px-0' : 'flex-1 gap-2 px-2.5 min-w-0'
-                    } h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer`}
-                  >
-                    <LiveIcon icon={SettingsIcon} size={15} />
+              <TooltipHint label={t('workspace.sidebar.settings')} disabled={!sidebarRail} side="right">
+                <button
+                  type="button"
+                  data-testid="open-settings-btn"
+                  onMouseEnter={() => setSettingsBtnHovered(true)}
+                  onMouseLeave={() => setSettingsBtnHovered(false)}
+                  onClick={() => {
+                    setSettingsInitialTab('appearance');
+                    setSettingsOpen(true);
+                  }}
+                  className={`k-interactive flex items-center overflow-hidden ${
+                    sidebarRail ? 'w-full px-[8px]' : 'flex-1 px-[8px] min-w-0'
+                  } h-8 rounded-[8px] text-[12.5px] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)] cursor-pointer`}
+                >
+                  <HoverIconProvider hovered={settingsBtnHovered}>
+                    <span className="w-[30px] h-[30px] shrink-0 flex items-center justify-center">
+                      <LiveIcon icon={SettingsIcon} size={16} />
+                    </span>
                     {!sidebarRail ? (
-                      <span className="truncate">{t('workspace.sidebar.settings')}</span>
+                      <span className="ml-1 truncate">{t('workspace.sidebar.settings')}</span>
                     ) : null}
-                  </button>
-                </HoverIconProvider>
+                  </HoverIconProvider>
+                </button>
               </TooltipHint>
 
               {!sidebarRail ? (
@@ -4418,6 +4556,78 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         <NumberFlow value={visibleItems.length} />
                       </span>
 
+                      <PopoverSurface
+                        align="end"
+                        side="bottom"
+                        widthClass="w-[196px] !p-1.5"
+                        trigger={
+                          <button
+                            type="button"
+                            data-testid="feed-mute-filter-select"
+                            title={
+                              filterMuteMode === 'all'
+                                ? t('workspace.filter.muteAll')
+                                : filterMuteMode === 'active'
+                                  ? t('workspace.filter.muteHide')
+                                  : t('workspace.filter.muteOnly')
+                            }
+                            aria-label={t('workspace.filter.muteAll')}
+                            className={`k-interactive inline-flex items-center gap-1.5 h-7.5 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer shrink-0 ${
+                              filterMuteMode !== 'all'
+                                ? 'border-[var(--k-accent)]/45 bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                                : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)]'
+                            }`}
+                          >
+                            <SpeakerSlash
+                              weight={filterMuteMode === 'muted' ? 'fill' : 'regular'}
+                              className="w-3.5 h-3.5 shrink-0"
+                            />
+                            {filterMuteMode === 'muted' && scopedMutedCount > 0 ? (
+                              <span className="k-tabular text-[11px]">{scopedMutedCount}</span>
+                            ) : filterMuteMode === 'active' ? (
+                              <span className="text-[11px] max-w-[72px] truncate">
+                                {t('workspace.filter.muteHide')}
+                              </span>
+                            ) : scopedMutedCount > 0 ? (
+                              <span className="k-tabular text-[11px] opacity-75">{scopedMutedCount}</span>
+                            ) : null}
+                          </button>
+                        }
+                      >
+                        <div className="space-y-0.5 text-[12.5px]">
+                          {(
+                            [
+                              { id: 'all', label: t('workspace.filter.muteAll') },
+                              { id: 'active', label: t('workspace.filter.muteHide') },
+                              {
+                                id: 'muted',
+                                label:
+                                  scopedMutedCount > 0
+                                    ? t('workspace.filter.muteOnlyCount', { count: scopedMutedCount })
+                                    : t('workspace.filter.muteOnly'),
+                              },
+                            ] as const
+                          ).map((opt) => {
+                            const active = filterMuteMode === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => setFilterMuteMode(opt.id)}
+                                className={`k-interactive w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left cursor-pointer ${
+                                  active
+                                    ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)] font-medium'
+                                    : 'text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
+                                }`}
+                              >
+                                <span>{opt.label}</span>
+                                {active ? <Check weight="bold" className="w-3.5 h-3.5 shrink-0" /> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </PopoverSurface>
+
                       <SelectMenu
                         value={sortOrder}
                         onChange={(v) => setSortOrder(v as SortMode)}
@@ -4431,7 +4641,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         ]}
                         size="sm"
                         align="end"
-                        className="w-[158px]"
+                        className="w-[136px]"
                         data-testid="feed-sort-select"
                       />
 
@@ -4531,6 +4741,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               : t('workspace.empty.defaultDesc')}
                     </div>
                     <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                      {filterMuteMode !== 'all' ? (
+                        <button
+                          type="button"
+                          onClick={() => setFilterMuteMode('all')}
+                          className="k-interactive h-8.5 px-3.5 rounded-xl border border-[var(--k-border-strong)] bg-[var(--k-bg-surface-1)] text-[12.5px] font-medium cursor-pointer"
+                        >
+                          {t('workspace.filter.muteAll')}
+                        </button>
+                      ) : null}
                       {searchQuery.trim() ? (
                         <button
                           type="button"
@@ -4794,6 +5013,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           onOpenShotLightbox={handleOpenShotLightbox}
                           onDelete={handleDeleteItem}
                           onTogglePin={handleTogglePin}
+                          onToggleMute={handleToggleMute}
                           onToggleNotesHub={handleToggleNotesHub}
                           onMoveToOrbit={handleMoveToOrbit}
                           onMoveToBoard={handleMoveToBoard}
@@ -4870,6 +5090,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                           onOpenShotLightbox={handleOpenShotLightbox}
                           onDelete={handleDeleteItem}
                           onTogglePin={handleTogglePin}
+                          onToggleMute={handleToggleMute}
                           onToggleNotesHub={handleToggleNotesHub}
                           onMoveToOrbit={handleMoveToOrbit}
                           onMoveToBoard={handleMoveToBoard}
@@ -4987,6 +5208,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     <span>{t('workspace.bulk.pin')}</span>
                   </button>
 
+                  {(() => {
+                    const allSelectedMuted =
+                      selectedIds.length > 0 &&
+                      selectedIds.every((id) => items.find((it) => it.id === id)?.isMuted);
+                    return (
+                      <button
+                        type="button"
+                        data-testid="bulk-mute-btn"
+                        onClick={() => void handleBulkMute(!allSelectedMuted)}
+                        className="k-interactive h-8 px-2.5 rounded-[8px] hover:bg-[var(--k-bg-surface-2)] text-[12.5px] flex items-center gap-1 cursor-pointer"
+                      >
+                        <SpeakerSlash size={14} weight={allSelectedMuted ? 'fill' : 'regular'} />
+                        <span>
+                          {t(allSelectedMuted ? 'workspace.bulk.unmute' : 'workspace.bulk.mute')}
+                        </span>
+                      </button>
+                    );
+                  })()}
+
                   <button
                     type="button"
                     onClick={() => void handleBulkDelete()}
@@ -5014,20 +5254,19 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           {/* Variant B — Serene Centered Wide Peek Modal over softly dimmed & blurred feed */}
           <AnimatePresence>
             {isNoteDocumentOpen && activeItem ? (
-              <div
+              <motion.div
                 key="studio-document-modal-root"
                 data-testid="studio-document-modal-root"
-                className="k-no-drag fixed inset-0 z-40 flex items-center justify-center p-6"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                className="k-no-drag fixed inset-0 z-40 flex items-center justify-center p-5 sm:p-6"
               >
-                <motion.div
-                  key="studio-document-backdrop"
+                <div
                   data-testid="studio-document-backdrop"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
                   onClick={closeStudioCleanly}
-                  className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[5px]"
+                  className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]"
                 />
 
                 <motion.div
@@ -5039,26 +5278,16 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   initial={
                     prefersReduced
                       ? { opacity: 0 }
-                      : {
-                          opacity: 0,
-                          filter: 'blur(4px)',
-                          transform: 'perspective(900px) rotateX(-13deg) scale(0.88)',
-                        }
+                      : { opacity: 0, scale: 0.965, y: 10 }
                   }
                   animate={
                     prefersReduced
                       ? { opacity: 1 }
                       : {
                           opacity: 1,
-                          filter: 'blur(0px)',
-                          transform: 'perspective(900px) rotateX(0deg) scale(1)',
-                          transition: {
-                            type: 'spring',
-                            stiffness: 400,
-                            damping: 28,
-                            mass: 0.78,
-                            opacity: { duration: 0.16, ease: [0.23, 1, 0.32, 1] },
-                          },
+                          scale: 1,
+                          y: 0,
+                          transition: { duration: 0.19, ease: [0.22, 1, 0.36, 1] },
                         }
                   }
                   exit={
@@ -5066,13 +5295,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       ? { opacity: 0 }
                       : {
                           opacity: 0,
-                          filter: 'blur(3px)',
-                          transform: 'perspective(900px) rotateX(-8deg) scale(0.93)',
-                          transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+                          scale: 0.975,
+                          y: 6,
+                          transition: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
                         }
                   }
                   onClick={(e) => e.stopPropagation()}
-                  className="relative z-10 w-[min(820px,92vw)] h-[min(84vh,840px)] rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] overflow-hidden flex flex-col"
+                  className={`relative z-10 rounded-2xl bg-[var(--k-bg-surface-1)] border border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] overflow-hidden flex flex-col will-change-transform transition-[width,height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                    studioExpandedModal
+                      ? 'w-[min(1180px,96vw)] h-[min(93vh,960px)]'
+                      : 'w-[min(860px,93vw)] h-[min(86vh,860px)]'
+                  }`}
                 >
                   <Suspense fallback={null}>
                     <NoteStudio
@@ -5085,6 +5318,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                       soundEnabled={soundEnabled}
                       layoutMode="center"
                       presentation="modal"
+                      expandedModal={studioExpandedModal}
+                      onToggleExpandedModal={() => setStudioExpandedModal((v) => !v)}
                       onItemUpdated={handleStudioItemUpdated}
                       onDraftPersisted={handleStudioDraftPersisted}
                       onCancelDraft={handleStudioCancelDraft}
@@ -5099,7 +5334,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     />
                   </Suspense>
                 </motion.div>
-              </div>
+              </motion.div>
             ) : null}
           </AnimatePresence>
         </div>
@@ -5128,75 +5363,66 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       <ScopedAccentContext.Provider value={workspaceAccentStyle}>
         <AnimatePresence>
           {isSecretSheetOpen && activeItem ? (
-            <div style={workspaceAccentStyle} className="fixed inset-0 z-50 flex justify-end">
             <motion.div
-              key="studio-scrim"
+              key="studio-secret-sheet-root"
+              style={workspaceAccentStyle}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.14 }}
-              onClick={closeStudioCleanly}
-              className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]"
-            />
-
-            <motion.div
-              key="studio-secret-sheet"
-              data-testid="studio-side-sheet"
-              initial={
-                prefersReduced
-                  ? { opacity: 0 }
-                  : {
-                      opacity: 0,
-                      filter: 'blur(3px)',
-                      transform: 'perspective(950px) translate3d(54px, 0, 0) rotateY(7deg) scale(0.96)',
-                    }
-              }
-              animate={
-                prefersReduced
-                  ? { opacity: 1 }
-                  : {
-                      opacity: 1,
-                      filter: 'blur(0px)',
-                      transform: 'perspective(950px) translate3d(0px, 0, 0) rotateY(0deg) scale(1)',
-                      transition: {
-                        type: 'spring',
-                        stiffness: 400,
-                        damping: 29,
-                        mass: 0.78,
-                        opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
-                      },
-                    }
-              }
-              exit={
-                prefersReduced
-                  ? { opacity: 0 }
-                  : {
-                      opacity: 0,
-                      filter: 'blur(2px)',
-                      transform: 'perspective(950px) translate3d(40px, 0, 0) rotateY(5deg) scale(0.97)',
-                      transition: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
-                    }
-              }
-              style={{ width: '560px', maxWidth: '92vw', transformOrigin: 'right center' }}
-              className="relative z-10 h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden"
+              transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+              className="fixed inset-0 z-50 flex justify-end"
             >
-              <Suspense fallback={null}>
-                <SecretStudioSheet
-                  item={activeItem}
-                  orbits={orbits}
-                  vaultLocked={vaultLocked}
-                  wipeSeconds={wipeSeconds}
-                  onUnlockRequest={() => setUnlockOpen(true)}
-                  onUpdated={(updated) => setActiveItem(updated)}
-                  onDelete={async (id) => {
-                    await handleDeleteItem(id);
-                    setStudioOpen(false);
-                  }}
-                  onClose={() => setStudioOpen(false)}
-                />
-              </Suspense>
+              <div
+                onClick={closeStudioCleanly}
+                className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]"
+              />
+
+              <motion.div
+                key="studio-secret-sheet"
+                data-testid="studio-side-sheet"
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : { opacity: 0, x: 32 }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : {
+                        opacity: 1,
+                        x: 0,
+                        transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        opacity: 0,
+                        x: 24,
+                        transition: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                style={{ width: '560px', maxWidth: '92vw' }}
+                className="relative z-10 h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden will-change-transform"
+              >
+                <Suspense fallback={null}>
+                  <SecretStudioSheet
+                    item={activeItem}
+                    orbits={orbits}
+                    vaultLocked={vaultLocked}
+                    wipeSeconds={wipeSeconds}
+                    onUnlockRequest={() => setUnlockOpen(true)}
+                    onUpdated={(updated) => setActiveItem(updated)}
+                    onDelete={async (id) => {
+                      await handleDeleteItem(id);
+                      setStudioOpen(false);
+                    }}
+                    onClose={() => setStudioOpen(false)}
+                  />
+                </Suspense>
+              </motion.div>
             </motion.div>
-            </div>
           ) : null}
         </AnimatePresence>
       </ScopedAccentContext.Provider>
@@ -5621,8 +5847,8 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
 }) => {
   const prefersReduced = useReducedMotion();
   const [hovered, setHovered] = useState(false);
-  const buttonNode = (
-    <HoverIconProvider hovered={hovered}>
+  return (
+    <TooltipHint label={label} disabled={!compactRail} side="right">
       <div
         role="button"
         tabIndex={0}
@@ -5643,9 +5869,7 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onDragEnd={onDragEnd}
-        className={`group k-interactive relative z-[1] w-full flex items-center h-8 ${
-          compactRail ? 'justify-center px-0' : 'px-2'
-        } rounded-[8px] cursor-pointer ${
+        className={`group k-interactive relative z-[1] w-full flex items-center h-8 px-[8px] overflow-hidden rounded-[8px] cursor-pointer ${
           active
             ? 'text-[var(--k-ink-primary)] font-medium'
             : isCardDropOver
@@ -5653,40 +5877,41 @@ const SidebarNavButton: React.FC<SidebarNavButtonProps> = ({
               : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:bg-[var(--k-bg-surface-2)]'
         } ${isDragging ? 'opacity-45' : ''}`}
       >
-        {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
-        {active ? (
-          <motion.span
-            layoutId="sidebar-active-pill"
-            transition={
-              prefersReduced
-                ? { duration: 0 }
-                : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
-            }
-            aria-hidden="true"
-            style={{ borderRadius: 8 }}
-            className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
-          />
-        ) : null}
-        <span
-          className={`relative z-10 shrink-0 ${
-            compactRail ? 'mr-0' : 'mr-2'
-          } flex items-center text-[var(--k-accent)]/85`}
-        >
-          {icon}
-        </span>
-        {!compactRail ? (
-          <>
-            <span className="relative z-10 flex-1 min-w-0 text-left truncate text-[13px]">{label}</span>
+        <HoverIconProvider hovered={hovered}>
+          {dropPosition ? <SidebarDropLine position={dropPosition} /> : null}
+          {active ? (
+            <motion.span
+              layoutId="sidebar-active-pill"
+              transition={
+                prefersReduced
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 520, damping: 38, mass: 0.7 }
+              }
+              aria-hidden="true"
+              style={{ borderRadius: 8 }}
+              className="pointer-events-none absolute inset-0 rounded-[8px] bg-[var(--k-accent-soft)] transition-[background-color] duration-150"
+            />
+          ) : null}
+          <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center text-[var(--k-accent)]/85">
+            {icon}
+          </span>
+          <span
+            className={`relative z-10 ml-1.5 flex-1 min-w-0 text-left truncate text-[13px] transition-opacity duration-150 ${
+              compactRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            }`}
+          >
+            {label}
+          </span>
+          {!compactRail ? (
             <span
               data-count={count}
               className="relative z-10 shrink-0 w-[26px] text-right text-[11.5px] k-tabular text-[var(--k-ink-muted)]"
             >
               <NumberFlow value={count} />
             </span>
-          </>
-        ) : null}
+          ) : null}
+        </HoverIconProvider>
       </div>
-    </HoverIconProvider>
+    </TooltipHint>
   );
-  return compactRail ? <TooltipHint label={label}>{buttonNode}</TooltipHint> : buttonNode;
 };

@@ -17,6 +17,7 @@ import {
   Paperclip,
   Plus,
   PushPin,
+  SpeakerSlash,
   Swatches,
   Trash,
   X,
@@ -60,7 +61,7 @@ interface FeedViewProps {
   onCreateBoard?: (name: string, color: string) => Promise<string>;
   onUpdateItem: (
     id: string,
-    patch: Partial<Pick<VaultItem, 'orbit' | 'focusBoardId' | 'isPinned' | 'title' | 'body'>>
+    patch: Partial<Pick<VaultItem, 'orbit' | 'focusBoardId' | 'isPinned' | 'isMuted' | 'title' | 'body'>>
   ) => Promise<void>;
   onToggleMarkdownTask?: (itemId: string, taskIndex: number, done: boolean) => Promise<void>;
   onDeleteItem: (id: string) => Promise<void>;
@@ -194,6 +195,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const prefersReduced = useReducedMotion();
   const [feedMode, setFeedMode] = useState<FeedMode>('feed');
   const [dnaFilter, setDnaFilter] = useState<DnaFilter>('all');
+  const [muteFilter, setMuteFilter] = useState<'all' | 'active' | 'muted'>('all');
   const [sortMode, setSortMode] = useState<FeedSort>('pinned_recent');
   const [sortPickerOpen, setSortPickerOpen] = useState(false);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
@@ -255,6 +257,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
     if (dnaFilter !== 'all') {
       list = list.filter((it) => it.dna === (dnaFilter as ContentDna));
     }
+    if (muteFilter === 'active') {
+      list = list.filter((it) => !it.isMuted);
+    } else if (muteFilter === 'muted') {
+      list = list.filter((it) => Boolean(it.isMuted));
+    }
     const queried = filterItemsByQuery(list, searchQuery);
     if (sortMode === 'recent') {
       return [...queried].sort(
@@ -277,6 +284,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     selectedOrbitId,
     selectedBoardId,
     dnaFilter,
+    muteFilter,
     searchQuery,
     sortMode,
     orbitMap,
@@ -336,6 +344,16 @@ export const FeedView: React.FC<FeedViewProps> = ({
       onSelect: () => {
         void onUpdateItem(item.id, { isPinned: !item.isPinned });
         toast(item.isPinned ? t('common.unpinnedToast') : t('common.pinnedToast'));
+      },
+    },
+    {
+      id: 'mute',
+      label: item.isMuted ? t('common.unmute') : t('common.mute'),
+      icon: <SpeakerSlash weight={item.isMuted ? 'fill' : 'regular'} className="w-5 h-5" />,
+      accent: Boolean(item.isMuted),
+      onSelect: () => {
+        void onUpdateItem(item.id, { isMuted: !item.isMuted });
+        toast(item.isMuted ? t('common.unmutedToast') : t('common.mutedToast'));
       },
     },
     {
@@ -696,6 +714,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
       >
         <article
           data-testid={`feed-card-${item.id}`}
+          data-muted={item.isMuted ? 'true' : undefined}
           onClick={() => {
             if (multiSelectMode) {
               toggleBulkSelection(item.id);
@@ -703,13 +722,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
             }
             onSelectItem(item.id);
           }}
-          className={`group rounded-2xl border overflow-hidden cursor-pointer transition-colors ${
+          className={`group rounded-2xl border overflow-hidden cursor-pointer transition-[colors,opacity,filter] ${
             isBulkChecked
               ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)]'
               : isSelected && isExpanded
                 ? 'bg-[var(--k-bg-surface-2)] border-[var(--k-border-focus)] shadow-[var(--k-shadow-card-hover)]'
                 : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] shadow-[var(--k-shadow-card)] hover:border-[var(--k-border-strong)]'
-          }`}
+          } ${item.isMuted && !isBulkChecked ? 'opacity-[0.54] saturate-[0.35] border-dashed' : ''}`}
         >
           {hasVisual ? (
             <MobileMediaImage
@@ -755,6 +774,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 <span className="truncate">{item.domain || getDnaLabel(item.dna, item.subKind)}</span>
               </span>
               <span className="inline-flex items-center gap-1 shrink-0">
+                {item.isMuted ? (
+                  <SpeakerSlash weight="fill" className="w-3 h-3 text-[var(--k-ink-muted)] shrink-0" />
+                ) : null}
                 {item.isPinned && !hasVisual ? (
                   <PushPin weight="fill" className="w-3 h-3 text-[var(--k-accent)] shrink-0" />
                 ) : null}
@@ -945,6 +967,30 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 {t(chip.labelKey)}
               </button>
             ))}
+
+            <button
+              type="button"
+              onClick={() => {
+                mobileBridge.haptic('light');
+                setMuteFilter((prev) =>
+                  prev === 'all' ? 'active' : prev === 'active' ? 'muted' : 'all'
+                );
+              }}
+              className={`k-tap inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[12px] font-medium shrink-0 border transition-colors ${
+                muteFilter !== 'all'
+                  ? 'bg-[var(--k-accent-soft)] border-[var(--k-border-focus)] text-[var(--k-accent)]'
+                  : 'bg-[var(--k-bg-surface-1)] border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)]'
+              }`}
+            >
+              <SpeakerSlash weight={muteFilter === 'muted' ? 'fill' : 'regular'} className="w-3.5 h-3.5" />
+              <span>
+                {muteFilter === 'all'
+                  ? t('feed.muteAll')
+                  : muteFilter === 'active'
+                    ? t('feed.muteHide')
+                    : t('feed.muteOnly')}
+              </span>
+            </button>
 
             {orbits.length > 0 ? (
               <span className="w-[1px] h-4 bg-[var(--k-border-hairline)] mx-1 shrink-0" />

@@ -457,15 +457,15 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
   return createPortal(
     <AnimatePresence>
       {open ? (
-        <div
+        <motion.div
           key="calendar-event-sheet-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
           className="fixed inset-0 z-[95] flex justify-end overflow-hidden"
         >
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.14 }}
+          <div
             onClick={onClose}
             className="fixed inset-0 bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]"
           />
@@ -476,26 +476,15 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
             initial={
               prefersReduced
                 ? { opacity: 0 }
-                : {
-                    opacity: 0,
-                    filter: 'blur(3px)',
-                    transform: 'perspective(950px) translate3d(54px, 0, 0) rotateY(7deg) scale(0.96)',
-                  }
+                : { opacity: 0, x: 32 }
             }
             animate={
               prefersReduced
                 ? { opacity: 1 }
                 : {
                     opacity: 1,
-                    filter: 'blur(0px)',
-                    transform: 'perspective(950px) translate3d(0px, 0, 0) rotateY(0deg) scale(1)',
-                    transition: {
-                      type: 'spring',
-                      stiffness: 400,
-                      damping: 29,
-                      mass: 0.78,
-                      opacity: { duration: 0.15, ease: [0.23, 1, 0.32, 1] },
-                    },
+                    x: 0,
+                    transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
                   }
             }
             exit={
@@ -503,12 +492,11 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
                 ? { opacity: 0 }
                 : {
                     opacity: 0,
-                    filter: 'blur(2px)',
-                    transform: 'perspective(950px) translate3d(40px, 0, 0) rotateY(5deg) scale(0.97)',
-                    transition: { duration: 0.13, ease: [0.23, 1, 0.32, 1] },
+                    x: 24,
+                    transition: { duration: 0.14, ease: [0.22, 1, 0.36, 1] },
                   }
             }
-            style={{ transformOrigin: 'right center' }}
+            onClick={(e) => e.stopPropagation()}
             className="relative z-10 w-full max-w-[490px] h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden text-[var(--k-ink-primary)]"
           >
             {/* Clean Top Bar */}
@@ -1251,7 +1239,7 @@ export const CalendarEventSheet: React.FC<CalendarEventSheetProps> = ({
               )}
             </AnimatePresence>
           </motion.div>
-        </div>
+        </motion.div>
       ) : null}
     </AnimatePresence>,
     document.body

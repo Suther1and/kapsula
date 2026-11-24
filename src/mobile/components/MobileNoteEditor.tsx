@@ -6,7 +6,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
-import Highlight from '@tiptap/extension-highlight';
+import { KapsulaHighlight, TextColorMark, TextSizeMark } from '@shared/tiptap-rich-marks';
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
@@ -497,7 +497,9 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         placeholder: () => tm('editor.placeholder'),
       }),
       Typography,
-      Highlight,
+      KapsulaHighlight,
+      TextColorMark,
+      TextSizeMark,
       KapsulaImage.configure({
         ensureMediaUrl: (name) => ensureMediaUrlRef.current(name),
         onOpenImage: (src, caption) => onOpenImageRef.current(src, caption),

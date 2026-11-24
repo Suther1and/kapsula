@@ -2642,6 +2642,7 @@ export class SyncEngine {
       aiStatus: item.aiStatus,
       aiConfidence: isPurged ? null : item.aiConfidence,
       isPinned: isPurged ? false : item.isPinned,
+      isMuted: isPurged ? false : Boolean(item.isMuted),
       isArchived: isPurged ? false : item.isArchived,
       remindAt: isPurged ? null : item.remindAt,
       remindedAt: isPurged ? null : item.remindedAt,

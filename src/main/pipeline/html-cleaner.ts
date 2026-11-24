@@ -1444,18 +1444,24 @@ const CODE_HINT_RE =
 const RAW_HTML_SIGNAL_RE =
   /(?:<!DOCTYPE\s+html\b|<html\b|<body\b|<head\b|<div\s+(?:class|id|style|data-|role)=|<table\b[^>]*>[\s\S]*?<tr\b|<p\b[^>]*>[\s\S]*?<\/p>|<a\s+[^>]*href=["'][^"']+["'][^>]*>[\s\S]*?<\/a>|<ul\b[^>]*>[\s\S]*?<li\b|<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>)/i;
 
+const KAPSULA_RICH_MARK_RE =
+  /<\/?(?:span(?:\s+data-k-(?:color|size)="[a-z0-9#-]+")?|mark(?:\s+data-k-bg="[a-z0-9#-]+")?|u)>/gi;
+
 const LEAKED_ATTR_FRAGMENT_RE =
-  /(?:^|\s)(?:[a-z0-9_-]+#[a-z0-9_-]+["']?\s*>|[a-z0-9_-]+->[a-z0-9_-]+#[a-z0-9_-]+["']?(?:\s+data-[a-z0-9-]+="[^"]*")*\s*>|data-[a-z0-9-]+="[^"]*"\s*>)/gim;
+  /(?:^|\s)(?:[a-z0-9_-]+#[a-z0-9_-]+["']?\s*>|[a-z0-9_-]+->[a-z0-9_-]+#[a-z0-9_-]+["']?(?:\s+data-[a-z0-9-]+="[^"]*")*\s*>|data-(?!k-(?:color|size|bg)=)[a-z0-9-]+="[^"]*"\s*>)/gim;
 
 export function looksLikeRawHtmlContent(input: string): boolean {
   const trimmed = (input || '').trim();
   if (!trimmed || trimmed.length < 12) return false;
   if (!trimmed.includes('<') || !trimmed.includes('>')) return false;
   if (CODE_HINT_RE.test(trimmed)) return false;
-  if (RAW_HTML_SIGNAL_RE.test(trimmed)) return true;
+  // Ignore Kapsula's own inline rich-text markdown marks when probing for pasted webpage HTML
+  const probe = trimmed.replace(KAPSULA_RICH_MARK_RE, '');
+  if (!probe.includes('<') || !probe.includes('>')) return false;
+  if (RAW_HTML_SIGNAL_RE.test(probe)) return true;
 
   // Multiple paired HTML tags indicate copied HTML markup rather than prose using `<` / `>`
-  const paired = trimmed.match(/<\/(?:div|p|span|ul|ol|li|section|article|header|footer|nav|table|tr|td|th|h[1-6]|blockquote|strong|em|a)>/gi);
+  const paired = probe.match(/<\/(?:div|p|span|ul|ol|li|section|article|header|footer|nav|table|tr|td|th|h[1-6]|blockquote|strong|em|a)>/gi);
   return Boolean(paired && paired.length >= 2);
 }
 

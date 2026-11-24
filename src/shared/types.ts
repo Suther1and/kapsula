@@ -191,6 +191,7 @@ export interface VaultItem {
   aiStatus: AiStatus;
   aiConfidence: number | null;
   isPinned: boolean;
+  isMuted?: boolean;
   isArchived: boolean;
   isDemo: boolean;
   remindAt: number | null;
