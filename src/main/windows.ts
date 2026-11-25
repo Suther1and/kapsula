@@ -27,6 +27,11 @@ export class WindowManager {
   private hudShowPending = false;
   private hudContentProtection = false;
   private onHudHide?: () => void;
+  private lastVaultGlass: {
+    material: 'none' | 'mica' | 'acrylic';
+    enabled: boolean;
+    opaqueFallbackHex?: string;
+  } | null = null;
 
   constructor(
     private readonly preloadPath: string,
@@ -111,6 +116,13 @@ export class WindowManager {
     this.loadSurface(this.vault, 'vault');
     this.vault.once('ready-to-show', () => {
       this.vault?.show();
+      if (this.lastVaultGlass?.enabled && this.lastVaultGlass.material !== 'none') {
+        this.setVaultGlassMaterial(
+          this.lastVaultGlass.material,
+          true,
+          this.lastVaultGlass.opaqueFallbackHex
+        );
+      }
       if (!this.isQuitting && !this.hud && !this.hudWarmupTimer) {
         this.hudWarmupTimer = setTimeout(() => {
           this.hudWarmupTimer = null;
@@ -124,6 +136,17 @@ export class WindowManager {
         }, 1200);
         this.hudWarmupTimer.unref?.();
       }
+    });
+    this.vault.webContents.on('did-finish-load', () => {
+      if (this.vault && !this.vault.isDestroyed()) {
+        this.vault.webContents.send('window:focus-changed', this.vault.isFocused());
+      }
+    });
+    this.vault.on('focus', () => {
+      this.vault?.webContents.send('window:focus-changed', true);
+    });
+    this.vault.on('blur', () => {
+      this.vault?.webContents.send('window:focus-changed', false);
     });
     this.vault.on('enter-full-screen', () => {
       this.vault?.webContents.send('window:fullscreen-changed', true);
@@ -464,6 +487,7 @@ export class WindowManager {
     enabled: boolean,
     opaqueFallbackHex?: string
   ): void {
+    this.lastVaultGlass = { material, enabled, opaqueFallbackHex };
     if (!this.vault || this.vault.isDestroyed()) return;
     const win = this.vault as BrowserWindow & {
       setBackgroundMaterial?: (mat: 'auto' | 'none' | 'mica' | 'acrylic' | 'tabbed') => void;

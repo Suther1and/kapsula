@@ -13,7 +13,7 @@
   --k-bg-elevated: rgba(24, 24, 30, 0.96);
   --k-bg-hud: #131318;
   --k-bg-glass: rgba(18, 18, 22, 0.86);
-  --k-bg-backdrop: rgba(5, 6, 8, 0.68);
+  --k-bg-backdrop: rgba(6, 7, 10, 0.58);
 
   --k-ink-primary: #f4f4f6;
   --k-ink-secondary: #a2a2ad;
@@ -798,27 +798,43 @@ html.k-theme-switching *::after {
 }
 
 /* ==================== Opt-in Glassmorphism (`data-glass` !== "off") ==================== */
-/* Neutral smoky ambient haze ONLY when using UI-only glass (`data-glass-native="none"`).
-   Never uses global `--k-accent` so it never clashes with section accent colors.
-   When native OS translucency (Mica / Acrylic / macOS Vibrancy) is active, the real desktop
-   bleeds through and this artificial gradient is disabled completely. */
+/* Ambient optical light field giving subtle/frosted/liquid glass genuine depth & specular sheen.
+   Stays softly layered even when native OS translucency (Mica/Acrylic/Vibrancy) is active,
+   and smoothly deepens when a Windows DWM window loses focus so the background never flashes
+   to Windows' pale grey inactive fallback color. */
 .k-glass-mesh {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(64% 52% at 16% 12%, rgba(255, 255, 255, 0.045) 0%, transparent 70%),
-    radial-gradient(50% 46% at 86% 18%, rgba(255, 255, 255, 0.03) 0%, transparent 72%),
-    radial-gradient(56% 48% at 52% 94%, color-mix(in srgb, var(--k-bg-surface-2) 28%, transparent) 0%, transparent 74%);
-  opacity: 0.9;
+    radial-gradient(64% 52% at 14% 10%, rgba(255, 255, 255, 0.065) 0%, transparent 68%),
+    radial-gradient(52% 46% at 88% 16%, color-mix(in srgb, var(--k-accent) 10%, rgba(255, 255, 255, 0.04)) 0%, transparent 70%),
+    radial-gradient(58% 48% at 50% 96%, color-mix(in srgb, var(--k-bg-surface-2) 34%, transparent) 0%, transparent 72%);
+  opacity: 0.92;
+  transition: opacity 150ms var(--k-ease-out);
+}
+
+:root[data-glass="liquid"] .k-glass-mesh {
+  background:
+    radial-gradient(68% 54% at 10% 6%, rgba(255, 255, 255, 0.12) 0%, transparent 62%),
+    radial-gradient(56% 48% at 90% 12%, color-mix(in srgb, var(--k-accent) 20%, rgba(160, 195, 255, 0.1)) 0%, transparent 64%),
+    radial-gradient(58% 48% at 18% 92%, color-mix(in srgb, var(--k-accent) 9%, rgba(120, 150, 255, 0.08)) 0%, transparent 66%),
+    radial-gradient(62% 52% at 62% 98%, color-mix(in srgb, var(--k-bg-surface-3) 48%, transparent) 0%, transparent 70%);
 }
 
 :root[data-theme="light"] .k-glass-mesh {
   background:
-    radial-gradient(64% 52% at 16% 12%, rgba(15, 23, 42, 0.035) 0%, transparent 70%),
-    radial-gradient(50% 46% at 86% 18%, rgba(15, 23, 42, 0.025) 0%, transparent 72%),
-    radial-gradient(56% 48% at 52% 94%, rgba(255, 255, 255, 0.5) 0%, transparent 74%);
+    radial-gradient(64% 52% at 16% 12%, rgba(15, 23, 42, 0.04) 0%, transparent 70%),
+    radial-gradient(50% 46% at 86% 18%, color-mix(in srgb, var(--k-accent) 7%, transparent) 0%, transparent 72%),
+    radial-gradient(56% 48% at 52% 94%, rgba(255, 255, 255, 0.65) 0%, transparent 74%);
+}
+
+:root[data-theme="light"][data-glass="liquid"] .k-glass-mesh {
+  background:
+    radial-gradient(68% 54% at 14% 10%, rgba(255, 255, 255, 0.78) 0%, transparent 65%),
+    radial-gradient(56% 48% at 88% 16%, color-mix(in srgb, var(--k-accent) 12%, rgba(99, 102, 241, 0.07)) 0%, transparent 68%),
+    radial-gradient(60% 50% at 50% 96%, rgba(255, 255, 255, 0.82) 0%, transparent 72%);
 }
 
 :root[data-glass-native="mica"] body.k-surface-vault,
@@ -828,12 +844,35 @@ html.k-theme-switching *::after {
 
 :root[data-glass-native="mica"] .k-glass-mesh,
 :root[data-glass-native="acrylic"] .k-glass-mesh {
-  display: none !important;
+  opacity: 0.55;
+}
+
+:root[data-glass="liquid"][data-glass-native="mica"] .k-glass-mesh,
+:root[data-glass="liquid"][data-glass-native="acrylic"] .k-glass-mesh {
+  opacity: 0.78;
 }
 
 :root[data-glass-native="mica"] [data-testid="studio-workspace"],
 :root[data-glass-native="acrylic"] [data-testid="studio-workspace"] {
   background-color: var(--k-glass-canvas, transparent) !important;
+  transition: background-color 70ms var(--k-ease-out);
+}
+
+/* Windows 11 DWM drops Mica/Acrylic to flat grey on window blur; shield with our true theme canvas */
+:root[data-window-focused="false"][data-glass-native="mica"] [data-testid="studio-workspace"],
+:root[data-window-focused="false"][data-glass-native="acrylic"] [data-testid="studio-workspace"] {
+  background-color: var(--k-bg-canvas) !important;
+}
+
+:root[data-window-focused="false"][data-glass-native="mica"] .k-glass-mesh,
+:root[data-window-focused="false"][data-glass-native="acrylic"] .k-glass-mesh {
+  opacity: 0.95;
+}
+
+/* Deepen modal scrim slightly when native OS translucency is active so desktop noise never muddies blur */
+:root[data-theme="dark"][data-glass-native="mica"],
+:root[data-theme="dark"][data-glass-native="acrylic"] {
+  --k-bg-backdrop: rgba(6, 7, 10, 0.72);
 }
 
 :root[data-glass-native="mica"] [data-testid="studio-workspace"] main,
@@ -845,27 +884,107 @@ html.k-theme-switching *::after {
 :root[data-glass="frosted"] [data-testid="workspace-sidebar"],
 :root[data-glass="liquid"] [data-testid="workspace-sidebar"] {
   background-color: var(--k-glass-rail, var(--k-bg-rail));
-  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
-  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
+  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
+  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
+}
+
+:root[data-glass="liquid"] [data-testid="workspace-sidebar"] {
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    transparent 26%,
+    rgba(0, 0, 0, 0.1) 100%
+  );
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.09);
 }
 
 :root[data-glass="subtle"] [data-testid="studio-workspace"] header,
 :root[data-glass="frosted"] [data-testid="studio-workspace"] header,
 :root[data-glass="liquid"] [data-testid="studio-workspace"] header {
   background-color: var(--k-glass-header, var(--k-bg-canvas));
-  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
-  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
+  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
+  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
+}
+
+:root[data-glass="liquid"] [data-testid="studio-workspace"] header {
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.09);
 }
 
 :root[data-glass="subtle"] .k-card-surface,
 :root[data-glass="frosted"] .k-card-surface,
 :root[data-glass="liquid"] .k-card-surface {
   background: var(--k-glass-surface, var(--k-bg-surface-1));
-  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
-  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 130%));
+  backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
+  -webkit-backdrop-filter: blur(var(--k-glass-blur, 14px)) saturate(var(--k-glass-sat, 135%));
   box-shadow:
     inset 0 1px 0 var(--k-glass-specular, transparent),
     var(--k-shadow-card);
+}
+
+:root[data-glass="liquid"] .k-card-surface {
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--k-glass-surface, var(--k-bg-surface-1)) 82%, rgba(255, 255, 255, 0.18)) 0%,
+    color-mix(in srgb, var(--k-glass-surface, var(--k-bg-surface-1)) 94%, rgba(255, 255, 255, 0.05)) 48%,
+    color-mix(in srgb, var(--k-glass-surface, var(--k-bg-surface-1)) 92%, rgba(0, 0, 0, 0.12)) 100%
+  );
+  border-color: color-mix(in srgb, var(--k-ink-primary) 17%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--k-glass-specular, rgba(255, 255, 255, 0.25)),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 12px 30px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Under native OS translucency (#00000000 DWM swap-chain), Chromium's backdrop-filter readback
+   degrades/flickers over alpha pixels; smoothly GPU-blur the workspace shell directly instead. */
+:root[data-glass-native="mica"] [data-testid="workspace-sidebar"],
+:root[data-glass-native="acrylic"] [data-testid="workspace-sidebar"],
+:root[data-glass-native="mica"] [data-testid="workspace-main-column"],
+:root[data-glass-native="acrylic"] [data-testid="workspace-main-column"] {
+  transition: filter 170ms var(--k-ease-out);
+}
+
+:root[data-glass-native="mica"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-sidebar"],
+:root[data-glass-native="acrylic"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-sidebar"],
+:root[data-glass-native="mica"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-main-column"],
+:root[data-glass-native="acrylic"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-main-column"] {
+  filter: blur(8px);
+}
+
+:root[data-reduced-motion="true"][data-glass-native="mica"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-sidebar"],
+:root[data-reduced-motion="true"][data-glass-native="acrylic"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-sidebar"],
+:root[data-reduced-motion="true"][data-glass-native="mica"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-main-column"],
+:root[data-reduced-motion="true"][data-glass-native="acrylic"] [data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-main-column"] {
+  filter: blur(4px);
+}
+
+:root[data-glass-native="mica"] .k-modal-backdrop,
+:root[data-glass-native="acrylic"] .k-modal-backdrop {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Pause nested backdrop-filter passes beneath an open modal so Chromium's modal backdrop-blur stays 100% crisp & flicker-free */
+[data-testid="studio-workspace"][data-modal-open="true"] .k-card-surface,
+[data-testid="studio-workspace"][data-modal-open="true"] [data-testid="workspace-sidebar"],
+[data-testid="studio-workspace"][data-modal-open="true"] header {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-theme="light"][data-glass="liquid"] .k-card-surface {
+  background: linear-gradient(
+    158deg,
+    rgba(255, 255, 255, 0.78) 0%,
+    rgba(255, 255, 255, 0.56) 54%,
+    rgba(244, 246, 250, 0.62) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.94),
+    0 8px 24px -10px rgba(15, 23, 42, 0.14),
+    0 0 0 0.5px rgba(15, 23, 42, 0.08);
 }
 
 :root[data-reduced-motion="true"][data-glass="liquid"] .k-card-surface,

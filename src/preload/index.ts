@@ -296,6 +296,7 @@ export interface KapsulaBridgeApi {
   onVaultBatchSynced(cb: () => void): () => void;
   onHudOpened(cb: () => void): () => void;
   onWindowFullScreenChanged(cb: (isFullScreen: boolean) => void): () => void;
+  onWindowFocusChanged(cb: (focused: boolean) => void): () => void;
   onOpenSettings(cb: () => void): () => void;
   onFocusSearch(cb: () => void): () => void;
   onUpdaterStateChanged(cb: (state: AppUpdaterState) => void): () => void;
@@ -485,6 +486,7 @@ const api: KapsulaBridgeApi = {
   onVaultBatchSynced: (cb) => subscribe('vault:batch-synced', cb),
   onHudOpened: (cb) => subscribe('hud:opened', cb),
   onWindowFullScreenChanged: (cb) => subscribe('window:fullscreen-changed', cb),
+  onWindowFocusChanged: (cb) => subscribe('window:focus-changed', cb),
   onOpenSettings: (cb) => subscribe('vault:open-settings', cb),
   onFocusSearch: (cb) => subscribe('vault:focus-search', cb),
   onUpdaterStateChanged: (cb) => subscribe('updater:state-changed', cb),

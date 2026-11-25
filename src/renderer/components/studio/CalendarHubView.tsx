@@ -263,25 +263,35 @@ export const CalendarHubView: React.FC<CalendarHubViewProps> = ({
     }
   }, [initialEvents]);
 
-  const loadCalendar = useCallback(async () => {
-    try {
-      const from = new Date(cursorDate.getFullYear(), cursorDate.getMonth() - 1, 1).getTime();
-      const to = new Date(cursorDate.getFullYear(), cursorDate.getMonth() + 2, 15).getTime();
-      const [evList, status] = await Promise.all([
-        mode === 'agenda'
-          ? window.kapsula.listCalendarEvents()
-          : window.kapsula.listCalendarEvents({ startAt: from, endAt: to }),
-        window.kapsula.getCalendarStatus(),
-      ]);
-      setEvents(evList);
-      setSyncStatus(status);
-    } catch {
-      // ignore transient errors
-    }
-  }, [cursorDate, mode]);
+  const initialEventsHydratedRef = useRef(Boolean(initialEvents));
+  const loadCalendar = useCallback(
+    async (opts?: { skipEventsIfInitial?: boolean }) => {
+      try {
+        if (opts?.skipEventsIfInitial && initialEventsHydratedRef.current) {
+          initialEventsHydratedRef.current = false;
+          const status = await window.kapsula.getCalendarStatus();
+          setSyncStatus(status);
+          return;
+        }
+        const from = new Date(cursorDate.getFullYear(), cursorDate.getMonth() - 1, 1).getTime();
+        const to = new Date(cursorDate.getFullYear(), cursorDate.getMonth() + 2, 15).getTime();
+        const [evList, status] = await Promise.all([
+          mode === 'agenda'
+            ? window.kapsula.listCalendarEvents()
+            : window.kapsula.listCalendarEvents({ startAt: from, endAt: to }),
+          window.kapsula.getCalendarStatus(),
+        ]);
+        setEvents(evList);
+        setSyncStatus(status);
+      } catch {
+        // ignore transient errors
+      }
+    },
+    [cursorDate, mode]
+  );
 
   useEffect(() => {
-    void loadCalendar();
+    void loadCalendar({ skipEventsIfInitial: true });
   }, [loadCalendar]);
 
   useEffect(() => {

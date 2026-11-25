@@ -40,6 +40,26 @@ export const App: React.FC = () => {
   }, [surface]);
 
   useEffect(() => {
+    const syncFocusAttr = (focused: boolean) => {
+      document.documentElement.setAttribute('data-window-focused', focused ? 'true' : 'false');
+    };
+    syncFocusAttr(typeof document !== 'undefined' ? document.hasFocus() : true);
+    const onFocus = () => syncFocusAttr(true);
+    const onBlur = () => syncFocusAttr(false);
+    const onVis = () => syncFocusAttr(!document.hidden && document.hasFocus());
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVis);
+    const unsubNativeFocus = window.kapsula?.onWindowFocusChanged?.(syncFocusAttr);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVis);
+      unsubNativeFocus?.();
+    };
+  }, []);
+
+  useEffect(() => {
     window.kapsula.getSettings().then(setSettings).catch(() => {});
     return window.kapsula.onSettingsUpdated(setSettings);
   }, []);

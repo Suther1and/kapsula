@@ -31,6 +31,7 @@ export type KapsulaEventName =
   | 'onVaultBatchSynced'
   | 'onHudOpened'
   | 'onWindowFullScreenChanged'
+  | 'onWindowFocusChanged'
   | 'onOpenSettings'
   | 'onFocusSearch'
   | 'onUpdaterStateChanged';
@@ -711,6 +712,7 @@ export function createMockKapsulaApi(overrides: Partial<KapsulaBridgeApi> = {}) 
     onVaultBatchSynced: subscribe('onVaultBatchSynced'),
     onHudOpened: subscribe('onHudOpened'),
     onWindowFullScreenChanged: subscribe('onWindowFullScreenChanged'),
+    onWindowFocusChanged: subscribe('onWindowFocusChanged'),
     onOpenSettings: subscribe('onOpenSettings'),
     onFocusSearch: subscribe('onFocusSearch'),
     onUpdaterStateChanged: subscribe('onUpdaterStateChanged'),

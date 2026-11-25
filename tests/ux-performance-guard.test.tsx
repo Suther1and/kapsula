@@ -90,19 +90,43 @@ describe('UX-First Speed & Visual Fidelity Guards (v1.1.4)', () => {
     );
   });
 
-  it('preserves smooth blur transitions, immutable media caching, natural shot aspect ratios, and GPU BorderTrail', () => {
+  it('preserves flicker-free GPU backdrop blur, native theme/focus glass stability, instant core hubs, immutable media caching, natural shot aspect ratios, and GPU BorderTrail', () => {
     const mainSrc = fs.readFileSync(path.join(ROOT, 'src/main/index.ts'), 'utf8');
     expect(mainSrc).toContain('private, max-age=31536000, immutable');
     expect(mainSrc).not.toContain("const cacheHeader = 'no-store';");
+    expect(mainSrc).toContain('nativeTheme.themeSource');
+
+    const windowsSrc = fs.readFileSync(path.join(ROOT, 'src/main/windows.ts'), 'utf8');
+    expect(windowsSrc).toContain('window:focus-changed');
+
+    const appSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/App.tsx'), 'utf8');
+    expect(appSrc).toContain('data-window-focused');
+    expect(appSrc).toContain('onWindowFocusChanged');
+
+    const tokensSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/styles/tokens.css'), 'utf8');
+    expect(tokensSrc).toContain('data-window-focused="false"');
+    expect(tokensSrc).not.toMatch(/data-glass-native="acrylic"\]\s+\.k-glass-mesh\s*\{\s*display:\s*none/);
 
     const studioSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/surfaces/StudioWorkspace.tsx'), 'utf8');
-    expect(studioSrc).toContain("backdropFilter: 'blur(0px)'");
-    expect(studioSrc).toContain("backdropFilter: 'blur(6px)'");
+    // Core hubs & first-card modal must be statically imported (zero Suspense blank flash on first click)
+    expect(studioSrc).toContain("import { NoteStudio, warmNoteStudioRuntime } from '../components/studio/NoteStudio'");
+    expect(studioSrc).toContain("import { NotesHubView } from '../components/studio/NotesHubView'");
+    expect(studioSrc).toContain("import { MediaHubView } from '../components/studio/MediaHubView'");
+    expect(studioSrc).toContain("import { TasksHubView } from '../components/studio/TasksHubView'");
+    expect(studioSrc).toContain("import { CalendarHubView } from '../components/studio/CalendarHubView'");
+    expect(studioSrc).toContain("import { QuickLookModal } from '../components/ui/QuickLookModal'");
     expect(studioSrc).toContain('useMountOnce');
+    // Flicker-free GPU opacity backdrop (never per-frame backdropFilter blur(0px) or CSS-var backgroundColor animation)
+    expect(studioSrc).toContain('backdrop-blur-[10px]');
+    expect(studioSrc).not.toContain("backdropFilter: 'blur(0px)'");
 
     const quickLookSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/components/ui/QuickLookModal.tsx'), 'utf8');
-    expect(quickLookSrc).toContain("backdropFilter: 'blur(0px)'");
-    expect(quickLookSrc).toContain("backdropFilter: 'blur(6px)'");
+    expect(quickLookSrc).toContain('backdrop-blur-[10px]');
+    expect(quickLookSrc).not.toContain("backdropFilter: 'blur(0px)'");
+
+    const noteStudioSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/components/studio/NoteStudio.tsx'), 'utf8');
+    expect(noteStudioSrc).toContain('immediatelyRender: true');
+    expect(noteStudioSrc).toContain('new Editor(');
 
     const shotSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/components/cards/VisualShotCard.tsx'), 'utf8');
     expect(shotSrc).not.toContain('aspect-[16/10]');

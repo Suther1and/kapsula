@@ -703,31 +703,31 @@ export function computeThemeTokens(
       glassPreset === 'subtle'
         ? {
             blur: '14px',
-            sat: '130%',
-            canvasA: mode === 'dark' ? 0.78 : 0.82,
-            surfA: mode === 'dark' ? 0.76 : 0.78,
-            railA: mode === 'dark' ? 0.64 : 0.68,
-            headA: mode === 'dark' ? 0.66 : 0.7,
-            specA: mode === 'dark' ? 0.08 : 0.65,
+            sat: '135%',
+            canvasA: mode === 'dark' ? 0.9 : 0.86,
+            surfA: mode === 'dark' ? 0.82 : 0.8,
+            railA: mode === 'dark' ? 0.76 : 0.72,
+            headA: mode === 'dark' ? 0.78 : 0.74,
+            specA: mode === 'dark' ? 0.11 : 0.65,
           }
         : glassPreset === 'frosted'
           ? {
               blur: '22px',
-              sat: '145%',
-              canvasA: mode === 'dark' ? 0.56 : 0.64,
-              surfA: mode === 'dark' ? 0.66 : 0.68,
-              railA: mode === 'dark' ? 0.48 : 0.54,
-              headA: mode === 'dark' ? 0.5 : 0.56,
-              specA: mode === 'dark' ? 0.12 : 0.8,
+              sat: '155%',
+              canvasA: mode === 'dark' ? 0.84 : 0.74,
+              surfA: mode === 'dark' ? 0.72 : 0.7,
+              railA: mode === 'dark' ? 0.66 : 0.6,
+              headA: mode === 'dark' ? 0.68 : 0.62,
+              specA: mode === 'dark' ? 0.16 : 0.82,
             }
           : {
               blur: '30px',
-              sat: '165%',
-              canvasA: mode === 'dark' ? 0.36 : 0.46,
-              surfA: mode === 'dark' ? 0.54 : 0.56,
-              railA: mode === 'dark' ? 0.34 : 0.4,
-              headA: mode === 'dark' ? 0.36 : 0.42,
-              specA: mode === 'dark' ? 0.16 : 0.9,
+              sat: '185%',
+              canvasA: mode === 'dark' ? 0.78 : 0.62,
+              surfA: mode === 'dark' ? 0.62 : 0.56,
+              railA: mode === 'dark' ? 0.58 : 0.48,
+              headA: mode === 'dark' ? 0.6 : 0.5,
+              specA: mode === 'dark' ? 0.25 : 0.94,
             };
     cssVars['--k-glass-blur'] = profile.blur;
     cssVars['--k-glass-sat'] = profile.sat;

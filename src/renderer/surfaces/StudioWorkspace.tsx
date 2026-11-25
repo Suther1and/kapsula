@@ -105,35 +105,15 @@ import { HoverIconProvider, LiveIcon } from '../components/icons/LiveIcon';
 import type { TasksViewMode } from '../components/studio/TasksHubView';
 import type { SettingsTab } from '../components/modals/SettingsModal';
 
-const QuickLookModal = lazy(() =>
-  import('../components/ui/QuickLookModal').then((m) => ({ default: m.QuickLookModal }))
-);
-const ShotLightbox = lazy(() =>
-  import('../components/cards/ShotLightbox').then((m) => ({ default: m.ShotLightbox }))
-);
-const NoteStudio = lazy(() =>
-  import('../components/studio/NoteStudio').then((m) => ({ default: m.NoteStudio }))
-);
-const SecretStudioSheet = lazy(() =>
-  import('../components/studio/SecretStudioSheet').then((m) => ({ default: m.SecretStudioSheet }))
-);
-const TasksHubView = lazy(() =>
-  import('../components/studio/TasksHubView').then((m) => ({ default: m.TasksHubView }))
-);
-const CalendarHubView = lazy(() =>
-  import('../components/studio/CalendarHubView').then((m) => ({ default: m.CalendarHubView }))
-);
-const ReferenceBoardCanvas = lazy(() =>
-  import('../components/studio/ReferenceBoardCanvas').then((m) => ({
-    default: m.ReferenceBoardCanvas,
-  }))
-);
-const NotesHubView = lazy(() =>
-  import('../components/studio/NotesHubView').then((m) => ({ default: m.NotesHubView }))
-);
-const MediaHubView = lazy(() =>
-  import('../components/studio/MediaHubView').then((m) => ({ default: m.MediaHubView }))
-);
+import { QuickLookModal } from '../components/ui/QuickLookModal';
+import { ShotLightbox } from '../components/cards/ShotLightbox';
+import { NoteStudio, warmNoteStudioRuntime } from '../components/studio/NoteStudio';
+import { SecretStudioSheet } from '../components/studio/SecretStudioSheet';
+import { TasksHubView } from '../components/studio/TasksHubView';
+import { CalendarHubView } from '../components/studio/CalendarHubView';
+import { ReferenceBoardCanvas } from '../components/studio/ReferenceBoardCanvas';
+import { NotesHubView } from '../components/studio/NotesHubView';
+import { MediaHubView } from '../components/studio/MediaHubView';
 const MemoryAssistantDrawer = lazy(() =>
   import('../components/modals/MemoryAssistantDrawer').then((m) => ({
     default: m.MemoryAssistantDrawer,
@@ -853,37 +833,30 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sidebarRailSnapping, setSidebarRailSnapping] = useState(false);
   const sidebarRailSnapTimerRef = useRef<number | null>(null);
 
-  // Pre-warm NoteStudio + core modal & hub chunks on idle so first opens have zero lag
+  // Pre-warm TipTap/ProseMirror JIT + lazy secondary modals on idle so first opens have zero lag
   useEffect(() => {
     let cancelled = false;
     const warm = () => {
       if (cancelled) return;
-      void import('../components/studio/NoteStudio')
-        .then((mod) => {
-          if (!cancelled) mod.warmNoteStudioRuntime?.();
-        })
-        .catch(() => {});
-      void import('../components/ui/QuickLookModal').catch(() => {});
+      warmNoteStudioRuntime();
       void import('../components/modals/SettingsModal').catch(() => {});
       void import('../components/modals/NewSecretModal').catch(() => {});
-      void import('../components/studio/SecretStudioSheet').catch(() => {});
-      void import('../components/studio/NotesHubView').catch(() => {});
-      void import('../components/studio/MediaHubView').catch(() => {});
-      void import('../components/studio/TasksHubView').catch(() => {});
-      void import('../components/studio/CalendarHubView').catch(() => {});
+      void import('../components/modals/MemoryAssistantDrawer').catch(() => {});
+      void import('../components/modals/SmartTriageModal').catch(() => {});
+      void import('../components/modals/SynthesizeNotesModal').catch(() => {});
     };
     const w = window as unknown as {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
     };
     if (typeof w.requestIdleCallback === 'function') {
-      const id = w.requestIdleCallback(warm, { timeout: 900 });
+      const id = w.requestIdleCallback(warm, { timeout: 450 });
       return () => {
         cancelled = true;
         w.cancelIdleCallback?.(id);
       };
     }
-    const timer = window.setTimeout(warm, 450);
+    const timer = window.setTimeout(warm, 220);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -3511,10 +3484,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   );
 
   const glassEnabled = (appearanceConfig.glassPreset ?? 'off') !== 'off';
+  const hasBlockingModalBackdrop =
+    isNoteDocumentOpen ||
+    isSecretSheetOpen ||
+    Boolean(quickLookItem) ||
+    settingsOpen ||
+    newSecretOpen ||
+    unlockOpen ||
+    triageOpen ||
+    synthesizeOpen ||
+    Boolean(sectionEditor);
 
   return (
     <div
       data-testid="studio-workspace"
+      data-modal-open={hasBlockingModalBackdrop ? 'true' : undefined}
       className="relative h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
     >
       {glassEnabled ? <div aria-hidden="true" className="k-glass-mesh" /> : null}
@@ -4387,7 +4371,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       </motion.aside>
 
       {/* Right Main Column: Seamless Slim Chrome + Smoothly Reflowing Workspace */}
-      <div className="relative z-[1] flex-1 min-w-0 h-full flex flex-col overflow-hidden">
+      <div
+        data-testid="workspace-main-column"
+        className="relative z-[1] flex-1 min-w-0 h-full flex flex-col overflow-hidden"
+      >
         {/* Lightweight Integrated Top Canvas Bar (46px, transparent glass over canvas, zero duplicate icons/titles) */}
         <header className="h-[46px] shrink-0 grid grid-cols-[minmax(112px,1fr)_minmax(220px,400px)_minmax(max-content,1fr)] items-center px-3.5 gap-3 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)] k-drag-region">
           {/* Left: Expand sidebar (smoothly revealed when collapsed) + Clean Breadcrumb Title */}
@@ -4614,12 +4601,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                 className="flex-1 min-h-0 h-full flex overflow-hidden"
               >
-                <Suspense fallback={null}>
-                  {renderNotesHubView({
-                    viewKey: 'nav-notes-all',
-                    scopedItems: items,
-                  })}
-                </Suspense>
+                {renderNotesHubView({
+                  viewKey: 'nav-notes-all',
+                  scopedItems: items,
+                })}
               </motion.div>
             ) : nav.type === 'media' ? (
               <motion.div
@@ -4630,25 +4615,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className="max-w-[1360px] mx-auto"
               >
-                <Suspense fallback={null}>
-                  <MediaHubView
-                    items={items}
-                    orbits={orbits}
-                    focusBoards={boards}
-                    searchQuery={searchQuery}
-                    serverSearchIds={serverSearchIds}
-                    soundEnabled={soundEnabled}
-                    onOpenStudio={handleOpenItem}
-                    onOpenLightbox={handleOpenShotLightbox}
-                    onQuickLook={handleQuickLook}
-                    onHoverItem={handleHoverItem}
-                    onTogglePin={handleTogglePin}
-                    onMoveToOrbit={handleMoveToOrbit}
-                    onMoveToBoard={handleMoveToBoard}
-                    onDelete={handleDeleteItem}
-                    onUpdateCanvasPosition={handleUpdateCanvasPosition}
-                  />
-                </Suspense>
+                <MediaHubView
+                  items={items}
+                  orbits={orbits}
+                  focusBoards={boards}
+                  searchQuery={searchQuery}
+                  serverSearchIds={serverSearchIds}
+                  soundEnabled={soundEnabled}
+                  onOpenStudio={handleOpenItem}
+                  onOpenLightbox={handleOpenShotLightbox}
+                  onQuickLook={handleQuickLook}
+                  onHoverItem={handleHoverItem}
+                  onTogglePin={handleTogglePin}
+                  onMoveToOrbit={handleMoveToOrbit}
+                  onMoveToBoard={handleMoveToBoard}
+                  onDelete={handleDeleteItem}
+                  onUpdateCanvasPosition={handleUpdateCanvasPosition}
+                />
               </motion.div>
             ) : nav.type === 'tasks' ? (
               <motion.div
@@ -4659,50 +4642,48 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className={`${tasksViewMode === 'board' ? 'max-w-[1520px]' : 'max-w-[1100px]'} mx-auto transition-[max-width] duration-180`}
               >
-                <Suspense fallback={null}>
-                  <TasksHubView
-                    tasks={tasks}
-                    orbits={orbits}
-                    viewMode={tasksViewMode}
-                    initialShowColumnIcons={settings.showBoardColumnIcons}
-                    onViewModeChange={setTasksViewMode}
-                    onToggleTask={handleToggleVaultTask}
-                    onOpenItem={handleOpenItemById}
-                    onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
-                      if (updatedItems && updatedItems.length > 0) {
-                        applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
-                      }
-                      if (deletedItemIds && deletedItemIds.length > 0) {
-                        applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
-                      }
-                      if (nextTasks) {
-                        setTasks(applyPendingTaskTogglesToTasks(nextTasks));
-                        return;
-                      }
-                      void window.kapsula
-                        .listTasks()
-                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                        .catch(() => {});
-                    }}
-                    onCreateTask={async (input: CreateTaskInput) => {
-                      await window.kapsula.createTask(input);
-                      void window.kapsula
-                        .listTasks()
-                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                        .catch(() => {});
-                    }}
-                    onAddQuickTask={async (text, columnId) => {
-                      await window.kapsula.createTask({
-                        text,
-                        columnId,
-                      });
-                      void window.kapsula
-                        .listTasks()
-                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                        .catch(() => {});
-                    }}
-                  />
-                </Suspense>
+                <TasksHubView
+                  tasks={tasks}
+                  orbits={orbits}
+                  viewMode={tasksViewMode}
+                  initialShowColumnIcons={settings.showBoardColumnIcons}
+                  onViewModeChange={setTasksViewMode}
+                  onToggleTask={handleToggleVaultTask}
+                  onOpenItem={handleOpenItemById}
+                  onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
+                    if (updatedItems && updatedItems.length > 0) {
+                      applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
+                    }
+                    if (deletedItemIds && deletedItemIds.length > 0) {
+                      applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
+                    }
+                    if (nextTasks) {
+                      setTasks(applyPendingTaskTogglesToTasks(nextTasks));
+                      return;
+                    }
+                    void window.kapsula
+                      .listTasks()
+                      .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                      .catch(() => {});
+                  }}
+                  onCreateTask={async (input: CreateTaskInput) => {
+                    await window.kapsula.createTask(input);
+                    void window.kapsula
+                      .listTasks()
+                      .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                      .catch(() => {});
+                  }}
+                  onAddQuickTask={async (text, columnId) => {
+                    await window.kapsula.createTask({
+                      text,
+                      columnId,
+                    });
+                    void window.kapsula
+                      .listTasks()
+                      .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                      .catch(() => {});
+                  }}
+                />
               </motion.div>
             ) : nav.type === 'calendar' ? (
               <motion.div
@@ -4713,27 +4694,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 style={{ paddingLeft: 'var(--k-page-px)', paddingRight: 'var(--k-page-px)', paddingTop: 'var(--k-page-py)', paddingBottom: 'var(--k-page-py)' }}
                 className="max-w-[1260px] mx-auto"
               >
-                <Suspense fallback={null}>
-                  <CalendarHubView
-                    tasks={tasks}
-                    items={items}
-                    initialEvents={calendarEvents}
-                    focusEventId={focusCalendarEventId}
-                    openCreateTrigger={calendarCreateTrigger}
-                    onFocusEventHandled={() => setFocusCalendarEventId(null)}
-                    onOpenItem={handleOpenItemById}
-                    onOpenIntegrations={() => {
-                      setSettingsInitialTab('integrations');
-                      setSettingsOpen(true);
-                    }}
-                    onTasksChanged={() => {
-                      void window.kapsula
-                        .listTasks()
-                        .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                        .catch(() => {});
-                    }}
-                  />
-                </Suspense>
+                <CalendarHubView
+                  tasks={tasks}
+                  items={items}
+                  initialEvents={calendarEvents}
+                  focusEventId={focusCalendarEventId}
+                  openCreateTrigger={calendarCreateTrigger}
+                  onFocusEventHandled={() => setFocusCalendarEventId(null)}
+                  onOpenItem={handleOpenItemById}
+                  onOpenIntegrations={() => {
+                    setSettingsInitialTab('integrations');
+                    setSettingsOpen(true);
+                  }}
+                  onTasksChanged={() => {
+                    void window.kapsula
+                      .listTasks()
+                      .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                      .catch(() => {});
+                  }}
+                />
               </motion.div>
             ) : isInlineNotesMode ? (
               <div className="h-full min-h-0 flex flex-col overflow-hidden">
@@ -4758,19 +4737,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   transition={{ duration: 0.12, ease: [0.23, 1, 0.32, 1] }}
                   className="flex-1 min-h-0 flex overflow-hidden"
                 >
-                  <Suspense fallback={null}>
-                    {renderNotesHubView({
-                      viewKey:
-                        nav.type === 'orbit'
-                          ? `inline-notes-orbit-${nav.orbitId}`
-                          : nav.type === 'board'
-                            ? `inline-notes-board-${nav.boardId}`
-                            : 'inline-notes-flow',
-                      scopedItems: inlineNotesItems,
-                      defaultOrbitId: nav.type === 'orbit' ? nav.orbitId : undefined,
-                      defaultFocusBoardId: nav.type === 'board' ? nav.boardId : null,
-                    })}
-                  </Suspense>
+                  {renderNotesHubView({
+                    viewKey:
+                      nav.type === 'orbit'
+                        ? `inline-notes-orbit-${nav.orbitId}`
+                        : nav.type === 'board'
+                          ? `inline-notes-board-${nav.boardId}`
+                          : 'inline-notes-flow',
+                    scopedItems: inlineNotesItems,
+                    defaultOrbitId: nav.type === 'orbit' ? nav.orbitId : undefined,
+                    defaultFocusBoardId: nav.type === 'board' ? nav.boardId : null,
+                  })}
                 </motion.div>
               </div>
             ) : isInlineTasksMode ? (
@@ -4803,58 +4780,56 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     }}
                     className={`${tasksViewMode === 'board' ? 'max-w-[1520px]' : 'max-w-[1100px]'} mx-auto transition-[max-width] duration-180`}
                   >
-                    <Suspense fallback={null}>
-                      <TasksHubView
-                        tasks={tasks}
-                        orbits={orbits}
-                        scopedOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
-                        scopedBoardId={nav.type === 'board' ? nav.boardId : null}
-                        viewMode={tasksViewMode}
-                        initialShowColumnIcons={settings.showBoardColumnIcons}
-                        onViewModeChange={setTasksViewMode}
-                        onToggleTask={handleToggleVaultTask}
-                        onOpenItem={handleOpenItemById}
-                        onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
-                          if (updatedItems && updatedItems.length > 0) {
-                            applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
-                          }
-                          if (deletedItemIds && deletedItemIds.length > 0) {
-                            applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
-                          }
-                          if (nextTasks) {
-                            setTasks(applyPendingTaskTogglesToTasks(nextTasks));
-                            return;
-                          }
-                          void window.kapsula
-                            .listTasks()
-                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                            .catch(() => {});
-                        }}
-                        onCreateTask={async (input: CreateTaskInput) => {
-                          await window.kapsula.createTask({
-                            ...input,
-                            orbit: nav.type === 'orbit' ? nav.orbitId : input.orbit,
-                            focusBoardId: nav.type === 'board' ? nav.boardId : input.focusBoardId,
-                          });
-                          void window.kapsula
-                            .listTasks()
-                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                            .catch(() => {});
-                        }}
-                        onAddQuickTask={async (text, columnId) => {
-                          await window.kapsula.createTask({
-                            text,
-                            columnId,
-                            orbit: nav.type === 'orbit' ? nav.orbitId : '',
-                            focusBoardId: nav.type === 'board' ? nav.boardId : null,
-                          });
-                          void window.kapsula
-                            .listTasks()
-                            .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
-                            .catch(() => {});
-                        }}
-                      />
-                    </Suspense>
+                    <TasksHubView
+                      tasks={tasks}
+                      orbits={orbits}
+                      scopedOrbitId={nav.type === 'orbit' ? nav.orbitId : null}
+                      scopedBoardId={nav.type === 'board' ? nav.boardId : null}
+                      viewMode={tasksViewMode}
+                      initialShowColumnIcons={settings.showBoardColumnIcons}
+                      onViewModeChange={setTasksViewMode}
+                      onToggleTask={handleToggleVaultTask}
+                      onOpenItem={handleOpenItemById}
+                      onTasksChanged={(nextTasks, updatedItems, deletedItemIds) => {
+                        if (updatedItems && updatedItems.length > 0) {
+                          applyBatchUpsertedRef.current?.(updatedItems, { skipTaskRefresh: true });
+                        }
+                        if (deletedItemIds && deletedItemIds.length > 0) {
+                          applyBatchDeletedRef.current?.(deletedItemIds, { skipTaskRefresh: true });
+                        }
+                        if (nextTasks) {
+                          setTasks(applyPendingTaskTogglesToTasks(nextTasks));
+                          return;
+                        }
+                        void window.kapsula
+                          .listTasks()
+                          .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                          .catch(() => {});
+                      }}
+                      onCreateTask={async (input: CreateTaskInput) => {
+                        await window.kapsula.createTask({
+                          ...input,
+                          orbit: nav.type === 'orbit' ? nav.orbitId : input.orbit,
+                          focusBoardId: nav.type === 'board' ? nav.boardId : input.focusBoardId,
+                        });
+                        void window.kapsula
+                          .listTasks()
+                          .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                          .catch(() => {});
+                      }}
+                      onAddQuickTask={async (text, columnId) => {
+                        await window.kapsula.createTask({
+                          text,
+                          columnId,
+                          orbit: nav.type === 'orbit' ? nav.orbitId : '',
+                          focusBoardId: nav.type === 'board' ? nav.boardId : null,
+                        });
+                        void window.kapsula
+                          .listTasks()
+                          .then((rows) => setTasks(applyPendingTaskTogglesToTasks(rows)))
+                          .catch(() => {});
+                      }}
+                    />
                   </motion.div>
                 </div>
               </div>
@@ -5192,30 +5167,28 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     ))}
                   </div>
                 ) : effectiveLayoutMode === 'board' && showFeedToolbar ? (
-                  <Suspense fallback={null}>
-                    <ReferenceBoardCanvas
-                      boardKey={nav.type === 'board' ? nav.boardId : nav.type === 'orbit' ? `orbit-${nav.orbitId}` : 'flow'}
-                      items={visibleItems}
-                      orbits={orbits}
-                      focusBoards={boards}
-                      onOpenItem={handleOpenItem}
-                      onQuickLook={setQuickLookItem}
-                      onUpdatePosition={async (itemId, x, y) => {
-                        await window.kapsula.updateItem(itemId, { canvasX: x, canvasY: y });
-                      }}
-                      onUpdateSize={async (itemId, w) => {
-                        await window.kapsula.updateItem(itemId, { canvasW: w });
-                      }}
-                      onUpdateLinks={async (itemId, linksOut) => {
-                        await window.kapsula.updateItem(itemId, { linksOut });
-                      }}
-                      onTogglePin={handleTogglePin}
-                      onMoveToOrbit={handleMoveToOrbit}
-                      onMoveToBoard={handleMoveToBoard}
-                      onDelete={handleDeleteItem}
-                      onCreateBoardNote={handleOpenBlankDraft}
-                    />
-                  </Suspense>
+                  <ReferenceBoardCanvas
+                    boardKey={nav.type === 'board' ? nav.boardId : nav.type === 'orbit' ? `orbit-${nav.orbitId}` : 'flow'}
+                    items={visibleItems}
+                    orbits={orbits}
+                    focusBoards={boards}
+                    onOpenItem={handleOpenItem}
+                    onQuickLook={setQuickLookItem}
+                    onUpdatePosition={async (itemId, x, y) => {
+                      await window.kapsula.updateItem(itemId, { canvasX: x, canvasY: y });
+                    }}
+                    onUpdateSize={async (itemId, w) => {
+                      await window.kapsula.updateItem(itemId, { canvasW: w });
+                    }}
+                    onUpdateLinks={async (itemId, linksOut) => {
+                      await window.kapsula.updateItem(itemId, { linksOut });
+                    }}
+                    onTogglePin={handleTogglePin}
+                    onMoveToOrbit={handleMoveToOrbit}
+                    onMoveToBoard={handleMoveToBoard}
+                    onDelete={handleDeleteItem}
+                    onCreateBoardNote={handleOpenBlankDraft}
+                  />
                 ) : visibleItems.length === 0 ? (
                   <div key="feed-empty" className="py-16 px-6 text-center rounded-[16px] border border-dashed border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)]/50 space-y-3">
                     <div className="w-11 h-11 mx-auto rounded-[12px] bg-[var(--k-bg-surface-2)] flex items-center justify-center text-[var(--k-ink-muted)]">
@@ -5808,33 +5781,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               <motion.div
                 data-testid="studio-document-backdrop"
                 onClick={closeStudioCleanly}
-                initial={
-                  prefersReduced
-                    ? { opacity: 0 }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                      }
-                }
-                animate={
-                  prefersReduced
-                    ? { opacity: 1 }
-                    : {
-                        backgroundColor: 'var(--k-bg-backdrop)',
-                        backdropFilter: 'blur(6px)',
-                        transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
-                      }
-                }
-                exit={
-                  prefersReduced
-                    ? { opacity: 0, transition: { duration: 0.12 } }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                        transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] },
-                      }
-                }
-                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  transition: prefersReduced
+                    ? { duration: 0.1 }
+                    : { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                }}
+                exit={{
+                  opacity: 0,
+                  transition: prefersReduced
+                    ? { duration: 0.08 }
+                    : { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
+                }}
+                style={{ transform: 'translateZ(0)' }}
+                className={`k-modal-backdrop fixed inset-0 bg-[var(--k-bg-backdrop)] will-change-[opacity] ${
+                  prefersReduced ? 'backdrop-blur-[4px]' : 'backdrop-blur-[10px]'
+                }`}
               />
 
               <motion.div
@@ -5883,33 +5846,31 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     : 'w-[min(860px,93vw)] h-[min(86vh,860px)]'
                 }`}
               >
-                <Suspense fallback={null}>
-                  <NoteStudio
-                    item={activeItem}
-                    isDraft={studioDraftMode}
-                    orbits={orbits}
-                    focusBoards={boards}
-                    allItemsForLinks={items}
-                    availableTags={allVaultTags}
-                    soundEnabled={soundEnabled}
-                    layoutMode="center"
-                    presentation="modal"
-                    expandedModal={studioExpandedModal}
-                    onToggleExpandedModal={() => setStudioExpandedModal((v) => !v)}
-                    onItemUpdated={handleStudioItemUpdated}
-                    onDraftPersisted={handleStudioDraftPersisted}
-                    onCancelDraft={handleStudioCancelDraft}
-                    onSelectRelatedItem={handleStudioSelectRelated}
-                    onDelete={async (id) => {
-                      openItemReqRef.current += 1;
-                      await handleDeleteItem(id);
-                      setStudioOpen(false);
-                    }}
-                    onOpenShotLightbox={(shot) => setLightboxItem(shot)}
-                    onRegisterClose={handleRegisterStudioClose}
-                    onClose={handleStudioClose}
-                  />
-                </Suspense>
+                <NoteStudio
+                  item={activeItem}
+                  isDraft={studioDraftMode}
+                  orbits={orbits}
+                  focusBoards={boards}
+                  allItemsForLinks={items}
+                  availableTags={allVaultTags}
+                  soundEnabled={soundEnabled}
+                  layoutMode="center"
+                  presentation="modal"
+                  expandedModal={studioExpandedModal}
+                  onToggleExpandedModal={() => setStudioExpandedModal((v) => !v)}
+                  onItemUpdated={handleStudioItemUpdated}
+                  onDraftPersisted={handleStudioDraftPersisted}
+                  onCancelDraft={handleStudioCancelDraft}
+                  onSelectRelatedItem={handleStudioSelectRelated}
+                  onDelete={async (id) => {
+                    openItemReqRef.current += 1;
+                    await handleDeleteItem(id);
+                    setStudioOpen(false);
+                  }}
+                  onOpenShotLightbox={(shot) => setLightboxItem(shot)}
+                  onRegisterClose={handleRegisterStudioClose}
+                  onClose={handleStudioClose}
+                />
               </motion.div>
             </motion.div>
           ) : null}
@@ -5931,33 +5892,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             >
               <motion.div
                 onClick={closeStudioCleanly}
-                initial={
-                  prefersReduced
-                    ? { opacity: 0 }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                      }
-                }
-                animate={
-                  prefersReduced
-                    ? { opacity: 1 }
-                    : {
-                        backgroundColor: 'var(--k-bg-backdrop)',
-                        backdropFilter: 'blur(4px)',
-                        transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
-                      }
-                }
-                exit={
-                  prefersReduced
-                    ? { opacity: 0, transition: { duration: 0.12 } }
-                    : {
-                        backgroundColor: 'rgba(0, 0, 0, 0)',
-                        backdropFilter: 'blur(0px)',
-                        transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
-                      }
-                }
-                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]' : ''}`}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  transition: prefersReduced
+                    ? { duration: 0.1 }
+                    : { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+                }}
+                exit={{
+                  opacity: 0,
+                  transition: prefersReduced
+                    ? { duration: 0.08 }
+                    : { duration: 0.13, ease: [0.32, 0.72, 0, 1] },
+                }}
+                style={{ transform: 'translateZ(0)' }}
+                className={`k-modal-backdrop fixed inset-0 bg-[var(--k-bg-backdrop)] will-change-[opacity] ${
+                  prefersReduced ? 'backdrop-blur-[2px]' : 'backdrop-blur-[6px]'
+                }`}
               />
 
               <motion.div
@@ -5989,25 +5940,23 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 style={{ width: '560px', maxWidth: '92vw' }}
                 className="relative z-10 h-full bg-[var(--k-bg-surface-1)] border-l border-[var(--k-border-strong)] shadow-[var(--k-shadow-sheet)] flex flex-col overflow-hidden will-change-transform"
               >
-                <Suspense fallback={null}>
-                  <SecretStudioSheet
-                    item={activeItem}
-                    orbits={orbits}
-                    vaultLocked={vaultLocked}
-                    wipeSeconds={wipeSeconds}
-                    onUnlockRequest={() => setUnlockOpen(true)}
-                    onUpdated={(updated) => setActiveItem(updated)}
-                    onDelete={async (id) => {
-                      openItemReqRef.current += 1;
-                      await handleDeleteItem(id);
-                      setStudioOpen(false);
-                    }}
-                    onClose={() => {
-                      openItemReqRef.current += 1;
-                      setStudioOpen(false);
-                    }}
-                  />
-                </Suspense>
+                <SecretStudioSheet
+                  item={activeItem}
+                  orbits={orbits}
+                  vaultLocked={vaultLocked}
+                  wipeSeconds={wipeSeconds}
+                  onUnlockRequest={() => setUnlockOpen(true)}
+                  onUpdated={(updated) => setActiveItem(updated)}
+                  onDelete={async (id) => {
+                    openItemReqRef.current += 1;
+                    await handleDeleteItem(id);
+                    setStudioOpen(false);
+                  }}
+                  onClose={() => {
+                    openItemReqRef.current += 1;
+                    setStudioOpen(false);
+                  }}
+                />
               </motion.div>
             </motion.div>
           ) : null}
@@ -6156,33 +6105,29 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       {/* Modals & Drawers */}
       <ScopedAccentContext.Provider value={workspaceAccentStyle}>
         {mountQuickLook ? (
-          <Suspense fallback={null}>
-            <QuickLookModal
-              item={quickLookItem}
-              itemsList={visibleItems}
-              orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
-              onSelectItem={setQuickLookItem}
-              onClose={() => setQuickLookItem(null)}
-              onEditInStudio={(item) => handleOpenItem(item)}
-              onTogglePin={(item) => void handleTogglePin(item)}
-            />
-          </Suspense>
+          <QuickLookModal
+            item={quickLookItem}
+            itemsList={visibleItems}
+            orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
+            onSelectItem={setQuickLookItem}
+            onClose={() => setQuickLookItem(null)}
+            onEditInStudio={(item) => handleOpenItem(item)}
+            onTogglePin={(item) => void handleTogglePin(item)}
+          />
         ) : null}
 
         {mountLightbox ? (
-          <Suspense fallback={null}>
-            <ShotLightbox
-              item={lightboxItem}
-              onClose={() => setLightboxItem(null)}
-              onEditInStudio={(item) => {
-                setLightboxItem(null);
-                handleOpenItem(item);
-              }}
-              onSaveAnnotations={async (itemId, annotations) => {
-                await window.kapsula.updateItem(itemId, { annotations });
-              }}
-            />
-          </Suspense>
+          <ShotLightbox
+            item={lightboxItem}
+            onClose={() => setLightboxItem(null)}
+            onEditInStudio={(item) => {
+              setLightboxItem(null);
+              handleOpenItem(item);
+            }}
+            onSaveAnnotations={async (itemId, annotations) => {
+              await window.kapsula.updateItem(itemId, { annotations });
+            }}
+          />
         ) : null}
       </ScopedAccentContext.Provider>
 

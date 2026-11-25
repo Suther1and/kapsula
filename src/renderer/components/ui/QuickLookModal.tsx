@@ -99,33 +99,23 @@ export const QuickLookModal: React.FC<QuickLookModalProps> = ({
         >
           <motion.div
             onClick={onClose}
-            initial={
-              prefersReduced
-                ? { opacity: 0 }
-                : {
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    backdropFilter: 'blur(0px)',
-                  }
-            }
-            animate={
-              prefersReduced
-                ? { opacity: 1 }
-                : {
-                    backgroundColor: 'var(--k-bg-backdrop)',
-                    backdropFilter: 'blur(6px)',
-                    transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
-                  }
-            }
-            exit={
-              prefersReduced
-                ? { opacity: 0, transition: { duration: 0.12 } }
-                : {
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    backdropFilter: 'blur(0px)',
-                    transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
-                  }
-            }
-            className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
+            initial={{ opacity: 0 }}
+            animate={{
+              opacity: 1,
+              transition: prefersReduced
+                ? { duration: 0.1 }
+                : { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+            }}
+            exit={{
+              opacity: 0,
+              transition: prefersReduced
+                ? { duration: 0.08 }
+                : { duration: 0.13, ease: [0.32, 0.72, 0, 1] },
+            }}
+            style={{ transform: 'translateZ(0)' }}
+            className={`k-modal-backdrop fixed inset-0 bg-[var(--k-bg-backdrop)] will-change-[opacity] ${
+              prefersReduced ? 'backdrop-blur-[4px]' : 'backdrop-blur-[10px]'
+            }`}
           />
 
           {/* Prev / Next floating arrows */}

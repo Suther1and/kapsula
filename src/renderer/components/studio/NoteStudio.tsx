@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { BubbleMenu } from '@tiptap/react/menus';
-import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
+import { Editor, EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import TaskList from '@tiptap/extension-task-list';
@@ -118,9 +118,45 @@ function getLowlight() {
   return cachedLowlight;
 }
 
-/** Pre-warms syntax highlighting grammars on idle so first NoteStudio open has zero main-thread hitch. */
+let noteStudioRuntimeWarmed = false;
+/**
+ * Pre-warms lowlight grammars AND JIT-compiles TipTap/ProseMirror/Markdown schema once on idle
+ * so the very first card open or Notes tab open has zero main-thread hitch.
+ */
 export function warmNoteStudioRuntime(): void {
-  getLowlight();
+  if (noteStudioRuntimeWarmed) return;
+  noteStudioRuntimeWarmed = true;
+  const lowlight = getLowlight();
+  if (typeof document === 'undefined') return;
+  try {
+    const scratch = new Editor({
+      extensions: [
+        StarterKit.configure({
+          codeBlock: false,
+          horizontalRule: false,
+          link: { openOnClick: false, autolink: true },
+        }),
+        KapsulaHorizontalRule,
+        Markdown,
+        TaskList,
+        TaskItem.configure({ nested: true }),
+        CodeBlockLowlight.configure({ lowlight }),
+        Placeholder.configure({ placeholder: '' }),
+        Typography,
+        KapsulaHighlight,
+        TextColorMark,
+        TextSizeMark,
+        KapsulaImage,
+        WikiLink,
+      ],
+      content: '# Warm\n\n- [ ] ready\n\n```ts\nconst ok = true;\n```',
+      contentType: 'markdown',
+    });
+    scratch.getMarkdown();
+    scratch.destroy();
+  } catch {
+    // Non-fatal in minimal test DOM environments
+  }
 }
 const VIDEO_PATH_RE = /\.(?:mp4|webm|mov|m4v)$/i;
 const AUDIO_PATH_RE = /\.(?:wav|webm|ogg|oga|mp3|m4a)$/i;
@@ -610,7 +646,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     ],
     content: item.body || '',
     contentType: 'markdown',
-    immediatelyRender: false,
+    immediatelyRender: true,
     editorProps: {
       attributes: {
         class: 'k-prose min-h-[340px] pb-24',

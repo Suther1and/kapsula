@@ -10,6 +10,7 @@ import {
   globalShortcut,
   Menu,
   nativeImage,
+  nativeTheme,
   Notification,
   powerMonitor,
   protocol,
@@ -703,6 +704,7 @@ if (!singleInstanceLock) {
 
     const applyWindowBackground = () => {
       const cur = getSettingsState();
+      nativeTheme.themeSource = cur.theme === 'light' ? 'light' : 'dark';
       const tokens = computeThemeTokens(cur.theme, cur.appearance);
       const glassOn = Boolean(cur.appearance?.glassPreset && cur.appearance.glassPreset !== 'off');
       const material = cur.appearance?.glassNativeMaterial ?? 'none';

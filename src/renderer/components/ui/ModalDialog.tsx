@@ -34,7 +34,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-[90] bg-[var(--k-bg-backdrop)] backdrop-blur-[6px]" />
+        <Dialog.Backdrop className="k-modal-backdrop fixed inset-0 z-[90] bg-[var(--k-bg-backdrop)] backdrop-blur-[6px]" />
         <Dialog.Viewport
           className={`fixed inset-0 z-[95] flex justify-center p-4 pointer-events-none ${
             topAligned ? 'items-start pt-[10vh]' : 'items-center'
