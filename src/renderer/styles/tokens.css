@@ -1001,3 +1001,8 @@ html.k-theme-switching *::after {
     transform: translate3d(-50%, -50%, 0) rotate(360deg);
   }
 }
+
+/* Pause decorative border rotor when window is unfocused so idle background CPU drops to 0% */
+:root[data-window-focused="false"] .k-border-trail-rotor {
+  animation-play-state: paused !important;
+}

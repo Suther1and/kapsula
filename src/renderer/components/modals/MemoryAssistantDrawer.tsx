@@ -151,6 +151,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented && widthMode === 'full') {
+        e.preventDefault();
         setWidthMode('compact');
       }
     };
@@ -495,6 +496,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                         borderRadius={16}
                         thickness={20}
                         glow
+                        surfaceBg="var(--k-bg-surface-2)"
                         transition={{ repeat: Infinity, duration: 2.3, ease: 'linear' }}
                         className="opacity-90"
                       />
@@ -502,7 +504,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
                     <TextShimmer
                       as="span"
                       duration={1.15}
-                      className="[--base-color:var(--k-ink-secondary)] [--base-gradient-color:var(--k-ink-primary)] font-medium"
+                      className="relative z-[1] [--base-color:var(--k-ink-secondary)] [--base-gradient-color:var(--k-ink-primary)] font-medium"
                     >
                       {t('assistant.thinking')}
                     </TextShimmer>

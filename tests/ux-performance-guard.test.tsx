@@ -115,6 +115,8 @@ describe('UX-First Speed & Visual Fidelity Guards (v1.1.4)', () => {
     expect(studioSrc).toContain("import { TasksHubView } from '../components/studio/TasksHubView'");
     expect(studioSrc).toContain("import { CalendarHubView } from '../components/studio/CalendarHubView'");
     expect(studioSrc).toContain("import { QuickLookModal } from '../components/ui/QuickLookModal'");
+    expect(studioSrc).toContain("import { SettingsModal } from '../components/modals/SettingsModal'");
+    expect(studioSrc).toContain("import { MemoryAssistantDrawer } from '../components/modals/MemoryAssistantDrawer'");
     expect(studioSrc).toContain('useMountOnce');
     // Flicker-free GPU opacity backdrop (never per-frame backdropFilter blur(0px) or CSS-var backgroundColor animation)
     expect(studioSrc).toContain('backdrop-blur-[10px]');
@@ -136,6 +138,9 @@ describe('UX-First Speed & Visual Fidelity Guards (v1.1.4)', () => {
       'utf8'
     );
     expect(borderTrailSrc).toContain('k-border-trail-spin');
+    expect(borderTrailSrc).toContain('k-border-trail-rotor');
     expect(borderTrailSrc).not.toContain('offsetDistance');
+    expect(borderTrailSrc).not.toContain('blur-[3px]');
+    expect(tokensSrc).toContain('k-border-trail-rotor');
   });
 });

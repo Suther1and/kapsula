@@ -518,6 +518,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   onDeleteRef.current = onDelete;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const presentationRef = useRef(presentation);
+  presentationRef.current = presentation;
+  const bubbleLinkEditingRef = useRef(bubbleLinkEditing);
+  bubbleLinkEditingRef.current = bubbleLinkEditing;
+  const historyOpenRef = useRef(historyOpen);
+  historyOpenRef.current = historyOpen;
+  const inlineLightboxRef = useRef(inlineLightboxItem);
+  inlineLightboxRef.current = inlineLightboxItem;
+  const handleCloseStudioRef = useRef<() => Promise<void>>(async () => {});
   const tagsRef = useRef(tags);
   tagsRef.current = tags;
   const draftOrbitRef = useRef(draftOrbit);
@@ -733,6 +742,20 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             event.preventDefault();
             event.stopPropagation();
             setSlashQuery(null);
+            return true;
+          }
+        }
+        if (event.key === 'Escape' && presentationRef.current === 'modal') {
+          if (bubbleLinkEditingRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            setBubbleLinkEditing(false);
+            return true;
+          }
+          if (!historyOpenRef.current && !inlineLightboxRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            void handleCloseStudioRef.current();
             return true;
           }
         }
@@ -1307,6 +1330,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     }
     onCloseRef.current?.();
   }, [flushDraft]);
+
+  handleCloseStudioRef.current = handleCloseStudio;
 
   useEffect(() => {
     onRegisterClose?.(handleCloseStudio);

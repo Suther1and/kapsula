@@ -262,39 +262,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    setTab(normalizeTab(initialTab));
+    const targetTab = normalizeTab(initialTab);
+    setTab(targetTab);
     setShowGcalSetup(false);
     setShowCustomGcalClient(false);
     const hydrated = hydrateAppearanceFromSettings(settings?.appearance, settings?.theme);
     setAppearance(hydrated);
     setHexDraft(hydrated.accentHex);
 
-    window.kapsula.getBudget().then(setBudget).catch(() => {});
-    refreshCloudQuota();
-    window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
-    window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
-    window.kapsula.getUpdaterState().then(setUpdaterState).catch(() => {});
-    window.kapsula
-      .checkForUpdates({ silent: true, maxAgeMs: 10 * 60 * 1000 })
-      .then(setUpdaterState)
-      .catch(() => {});
-    window.kapsula.getClipperPairingInfo?.().then(setClipperPairingInfo).catch(() => {});
-    window.kapsula
-      .getCalendarStatus()
-      .then((st) => {
-        setCalStatus(st);
-        setGcalClientIdDraft(st.clientId || '');
-        setGcalIcalDraft(st.icalUrl || '');
-      })
-      .catch(() => {});
-
     if (settings?.aiProvider === 'openrouter' || settings?.aiProvider === 'google_ai_studio') {
       setKeyProviderTarget(settings.aiProvider);
     }
 
-    return window.kapsula.onUpdaterStateChanged((next) => {
+    // Immediate light IPC for footer status + active tab; defer non-active tab disk/network probes until after modal entrance
+    window.kapsula.getUpdaterState().then(setUpdaterState).catch(() => {});
+    const loadAi = () => {
+      window.kapsula.getBudget().then(setBudget).catch(() => {});
+      refreshCloudQuota();
+    };
+    const loadData = () => {
+      window.kapsula.getStorageSummary().then(setStorageInfo).catch(() => {});
+      window.kapsula.getVideoCacheStats?.().then(setVideoCacheInfo).catch(() => {});
+    };
+    const loadIntegrations = () => {
+      window.kapsula.getClipperPairingInfo?.().then(setClipperPairingInfo).catch(() => {});
+      window.kapsula
+        .getCalendarStatus()
+        .then((st) => {
+          setCalStatus(st);
+          setGcalClientIdDraft(st.clientId || '');
+          setGcalIcalDraft(st.icalUrl || '');
+        })
+        .catch(() => {});
+    };
+
+    if (targetTab === 'ai') loadAi();
+    if (targetTab === 'data') loadData();
+    if (targetTab === 'integrations') loadIntegrations();
+
+    const deferTimer = window.setTimeout(() => {
+      if (targetTab !== 'ai') loadAi();
+      if (targetTab !== 'data') loadData();
+      if (targetTab !== 'integrations') loadIntegrations();
+      window.kapsula
+        .checkForUpdates({ silent: true, maxAgeMs: 10 * 60 * 1000 })
+        .then(setUpdaterState)
+        .catch(() => {});
+    }, 150);
+
+    const unsubUpdater = window.kapsula.onUpdaterStateChanged((next) => {
       setUpdaterState(next);
     });
+    return () => {
+      window.clearTimeout(deferTimer);
+      unsubUpdater();
+    };
   }, [open, initialTab]);
 
   const accentPresets = useMemo(() => getAccentPresets(locale), [locale]);

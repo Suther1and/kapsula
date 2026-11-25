@@ -594,6 +594,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               thickness={40}
               glow
               dual={beautifying}
+              surfaceBg="var(--k-bg-surface-1)"
               transition={{
                 repeat: Infinity,
                 duration: beautifying ? 2.5 : 7.4,
@@ -604,6 +605,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
           </motion.div>
         ) : null}
       </AnimatePresence>
+      <div className="relative z-[1]">
       <input
         ref={fileInputRef}
         type="file"
@@ -1031,6 +1033,7 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

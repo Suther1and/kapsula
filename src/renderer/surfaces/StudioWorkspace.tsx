@@ -114,19 +114,13 @@ import { CalendarHubView } from '../components/studio/CalendarHubView';
 import { ReferenceBoardCanvas } from '../components/studio/ReferenceBoardCanvas';
 import { NotesHubView } from '../components/studio/NotesHubView';
 import { MediaHubView } from '../components/studio/MediaHubView';
-const MemoryAssistantDrawer = lazy(() =>
-  import('../components/modals/MemoryAssistantDrawer').then((m) => ({
-    default: m.MemoryAssistantDrawer,
-  }))
-);
+import { MemoryAssistantDrawer } from '../components/modals/MemoryAssistantDrawer';
+import { SettingsModal } from '../components/modals/SettingsModal';
 const NewSecretModal = lazy(() =>
   import('../components/modals/NewSecretModal').then((m) => ({ default: m.NewSecretModal }))
 );
 const OnboardingModal = lazy(() =>
   import('../components/modals/OnboardingModal').then((m) => ({ default: m.OnboardingModal }))
-);
-const SettingsModal = lazy(() =>
-  import('../components/modals/SettingsModal').then((m) => ({ default: m.SettingsModal }))
 );
 const UnlockPinDialog = lazy(() =>
   import('../components/modals/UnlockPinDialog').then((m) => ({ default: m.UnlockPinDialog }))
@@ -839,9 +833,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const warm = () => {
       if (cancelled) return;
       warmNoteStudioRuntime();
-      void import('../components/modals/SettingsModal').catch(() => {});
       void import('../components/modals/NewSecretModal').catch(() => {});
-      void import('../components/modals/MemoryAssistantDrawer').catch(() => {});
       void import('../components/modals/SmartTriageModal').catch(() => {});
       void import('../components/modals/SynthesizeNotesModal').catch(() => {});
     };
@@ -1858,6 +1850,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           closeStudioCleanly();
           return;
         }
+        if (
+          assistantOpen &&
+          !settingsOpen &&
+          !newSecretOpen &&
+          !triageOpen &&
+          !synthesizeOpen &&
+          !sectionEditor
+        ) {
+          setAssistantOpen(false);
+          return;
+        }
         if (selectedIds.length > 0) {
           setSelectedIds([]);
         }
@@ -1871,6 +1874,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     lightboxItem,
     quickLookItem,
     studioOpen,
+    assistantOpen,
     settingsOpen,
     newSecretOpen,
     triageOpen,
@@ -5746,21 +5750,19 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </ScopedAccentContext.Provider>
 
         {mountAssistant ? (
-          <Suspense fallback={null}>
-            <MemoryAssistantDrawer
-              open={assistantOpen}
-              onClose={() => setAssistantOpen(false)}
-              onOpenCitation={(itemId, opts) => {
-                if (!opts?.keepAssistantOpen) setAssistantOpen(false);
-                void handleOpenItemById(itemId);
-              }}
-              onSynthesizeFound={(itemIds) => {
-                setAssistantOpen(false);
-                setSynthesizeSeedIds(itemIds);
-                setSynthesizeOpen(true);
-              }}
-            />
-          </Suspense>
+          <MemoryAssistantDrawer
+            open={assistantOpen}
+            onClose={() => setAssistantOpen(false)}
+            onOpenCitation={(itemId, opts) => {
+              if (!opts?.keepAssistantOpen) setAssistantOpen(false);
+              void handleOpenItemById(itemId);
+            }}
+            onSynthesizeFound={(itemIds) => {
+              setAssistantOpen(false);
+              setSynthesizeSeedIds(itemIds);
+              setSynthesizeOpen(true);
+            }}
+          />
         ) : null}
       </div>
 
@@ -6264,19 +6266,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       ) : null}
 
       {mountSettings ? (
-        <Suspense fallback={null}>
-          <SettingsModal
-            open={settingsOpen}
-            onOpenChange={setSettingsOpen}
-            initialTab={settingsInitialTab}
-            settings={settings}
-            onSettingsUpdated={onSettingsUpdated}
-            onRecoveryKeyVisibleChange={setRecoveryKeyVisible}
-            onVaultChanged={() => {
-              void refreshAll();
-            }}
-          />
-        </Suspense>
+        <SettingsModal
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          initialTab={settingsInitialTab}
+          settings={settings}
+          onSettingsUpdated={onSettingsUpdated}
+          onRecoveryKeyVisibleChange={setRecoveryKeyVisible}
+          onVaultChanged={() => {
+            void refreshAll();
+          }}
+        />
       ) : null}
 
       {mountSynthesize ? (
