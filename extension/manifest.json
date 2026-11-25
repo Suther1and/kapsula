@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kapsula Clipper",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Быстрое сохранение веб-страниц, выделенного текста, скриншотов и постов в личное хранилище Kapsula.",
   "permissions": ["contextMenus", "activeTab", "scripting", "storage"],
   "host_permissions": [

@@ -114,8 +114,6 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
             <img
               src={inlineThumbUrl}
               alt=""
-              loading="lazy"
-              decoding="async"
               className="w-full h-full object-cover block"
             />
           </div>
@@ -147,8 +145,6 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
           <img
             src={inlineThumbUrl}
             alt=""
-            loading="lazy"
-            decoding="async"
             className="w-full h-[132px] object-cover block"
           />
           {inlineMediaFiles.length > 1 ? (

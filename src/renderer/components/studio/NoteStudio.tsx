@@ -161,31 +161,6 @@ interface SlashCommandDef {
 
 export type StudioLayoutMode = 'sheet' | 'center' | 'full';
 
-type FlushDraftResult = {
-  ok: boolean;
-  itemId: string | null;
-};
-
-interface PendingNoteSaveEntry {
-  ownerInstanceId: number;
-  ownerSessionSeq: number;
-  promise: Promise<void>;
-  title: string;
-  body: string;
-  ok: boolean;
-}
-
-interface ActiveMountedNoteOwner {
-  instanceId: number;
-  layoutToken: number;
-}
-
-// Tracks active title/body saves by itemId across NoteStudio unmount/remount cycles
-// (e.g. A edited -> B truncated unmounts NoteStudio -> A remounts before updateItem(A) settles).
-let nextStudioInstanceId = 0;
-const inFlightNoteSavesById = new Map<string, PendingNoteSaveEntry>();
-const activeMountedNoteOwnerById = new Map<string, ActiveMountedNoteOwner>();
-
 interface NoteStudioProps {
   item: VaultItem;
   isDraft?: boolean;
@@ -377,21 +352,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     ],
     [t, noteTemplates]
   );
-  const studioInstanceIdRef = useRef<number | null>(null);
-  if (studioInstanceIdRef.current === null) {
-    studioInstanceIdRef.current = ++nextStudioInstanceId;
-  }
-  const initialMountSave = !isDraft ? inFlightNoteSavesById.get(item.id) : undefined;
-  const initialPendingMountSave =
-    initialMountSave && initialMountSave.ownerInstanceId !== studioInstanceIdRef.current
-      ? initialMountSave
-      : undefined;
-  const [title, setTitle] = useState(
-    isDraft ? '' : initialPendingMountSave ? initialPendingMountSave.title : item.title || ''
-  );
-  const [liveBody, setLiveBody] = useState(
-    initialPendingMountSave ? initialPendingMountSave.body : item.body || ''
-  );
+  const [title, setTitle] = useState(isDraft ? '' : item.title || '');
+  const [liveBody, setLiveBody] = useState(item.body || '');
   const [tags, setTags] = useState<string[]>(item.tags || []);
   const [draftOrbit, setDraftOrbit] = useState<string>(item.orbit || '');
   const [draftBoardId, setDraftBoardId] = useState<string | null>(item.focusBoardId ?? null);
@@ -402,9 +364,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     setOptimisticPinned(Boolean(item.isPinned));
     setOptimisticMuted(Boolean(item.isMuted));
   }, [item.id, item.isPinned, item.isMuted]);
-  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>(
-    initialPendingMountSave ? 'saving' : 'saved'
-  );
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [persistingSlow, setPersistingSlow] = useState(false);
   const slowPersistTimerRef = useRef<number | null>(null);
   const clearSlowPersist = useCallback(() => {
@@ -415,10 +375,9 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     setPersistingSlow(false);
   }, []);
   const armSlowPersist = useCallback(() => {
-    if (!isMountedRef.current || slowPersistTimerRef.current) return;
+    if (slowPersistTimerRef.current) return;
     slowPersistTimerRef.current = window.setTimeout(() => {
       slowPersistTimerRef.current = null;
-      if (!isMountedRef.current) return;
       setPersistingSlow(true);
     }, 900);
   }, []);
@@ -497,67 +456,19 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   bodyPlaceholderRef.current = t('note.studio.bodyPlaceholder');
   const isDraftRef = useRef(isDraft);
   isDraftRef.current = isDraft;
-  const isMountedRef = useRef(true);
-  useLayoutEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-  const initialPendingMountRef = useRef<{ itemId: string; entry: PendingNoteSaveEntry } | null>(
-    initialPendingMountSave ? { itemId: item.id, entry: initialPendingMountSave } : null
-  );
-  const initialMountConsumedRef = useRef(false);
-  const pendingTransitionSaveRef = useRef<{ itemId: string; entry: PendingNoteSaveEntry } | null>(
-    null
-  );
-  const activePendingSaveRef = useRef<PendingNoteSaveEntry | null>(initialPendingMountSave ?? null);
-  const prevEffectSessionRef = useRef<{ id: string; isDraft: boolean } | null>(null);
-  const prevLayoutSessionRef = useRef<{ id: string; isDraft: boolean } | null>(null);
   const persistedDraftIdRef = useRef<string | null>(isDraft ? null : item.id);
-  const sessionMediaMetaRef = useRef<VaultItem['mediaMeta']>(item.mediaMeta);
-  const createdDraftIdBySessionRef = useRef<Map<number, string>>(new Map());
-  const titleRef = useRef(
-    isDraft ? '' : initialPendingMountSave ? initialPendingMountSave.title : item.title || ''
-  );
-  const bodyMarkdownRef = useRef(
-    initialPendingMountSave ? initialPendingMountSave.body : item.body || ''
-  );
+  const titleRef = useRef(isDraft ? '' : item.title || '');
+  const bodyMarkdownRef = useRef(item.body || '');
   const dirtyRef = useRef(false);
   const editSeqRef = useRef(0);
-  const noteSessionSeqRef = useRef(0);
-  const layoutSessionSeqRef = useRef(0);
   const inFlightSaveCountRef = useRef(0);
   const inFlightUpdatePromiseRef = useRef<Promise<void> | null>(null);
-  const lastSavedStateRef = useRef<{ id: string; seq: number; title: string; body: string } | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const liveBodyTimerRef = useRef<number | null>(null);
-  const markdownSyncTimerRef = useRef<number | null>(null);
-  const markdownSyncPendingRef = useRef(false);
-  const editorRef = useRef<ReturnType<typeof useEditor>>(null);
-  const mountedEditorInstanceRef = useRef<ReturnType<typeof useEditor>>(null);
   const loadingItemRef = useRef(false);
   const loadingItemTimerRef = useRef<number | null>(null);
   const allItemsForLinksRef = useRef(allItemsForLinks);
   allItemsForLinksRef.current = allItemsForLinks;
-
-  const presentationRef = useRef(presentation);
-  presentationRef.current = presentation;
-  const aiMenuOpenRef = useRef(aiMenuOpen);
-  aiMenuOpenRef.current = aiMenuOpen;
-  const moreMenuOpenRef = useRef(moreMenuOpen);
-  moreMenuOpenRef.current = moreMenuOpen;
-  const historyOpenRef = useRef(historyOpen);
-  historyOpenRef.current = historyOpen;
-  const inlineLightboxItemRef = useRef(inlineLightboxItem);
-  inlineLightboxItemRef.current = inlineLightboxItem;
-  const showVoiceStudioRef = useRef(showVoiceStudio);
-  showVoiceStudioRef.current = showVoiceStudio;
-  const bubbleColorOpenRef = useRef(bubbleColorOpen);
-  bubbleColorOpenRef.current = bubbleColorOpen;
-  const bubbleLinkEditingRef = useRef(bubbleLinkEditing);
-  bubbleLinkEditingRef.current = bubbleLinkEditing;
-  const handleCloseStudioRef = useRef<() => Promise<void>>(async () => {});
 
   const onItemUpdatedRef = useRef(onItemUpdated);
   onItemUpdatedRef.current = onItemUpdated;
@@ -579,7 +490,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   draftBoardIdRef.current = draftBoardId;
   const draftRemindAtRef = useRef(draftRemindAt);
   draftRemindAtRef.current = draftRemindAt;
-  const inflightCreateRef = useRef<Promise<void> | null>(null);
+  const inflightCreateRef = useRef<Promise<VaultItem | null> | null>(null);
 
   const openInlineImageLightboxRef = useRef<(info: KapsulaImageLightboxInfo) => void>(() => {});
   openInlineImageLightboxRef.current = (info) => {
@@ -600,7 +511,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     async () => {}
   );
   navigateWikiLinkRef.current = async (linkTitle, targetId) => {
-    const sessionBefore = noteSessionSeqRef.current;
     const cleanLower = linkTitle.trim().toLowerCase();
     const candidates = allItemsForLinksRef.current;
     let found =
@@ -613,10 +523,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           search: linkTitle.trim(),
           includeArchived: true,
           includeSecrets: false,
-          projection: 'card',
           limit: 12,
         });
-        if (noteSessionSeqRef.current !== sessionBefore) return;
         found =
           remote.find((c) => c.title.trim().toLowerCase() === cleanLower) ??
           remote.find((c) => c.title.toLowerCase().includes(cleanLower));
@@ -625,7 +533,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
     }
 
-    if (noteSessionSeqRef.current !== sessionBefore) return;
     if (found) {
       onSelectRelatedItemRef.current?.(found);
     } else {
@@ -701,7 +608,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         },
       }),
     ],
-    content: bodyMarkdownRef.current,
+    content: item.body || '',
     contentType: 'markdown',
     immediatelyRender: false,
     editorProps: {
@@ -793,25 +700,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             return true;
           }
         }
-
-        if (
-          event.key === 'Escape' &&
-          presentationRef.current === 'modal' &&
-          onCloseRef.current &&
-          !aiMenuOpenRef.current &&
-          !moreMenuOpenRef.current &&
-          !historyOpenRef.current &&
-          !inlineLightboxItemRef.current &&
-          !showVoiceStudioRef.current &&
-          !bubbleColorOpenRef.current &&
-          !bubbleLinkEditingRef.current &&
-          !document.querySelector('[data-k-popup="true"], [role="menu"]')
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          void handleCloseStudioRef.current();
-          return true;
-        }
         return false;
       },
     },
@@ -849,25 +737,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }
       }
 
-      markdownSyncPendingRef.current = true;
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-      }
+      const md = ed.getMarkdown();
+      bodyMarkdownRef.current = md;
       if (liveBodyTimerRef.current) {
         window.clearTimeout(liveBodyTimerRef.current);
       }
-      markdownSyncTimerRef.current = window.setTimeout(() => {
-        markdownSyncTimerRef.current = null;
-        const curEd = editorRef.current;
-        if (curEd && !curEd.isDestroyed && markdownSyncPendingRef.current) {
-          bodyMarkdownRef.current = curEd.getMarkdown();
-          markdownSyncPendingRef.current = false;
-        }
+      liveBodyTimerRef.current = window.setTimeout(() => {
+        liveBodyTimerRef.current = null;
         setLiveBody(bodyMarkdownRef.current);
       }, 180);
       dirtyRef.current = true;
       editSeqRef.current += 1;
-      setSaveState((prev) => (prev === 'saving' ? prev : 'saving'));
+      setSaveState('saving');
 
       const updateCaretPosition = () => {
         try {
@@ -902,56 +783,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }, 420);
     },
   });
-  editorRef.current = editor;
-
-  // Ensure initial TipTap mount (when immediatelyRender:false creates editor on 2nd render)
-  // picks up any pending cross-unmount save body that useEffect([item.id, isDraft]) seeded.
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    if (mountedEditorInstanceRef.current === editor) return;
-    mountedEditorInstanceRef.current = editor;
-    if (!dirtyRef.current && bodyMarkdownRef.current !== (itemRef.current.body || '')) {
-      loadingItemRef.current = true;
-      editor.commands.setContent(bodyMarkdownRef.current, {
-        contentType: 'markdown',
-        emitUpdate: false,
-      });
-      loadingItemRef.current = false;
-    }
-  }, [editor]);
-
-  const syncMarkdownFromEditor = useCallback((): string => {
-    if (markdownSyncTimerRef.current !== null) {
-      window.clearTimeout(markdownSyncTimerRef.current);
-      markdownSyncTimerRef.current = null;
-    }
-    const ed = editorRef.current;
-    if (ed && !ed.isDestroyed && markdownSyncPendingRef.current) {
-      const md = ed.getMarkdown();
-      bodyMarkdownRef.current = md;
-      markdownSyncPendingRef.current = false;
-    }
-    return bodyMarkdownRef.current;
-  }, []);
 
   // Wire image insertion ref once editor is ready
   insertImageFilesRef.current = async (files, insertPos) => {
     if (!editor || files.length === 0) return;
-    const sessionBefore = noteSessionSeqRef.current;
-    const effectiveIdBefore = persistedDraftIdRef.current || itemRef.current.id;
     const count = await saveAndInsertImageFiles(editor, files, {
       insertPos,
       onBeforeSave: () => setInsertingImage(true),
-      onAfterSave: () => {
-        if (noteSessionSeqRef.current === sessionBefore) {
-          setInsertingImage(false);
-        }
-      },
-      shouldInsert: () =>
-        noteSessionSeqRef.current === sessionBefore &&
-        (persistedDraftIdRef.current || itemRef.current.id) === effectiveIdBefore,
+      onAfterSave: () => setInsertingImage(false),
     });
-    if (count > 0 && noteSessionSeqRef.current === sessionBefore) {
+    if (count > 0) {
       playTactileTick(soundEnabled, 'soft');
       toast.success(
         count === 1
@@ -987,7 +828,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   });
 
   const computeReconciledLinksOut = useCallback(
-    (rawBody: string, currentItemId?: string): string[] | null => {
+    (rawBody: string): string[] | null => {
       const candidates = allItemsForLinksRef.current;
       const explicitIds: string[] = [];
       if (editor && !editor.isDestroyed) {
@@ -1000,7 +841,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       if (candidates.length === 0 && explicitIds.length === 0) {
         return null;
       }
-      const curId = currentItemId || persistedDraftIdRef.current || itemRef.current.id;
+      const curId = persistedDraftIdRef.current || itemRef.current.id;
       const byLowerTitle = new Map<string, string>();
       for (const cand of candidates) {
         if (cand.id === curId || cand.dna === 'secret') continue;
@@ -1018,17 +859,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   );
 
   const flushDraft = useCallback(
-    async (targetId: string, forceWasDraft = false): Promise<FlushDraftResult> => {
-      syncMarkdownFromEditor();
+    async (targetId: string, forceWasDraft = false) => {
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
-      markdownSyncPendingRef.current = false;
       if (liveBodyTimerRef.current) {
         window.clearTimeout(liveBodyTimerRef.current);
         liveBodyTimerRef.current = null;
@@ -1043,289 +878,128 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       const boardVal = draftBoardIdRef.current;
       const remindVal = draftRemindAtRef.current;
       const draftTags = [...tagsRef.current];
-      const draftMediaMeta = sessionMediaMetaRef.current;
+      const reconciledLinks = computeReconciledLinksOut(rawBody);
       const snapshotSeq = editSeqRef.current;
-      const snapshotSessionSeq = noteSessionSeqRef.current;
-      const snapshotLayoutToken = layoutSessionSeqRef.current;
-      const snapshotDirty = dirtyRef.current;
-      const snapshotIsDraft = isDraftRef.current;
-      const snapshotPersistedDraftId = persistedDraftIdRef.current;
-      const snapshotItemId =
-        snapshotPersistedDraftId ||
-        (targetId && targetId !== '' ? targetId : null) ||
-        itemRef.current.id;
-      const reconciledLinks = computeReconciledLinksOut(rawBody, snapshotItemId);
 
-      // Serialize behind any in-flight draft creation (while loop + outer task guard prevents
-      // concurrent captures when multiple flushes wake up on the same microtask turn).
-      while (inflightCreateRef.current) {
-        await inflightCreateRef.current.catch(() => {});
+      // Serialize behind any in-flight draft creation to prevent duplicate captures
+      if (inflightCreateRef.current) {
+        await inflightCreateRef.current;
       }
 
-      const knownSessionPersistedId =
-        snapshotPersistedDraftId ||
-        createdDraftIdBySessionRef.current.get(snapshotSessionSeq) ||
-        null;
-      const currentEffectiveId = persistedDraftIdRef.current || itemRef.current.id;
-      const stillSameAfterCreate =
-        noteSessionSeqRef.current === snapshotSessionSeq &&
-        (currentEffectiveId === snapshotItemId ||
-          (knownSessionPersistedId !== null && currentEffectiveId === knownSessionPersistedId));
-
-      const effectiveDirty = stillSameAfterCreate ? dirtyRef.current : snapshotDirty;
-      const hasPendingSaveToAwait =
-        activePendingSaveRef.current !== null ||
-        inFlightUpdatePromiseRef.current !== null ||
-        Boolean(
-          snapshotItemId &&
-            snapshotItemId !== '__draft__' &&
-            inFlightNoteSavesById.has(snapshotItemId)
-        );
-      if (!effectiveDirty && !hasPendingSaveToAwait) {
-        if (inFlightSaveCountRef.current === 0 && !dirtyRef.current) {
-          setSaveState('saved');
-          clearSlowPersist();
-        }
-        const resolvedId =
-          knownSessionPersistedId ||
-          (stillSameAfterCreate && itemRef.current.id !== '__draft__' ? itemRef.current.id : null) ||
-          (targetId && targetId !== '__draft__' ? targetId : null);
-        return { ok: true, itemId: resolvedId };
+      if (!dirtyRef.current) {
+        if (inFlightSaveCountRef.current === 0) setSaveState('saved');
+        return;
       }
 
       const bodyHasContent = rawBody.replace(/\s+/g, '').length > 0;
 
       // Never materialize an empty draft note into DB
-      const resolvedDraftIdForSession =
-        (stillSameAfterCreate ? persistedDraftIdRef.current : null) || knownSessionPersistedId;
       const wasDraft =
-        (forceWasDraft || targetId === '__draft__' || snapshotIsDraft) &&
-        !resolvedDraftIdForSession;
-      if (wasDraft && effectiveDirty) {
+        (forceWasDraft || targetId === '__draft__' || isDraftRef.current) &&
+        !persistedDraftIdRef.current;
+      if (wasDraft) {
         if (!rawTitle && !bodyHasContent) {
-          if (stillSameAfterCreate) {
-            dirtyRef.current = false;
-            if (inFlightSaveCountRef.current === 0) {
-              setSaveState('saved');
-              clearSlowPersist();
-            }
-          }
-          return { ok: true, itemId: null };
+          dirtyRef.current = false;
+          setSaveState('saved');
+          return;
         }
         const effectiveTitle = rawTitle || deriveTitleFromBody(rawBody, fallbackTitleRef.current);
-        let createResult: FlushDraftResult = { ok: false, itemId: null };
-        let createTask!: Promise<void>;
-        createTask = (async () => {
-          inFlightSaveCountRef.current += 1;
-          armSlowPersist();
-          let saveFailed = false;
-          try {
-            let created = await window.kapsula.capture({
-              title: effectiveTitle,
-              text: rawBody,
-              orbitOverride: orbitVal,
-              focusBoardId: boardVal,
-              remindAt: remindVal,
-              tags: draftTags,
-              ...(draftMediaMeta ? { mediaMeta: draftMediaMeta } : {}),
-              source: 'vault_ui',
-            });
-            if (!created) {
-              saveFailed = true;
-              if (
-                isMountedRef.current &&
-                itemRef.current.id === '__draft__' &&
-                noteSessionSeqRef.current === snapshotSessionSeq
-              ) {
-                dirtyRef.current = true;
-                setSaveState('error');
-              }
-              return;
-            }
-            if (reconciledLinks && reconciledLinks.length > 0) {
-              const linked = await window.kapsula
-                .updateItem(created.id, { linksOut: reconciledLinks })
-                .catch(() => null);
-              if (linked) created = linked;
-            }
-            // Record materialized ID for this draft session unconditionally so any queued flush
-            // from useLayoutEffect cleanup never calls capture() a second time.
-            createdDraftIdBySessionRef.current.set(snapshotSessionSeq, created.id);
-            if (createdDraftIdBySessionRef.current.size > 32) {
-              const oldestKey = createdDraftIdBySessionRef.current.keys().next().value;
-              if (oldestKey !== undefined) createdDraftIdBySessionRef.current.delete(oldestKey);
-            }
-            lastSavedStateRef.current = {
-              id: created.id,
-              seq: snapshotSeq,
-              title: rawTitle,
-              body: rawBody,
-            };
-            createResult = { ok: true, itemId: created.id };
-
-            // Only bind to live buffer if mounted and user has not switched to another note mid-flight
-            if (
-              isMountedRef.current &&
-              itemRef.current.id === '__draft__' &&
-              noteSessionSeqRef.current === snapshotSessionSeq
-            ) {
-              persistedDraftIdRef.current = created.id;
-              isDraftRef.current = false;
-              const userTypedMeanwhile =
-                dirtyRef.current &&
-                (editSeqRef.current !== snapshotSeq ||
-                  titleRef.current.trim() !== rawTitle ||
-                  bodyMarkdownRef.current !== rawBody);
-              if (!userTypedMeanwhile) {
-                dirtyRef.current = false;
-              }
-              if (!rawTitle && titleRef.current.trim() === '') {
-                setTitle(created.title);
-                titleRef.current = created.title;
-              }
-              onDraftPersistedRef.current?.(created);
-              if (userTypedMeanwhile) {
-                dirtyRef.current = true;
-                setSaveState('saving');
-                if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-                saveTimerRef.current = window.setTimeout(() => {
-                  void flushDraft(created.id);
-                }, 300);
-                return;
-              }
-            } else {
-              onItemUpdatedRef.current(created);
-            }
-          } catch {
+        const createPromise = window.kapsula.capture({
+          title: effectiveTitle,
+          text: rawBody,
+          orbitOverride: orbitVal,
+          focusBoardId: boardVal,
+          remindAt: remindVal,
+          tags: draftTags,
+          ...(itemRef.current.mediaMeta ? { mediaMeta: itemRef.current.mediaMeta } : {}),
+          source: 'vault_ui',
+        });
+        inflightCreateRef.current = createPromise;
+        inFlightSaveCountRef.current += 1;
+        armSlowPersist();
+        let saveFailed = false;
+        try {
+          let created = await createPromise;
+          if (!created) {
             saveFailed = true;
-            if (
-              isMountedRef.current &&
-              itemRef.current.id === '__draft__' &&
-              noteSessionSeqRef.current === snapshotSessionSeq
-            ) {
+            if (itemRef.current.id === '__draft__') {
               dirtyRef.current = true;
               setSaveState('error');
             }
-          } finally {
-            inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
-            if (inflightCreateRef.current === createTask) {
-              inflightCreateRef.current = null;
+            return;
+          }
+          if (reconciledLinks && reconciledLinks.length > 0) {
+            const linked = await window.kapsula
+              .updateItem(created.id, { linksOut: reconciledLinks })
+              .catch(() => null);
+            if (linked) created = linked;
+          }
+          // Only bind to live buffer if user has not switched to another note mid-flight
+          if (itemRef.current.id === '__draft__') {
+            persistedDraftIdRef.current = created.id;
+            isDraftRef.current = false;
+            const userTypedMeanwhile =
+              editSeqRef.current !== snapshotSeq ||
+              titleRef.current.trim() !== rawTitle ||
+              bodyMarkdownRef.current !== rawBody;
+            if (!userTypedMeanwhile) {
+              dirtyRef.current = false;
             }
-            if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
-              setSaveState('saved');
-              clearSlowPersist();
-            } else if (saveFailed) {
-              clearSlowPersist();
+            if (!rawTitle && titleRef.current.trim() === '') {
+              setTitle(created.title);
+              titleRef.current = created.title;
+            }
+            onDraftPersistedRef.current?.(created);
+            if (userTypedMeanwhile) {
+              dirtyRef.current = true;
+              setSaveState('saving');
+              if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+              saveTimerRef.current = window.setTimeout(() => {
+                void flushDraft(created.id);
+              }, 300);
+              return;
             }
           }
-        })();
-        inflightCreateRef.current = createTask;
-        await createTask;
-        return createResult;
+        } catch {
+          saveFailed = true;
+          if (itemRef.current.id === '__draft__') {
+            dirtyRef.current = true;
+            setSaveState('error');
+          }
+        } finally {
+          inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
+          if (inflightCreateRef.current === createPromise) {
+            inflightCreateRef.current = null;
+          }
+          if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
+            setSaveState('saved');
+            clearSlowPersist();
+          } else if (saveFailed) {
+            clearSlowPersist();
+          }
+        }
+        return;
       }
 
-      let awaitedFailedForeignSave = false;
       while (inFlightUpdatePromiseRef.current) {
-        const currentUpdateGuard = inFlightUpdatePromiseRef.current;
-        const activePending = activePendingSaveRef.current;
-        await currentUpdateGuard.catch(() => {});
-        if (activePending && activePending.promise === currentUpdateGuard && !activePending.ok) {
-          awaitedFailedForeignSave = true;
-        }
-      }
-      const pendingAdopted = activePendingSaveRef.current;
-      if (pendingAdopted) {
-        await pendingAdopted.promise.catch(() => {});
-        if (!pendingAdopted.ok) {
-          awaitedFailedForeignSave = true;
-        }
+        await inFlightUpdatePromiseRef.current.catch(() => {});
       }
 
-      const postUpdateWaitKnownId =
-        snapshotPersistedDraftId ||
-        createdDraftIdBySessionRef.current.get(snapshotSessionSeq) ||
-        null;
       const finalId =
         (targetId && targetId !== '__draft__' ? targetId : null) ||
-        (noteSessionSeqRef.current === snapshotSessionSeq ? persistedDraftIdRef.current : null) ||
-        postUpdateWaitKnownId ||
-        (noteSessionSeqRef.current === snapshotSessionSeq && itemRef.current.id !== '__draft__'
-          ? itemRef.current.id
-          : null);
+        persistedDraftIdRef.current ||
+        (itemRef.current.id !== '__draft__' ? itemRef.current.id : null);
       if (!finalId) {
-        if (inFlightSaveCountRef.current === 0 && !dirtyRef.current) {
+        if (inFlightSaveCountRef.current === 0) {
           setSaveState('saved');
           clearSlowPersist();
         }
-        return { ok: true, itemId: null };
+        return;
       }
-
-      while (inFlightNoteSavesById.has(finalId)) {
-        const pendingByItem = inFlightNoteSavesById.get(finalId);
-        if (
-          pendingByItem &&
-          (pendingByItem.ownerInstanceId !== studioInstanceIdRef.current ||
-            pendingByItem.ownerSessionSeq !== noteSessionSeqRef.current)
-        ) {
-          await pendingByItem.promise.catch(() => {});
-          if (!pendingByItem.ok) {
-            awaitedFailedForeignSave = true;
-          }
-        } else {
-          break;
-        }
-      }
-
-      const currentOwner = activeMountedNoteOwnerById.get(finalId);
-      if (
-        currentOwner &&
-        (currentOwner.instanceId !== studioInstanceIdRef.current ||
-          currentOwner.layoutToken !== snapshotLayoutToken)
-      ) {
-        if (inFlightSaveCountRef.current === 0 && !dirtyRef.current) {
-          clearSlowPersist();
-        }
-        return { ok: false, itemId: finalId };
-      }
-
-      const stillSameBeforeWrite =
-        (persistedDraftIdRef.current || itemRef.current.id) === finalId &&
-        noteSessionSeqRef.current === snapshotSessionSeq;
-      const hasUnsavedChanges = stillSameBeforeWrite ? dirtyRef.current : snapshotDirty;
-      if (!hasUnsavedChanges && !awaitedFailedForeignSave) {
-        if (inFlightSaveCountRef.current === 0 && !dirtyRef.current) {
-          setSaveState('saved');
-          clearSlowPersist();
-        }
-        return { ok: true, itemId: finalId };
-      }
-
-      // Only re-read live refs if NoteStudio is still in the exact same note session for finalId;
-      // otherwise strictly flush the pre-await snapshot for finalId (prevents A -> B -> A stale prop clobber).
-      const writeSessionSeq = stillSameBeforeWrite ? noteSessionSeqRef.current : snapshotSessionSeq;
-      const latestSeq = stillSameBeforeWrite ? editSeqRef.current : snapshotSeq;
-      const latestRawTitle = stillSameBeforeWrite ? titleRef.current.trim() : rawTitle;
-      const latestRawBody = stillSameBeforeWrite ? bodyMarkdownRef.current : rawBody;
-      const latestLinks = stillSameBeforeWrite
-        ? computeReconciledLinksOut(latestRawBody, finalId)
-        : reconciledLinks;
-
-      if (
-        !stillSameBeforeWrite &&
-        !awaitedFailedForeignSave &&
-        lastSavedStateRef.current &&
-        lastSavedStateRef.current.id === finalId &&
-        lastSavedStateRef.current.seq >= snapshotSeq &&
-        lastSavedStateRef.current.title === latestRawTitle &&
-        lastSavedStateRef.current.body === latestRawBody
-      ) {
-        if (inFlightSaveCountRef.current === 0 && !dirtyRef.current) {
-          setSaveState('saved');
-          clearSlowPersist();
-        }
-        return { ok: true, itemId: finalId };
-      }
-
+      const latestSeq = editSeqRef.current;
+      const latestRawTitle = titleRef.current.trim();
+      const latestRawBody = bodyMarkdownRef.current;
+      const latestLinks = computeReconciledLinksOut(latestRawBody);
       const nextTitle = latestRawTitle || deriveTitleFromBody(latestRawBody, fallbackTitleRef.current);
       const patch: Record<string, unknown> = {
         title: nextTitle,
@@ -1336,47 +1010,23 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
 
       inFlightSaveCountRef.current += 1;
-      if (stillSameBeforeWrite) {
-        setSaveState('saving');
-      }
-      if (isMountedRef.current) {
-        armSlowPersist();
-      }
+      armSlowPersist();
       let saveFailed = false;
       const updatePromise = window.kapsula.updateItem(finalId, patch);
       const guard = updatePromise.then(
         () => {},
         () => {}
       );
-      const saveEntry: PendingNoteSaveEntry = {
-        ownerInstanceId: studioInstanceIdRef.current!,
-        ownerSessionSeq: writeSessionSeq,
-        promise: guard,
-        title: latestRawTitle,
-        body: latestRawBody,
-        ok: false,
-      };
       inFlightUpdatePromiseRef.current = guard;
-      inFlightNoteSavesById.set(finalId, saveEntry);
       try {
         const updated = await updatePromise;
-        saveEntry.ok = Boolean(updated);
-        lastSavedStateRef.current = {
-          id: finalId,
-          seq: latestSeq,
-          title: latestRawTitle,
-          body: latestRawBody,
-        };
         const stillSameItem = (persistedDraftIdRef.current || itemRef.current.id) === finalId;
-        const sameWriteSession = noteSessionSeqRef.current === writeSessionSeq;
         const userTypedMeanwhile =
-          dirtyRef.current &&
-          sameWriteSession &&
           stillSameItem &&
           (editSeqRef.current !== latestSeq ||
             titleRef.current.trim() !== latestRawTitle ||
             bodyMarkdownRef.current !== latestRawBody);
-        if (!userTypedMeanwhile && stillSameItem && sameWriteSession) {
+        if (!userTypedMeanwhile && stillSameItem) {
           dirtyRef.current = false;
         }
         if (updated) onItemUpdatedRef.current(updated);
@@ -1387,25 +1037,17 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           saveTimerRef.current = window.setTimeout(() => {
             void flushDraft(finalId);
           }, 300);
-          return { ok: true, itemId: finalId };
+          return;
         }
-        return { ok: true, itemId: finalId };
       } catch {
         saveFailed = true;
-        if (
-          (persistedDraftIdRef.current || itemRef.current.id) === finalId &&
-          noteSessionSeqRef.current === writeSessionSeq
-        ) {
+        if ((persistedDraftIdRef.current || itemRef.current.id) === finalId) {
           dirtyRef.current = true;
           setSaveState('error');
         }
-        return { ok: false, itemId: finalId };
       } finally {
         if (inFlightUpdatePromiseRef.current === guard) {
           inFlightUpdatePromiseRef.current = null;
-        }
-        if (inFlightNoteSavesById.get(finalId) === saveEntry) {
-          inFlightNoteSavesById.delete(finalId);
         }
         inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
         if (!saveFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
@@ -1416,16 +1058,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }
       }
     },
-    [computeReconciledLinksOut, armSlowPersist, clearSlowPersist, syncMarkdownFromEditor]
+    [computeReconciledLinksOut, armSlowPersist, clearSlowPersist]
   );
 
-  const flushDraftRef = useRef(flushDraft);
-  flushDraftRef.current = flushDraft;
-  const syncMarkdownFromEditorRef = useRef(syncMarkdownFromEditor);
-  syncMarkdownFromEditorRef.current = syncMarkdownFromEditor;
-
-  // Flush changes when switching item or unmounting BEFORE useEditor's useEffect cleanup destroys editor
-  useLayoutEffect(() => {
+  // Flush changes when switching item (preserve follow-up timer when draft promotes to its persisted ID)
+  useEffect(() => {
     const closedItemId = item.id;
     const closedWasDraft = isDraft;
     return () => {
@@ -1436,119 +1073,32 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       if (promotedToCurrent) {
         return;
       }
-      syncMarkdownFromEditorRef.current();
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
-      markdownSyncPendingRef.current = false;
       if (liveBodyTimerRef.current) {
         window.clearTimeout(liveBodyTimerRef.current);
         liveBodyTimerRef.current = null;
       }
-      if (dirtyRef.current || activePendingSaveRef.current !== null) {
+      setLiveBody(bodyMarkdownRef.current);
+      if (dirtyRef.current) {
         const flushId = persistedDraftIdRef.current || closedItemId;
-        void flushDraftRef.current(flushId, closedWasDraft && !persistedDraftIdRef.current);
+        void flushDraft(flushId, closedWasDraft && !persistedDraftIdRef.current);
       }
     };
-  }, [item.id, isDraft]);
+  }, [item.id, isDraft, flushDraft]);
 
-  // Track synchronous mount/session ownership per itemId (eliminates render-to-effect gap on A -> B -> A / A -> C -> A)
-  useLayoutEffect(() => {
-    const prevLayoutSession = prevLayoutSessionRef.current;
-    const isSamePromotedDraft = Boolean(
-      prevLayoutSession?.isDraft && !isDraft && persistedDraftIdRef.current === item.id
-    );
-    prevLayoutSessionRef.current = { id: item.id, isDraft };
-    if (!isSamePromotedDraft) {
-      layoutSessionSeqRef.current += 1;
-    }
-    const curToken = layoutSessionSeqRef.current;
-    const instanceId = studioInstanceIdRef.current!;
-
-    if (!isSamePromotedDraft && !isDraft && item.id !== '__draft__') {
-      const existingPending = inFlightNoteSavesById.get(item.id);
-      if (
-        existingPending &&
-        (existingPending.ownerInstanceId !== instanceId ||
-          existingPending.ownerSessionSeq !== curToken)
-      ) {
-        pendingTransitionSaveRef.current = { itemId: item.id, entry: existingPending };
-      } else {
-        pendingTransitionSaveRef.current = null;
-      }
-    } else {
-      pendingTransitionSaveRef.current = null;
-    }
-
-    const registeredId = !isDraft && item.id !== '__draft__' ? item.id : null;
-    if (registeredId) {
-      activeMountedNoteOwnerById.set(registeredId, { instanceId, layoutToken: curToken });
-    }
-    return () => {
-      if (registeredId) {
-        const curOwner = activeMountedNoteOwnerById.get(registeredId);
-        if (
-          curOwner &&
-          curOwner.instanceId === instanceId &&
-          curOwner.layoutToken === curToken
-        ) {
-          activeMountedNoteOwnerById.delete(registeredId);
-        }
-      }
-    };
-  }, [item.id, isDraft]);
-
-  // Sync editor when selecting a different item (skip overwriting live buffer ONLY on draft->persisted promotion)
+  // Sync editor when selecting a different item (skip overwriting live buffer on draft->persisted promotion)
   useEffect(() => {
-    const prevSession = prevEffectSessionRef.current;
-    const isSamePromotedDraft = Boolean(
-      prevSession?.isDraft && !isDraft && persistedDraftIdRef.current === item.id
-    );
-    prevEffectSessionRef.current = { id: item.id, isDraft };
-
-    const fallbackInitialSave =
-      !initialMountConsumedRef.current &&
-      initialPendingMountRef.current &&
-      initialPendingMountRef.current.itemId === item.id &&
-      initialPendingMountRef.current.entry.ownerInstanceId !== studioInstanceIdRef.current
-        ? initialPendingMountRef.current.entry
-        : undefined;
-    initialMountConsumedRef.current = true;
-    initialPendingMountRef.current = null;
-
-    const transitionSave =
-      pendingTransitionSaveRef.current && pendingTransitionSaveRef.current.itemId === item.id
-        ? pendingTransitionSaveRef.current.entry
-        : undefined;
-    pendingTransitionSaveRef.current = null;
-
-    let pendingSaveCleanup: (() => void) | null = null;
+    const isSamePromotedDraft = !isDraft && persistedDraftIdRef.current === item.id;
     if (!isSamePromotedDraft) {
-      noteSessionSeqRef.current += 1;
-      const curSession = noteSessionSeqRef.current;
       persistedDraftIdRef.current = isDraft ? null : item.id;
       isDraftRef.current = isDraft;
-      sessionMediaMetaRef.current = item.mediaMeta;
-      const rawPendingSave = !isDraft
-        ? (inFlightNoteSavesById.get(item.id) ?? fallbackInitialSave ?? transitionSave)
-        : undefined;
-      const pendingSave =
-        rawPendingSave &&
-        (rawPendingSave.ownerInstanceId !== studioInstanceIdRef.current ||
-          rawPendingSave.ownerSessionSeq !== curSession)
-          ? rawPendingSave
-          : undefined;
-      activePendingSaveRef.current = pendingSave ?? null;
-      const initTitle = isDraft ? '' : pendingSave ? pendingSave.title : item.title || '';
+      const initTitle = isDraft ? '' : item.title || '';
       setTitle(initTitle);
       titleRef.current = initTitle;
       setTags(item.tags || []);
-      tagsRef.current = item.tags || [];
       setDraftOrbit(item.orbit || '');
       draftOrbitRef.current = item.orbit || '';
       setDraftBoardId(item.focusBoardId ?? null);
@@ -1568,57 +1118,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setBubbleColorOpen(false);
       setAiMenuOpen(false);
       setMoreMenuOpen(false);
-      setBeautifying(false);
-      setTranscribing(false);
-      setExtractingVoiceTasks(false);
-      setRestoringRevId(null);
-      setInsertingImage(false);
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
-      markdownSyncPendingRef.current = false;
       if (liveBodyTimerRef.current) {
         window.clearTimeout(liveBodyTimerRef.current);
         liveBodyTimerRef.current = null;
       }
-      const nextBody = pendingSave ? pendingSave.body : item.body || '';
+      const nextBody = item.body || '';
       bodyMarkdownRef.current = nextBody;
       setLiveBody(nextBody);
       dirtyRef.current = false;
-      if (pendingSave) {
-        setSaveState('saving');
-        let detached = false;
-        pendingSaveCleanup = () => {
-          detached = true;
-        };
-        void pendingSave.promise.finally(() => {
-          if (activePendingSaveRef.current === pendingSave) {
-            activePendingSaveRef.current = null;
-          }
-          if (
-            detached ||
-            noteSessionSeqRef.current !== curSession ||
-            (persistedDraftIdRef.current || itemRef.current.id) !== item.id
-          ) {
-            return;
-          }
-          if (!pendingSave.ok) {
-            dirtyRef.current = true;
-            if (lastSavedStateRef.current?.id === item.id) {
-              lastSavedStateRef.current = null;
-            }
-            setSaveState('error');
-            clearSlowPersist();
-          } else if (!dirtyRef.current && inFlightSaveCountRef.current === 0) {
-            setSaveState('saved');
-            clearSlowPersist();
-          }
-        });
-      } else {
-        setSaveState('saved');
-        clearSlowPersist();
-      }
+      setSaveState('saved');
 
       if (editor) {
         if (loadingItemTimerRef.current) {
@@ -1627,59 +1135,30 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }
         loadingItemRef.current = true;
         editor.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
-        loadingItemRef.current = false;
-        if (isDraft) {
-          loadingItemTimerRef.current = window.setTimeout(() => {
-            loadingItemTimerRef.current = null;
-            if (!editor.isDestroyed) {
-              editor.commands.focus('end');
-            }
-          }, 15);
-        }
+        loadingItemTimerRef.current = window.setTimeout(() => {
+          loadingItemTimerRef.current = null;
+          loadingItemRef.current = false;
+          if (isDraft) {
+            editor.commands.focus('end');
+          }
+        }, 15);
       }
     }
 
-    let cancelled = false;
     if (!isDraft) {
-      const loadId = item.id;
-      const loadSession = noteSessionSeqRef.current;
       window.kapsula
-        .listRevisions(loadId)
-        .then((list) => {
-          if (
-            !cancelled &&
-            noteSessionSeqRef.current === loadSession &&
-            (persistedDraftIdRef.current || itemRef.current.id) === loadId
-          ) {
-            setRevisions(list);
-          }
-        })
-        .catch(() => {
-          if (!cancelled && noteSessionSeqRef.current === loadSession) setRevisions([]);
-        });
+        .listRevisions(item.id)
+        .then(setRevisions)
+        .catch(() => setRevisions([]));
       window.kapsula
-        .getRelatedItems(loadId)
-        .then((rel) => {
-          if (
-            !cancelled &&
-            noteSessionSeqRef.current === loadSession &&
-            (persistedDraftIdRef.current || itemRef.current.id) === loadId
-          ) {
-            setRelatedState(rel);
-          }
-        })
-        .catch(() => {
-          if (!cancelled && noteSessionSeqRef.current === loadSession) {
-            setRelatedState({ related: [], backlinks: [] });
-          }
-        });
+        .getRelatedItems(item.id)
+        .then(setRelatedState)
+        .catch(() => setRelatedState({ related: [], backlinks: [] }));
     } else {
       setRevisions([]);
       setRelatedState({ related: [], backlinks: [] });
     }
     return () => {
-      cancelled = true;
-      pendingSaveCleanup?.();
       if (loadingItemTimerRef.current) {
         window.clearTimeout(loadingItemTimerRef.current);
         loadingItemTimerRef.current = null;
@@ -1699,9 +1178,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       isDraft ||
       persistedDraftIdRef.current !== item.id ||
       dirtyRef.current ||
-      inFlightSaveCountRef.current > 0 ||
-      inFlightNoteSavesById.has(item.id) ||
-      activePendingSaveRef.current !== null
+      inFlightSaveCountRef.current > 0
     ) {
       return;
     }
@@ -1712,11 +1189,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     }
     const extBody = item.body || '';
     if (editor && extBody !== bodyMarkdownRef.current) {
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
-      markdownSyncPendingRef.current = false;
       bodyMarkdownRef.current = extBody;
       setLiveBody(extBody);
       if (loadingItemTimerRef.current) {
@@ -1725,7 +1197,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
       loadingItemRef.current = true;
       editor.commands.setContent(extBody, { contentType: 'markdown', emitUpdate: false });
-      loadingItemRef.current = false;
+      loadingItemTimerRef.current = window.setTimeout(() => {
+        loadingItemTimerRef.current = null;
+        loadingItemRef.current = false;
+      }, 15);
     }
   }, [item.id, item.updatedAt, item.title, item.body, editor, isDraft]);
 
@@ -1743,7 +1218,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       }
     }, [editor, locale]);
 
-    // Reset floating link input on collapse & flush pending markdown on editor blur
+    // Reset floating link input whenever editor selection collapses
   useEffect(() => {
     if (!editor) return;
     const onSelectionUpdate = () => {
@@ -1751,37 +1226,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         setBubbleLinkEditing(false);
       }
     };
-    const onBlur = () => {
-      syncMarkdownFromEditor();
-      if (dirtyRef.current) {
-        void flushDraft(persistedDraftIdRef.current || itemRef.current.id);
-      }
-    };
     editor.on('selectionUpdate', onSelectionUpdate);
-    editor.on('blur', onBlur);
     return () => {
       editor.off('selectionUpdate', onSelectionUpdate);
-      editor.off('blur', onBlur);
     };
-  }, [editor, flushDraft, syncMarkdownFromEditor]);
-
-  // Ctrl+S / Cmd+S immediate synchronous flush
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        (e.code === 'KeyS' || e.key.toLowerCase() === 's')
-      ) {
-        e.preventDefault();
-        syncMarkdownFromEditor();
-        void flushDraft(persistedDraftIdRef.current || itemRef.current.id);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [flushDraft, syncMarkdownFromEditor]);
+  }, [editor]);
 
   // Keep active keyboard-selected slash item scrolled into view
   useEffect(() => {
@@ -1791,7 +1240,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   }, [slashIndex, slashQuery]);
 
   const handleCloseStudio = useCallback(async () => {
-    syncMarkdownFromEditor();
     const curTitle = titleRef.current.trim();
     const curBody = bodyMarkdownRef.current.trim();
     const curItem = itemRef.current;
@@ -1802,10 +1250,10 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       return;
     }
 
-    const flushRes = await flushDraft(persistedDraftIdRef.current || curItem.id);
+    await flushDraft(persistedDraftIdRef.current || curItem.id);
 
     // Clean up auto-created blank note only if it has no metadata (tags/reminder/annotations/links)
-    const effectiveId = flushRes.itemId || persistedDraftIdRef.current || curItem.id;
+    const effectiveId = persistedDraftIdRef.current || curItem.id;
     const isEmptyUntouched =
       !curBody &&
       isUntitledPlaceholderTitle(curTitle) &&
@@ -1822,8 +1270,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       onDeleteRef.current(effectiveId);
     }
     onCloseRef.current?.();
-  }, [flushDraft, syncMarkdownFromEditor]);
-  handleCloseStudioRef.current = handleCloseStudio;
+  }, [flushDraft]);
 
   useEffect(() => {
     onRegisterClose?.(handleCloseStudio);
@@ -1845,10 +1292,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   };
 
   const applyMetaPatch = async (patch: Record<string, unknown>) => {
-    const sessionBefore = noteSessionSeqRef.current;
-    const targetIdBefore = persistedDraftIdRef.current || itemRef.current.id;
-    const wasDraftBefore = isDraftRef.current && !persistedDraftIdRef.current;
-
     if ('orbit' in patch && typeof patch.orbit === 'string') {
       setDraftOrbit(patch.orbit);
       draftOrbitRef.current = patch.orbit;
@@ -1863,78 +1306,31 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       setDraftRemindAt(nextRemind);
       draftRemindAtRef.current = nextRemind;
     }
-    if ('tags' in patch && Array.isArray(patch.tags)) {
-      const nextTags = patch.tags as string[];
-      setTags(nextTags);
-      tagsRef.current = nextTags;
-    }
-
-    let effectiveId = targetIdBefore;
-    if (wasDraftBefore) {
+    if (isDraftRef.current && !persistedDraftIdRef.current) {
       dirtyRef.current = true;
-      const flushRes = await flushDraft(targetIdBefore, true);
-      if (
-        noteSessionSeqRef.current !== sessionBefore ||
-        !flushRes.ok ||
-        !flushRes.itemId ||
-        flushRes.itemId.startsWith('__draft__')
-      ) {
-        return;
-      }
-      effectiveId = flushRes.itemId;
+      await flushDraft(item.id, true);
     } else if (dirtyRef.current) {
-      const flushRes = await flushDraft(targetIdBefore);
-      if (!flushRes.ok) return;
-      effectiveId =
-        noteSessionSeqRef.current === sessionBefore
-          ? flushRes.itemId || persistedDraftIdRef.current || itemRef.current.id
-          : flushRes.itemId || targetIdBefore;
+      await flushDraft(persistedDraftIdRef.current || item.id);
     }
+    const effectiveId = persistedDraftIdRef.current || item.id;
     if (!effectiveId || effectiveId.startsWith('__draft__')) return;
-
-    while (inFlightUpdatePromiseRef.current) {
-      await inFlightUpdatePromiseRef.current.catch(() => {});
-    }
-    const updatePromise = window.kapsula.updateItem(effectiveId, patch);
-    const guard = updatePromise.then(
-      () => {},
-      () => {}
-    );
-    inFlightUpdatePromiseRef.current = guard;
-    try {
-      const updated = await updatePromise;
-      if (updated) onItemUpdatedRef.current(updated);
-    } finally {
-      if (inFlightUpdatePromiseRef.current === guard) {
-        inFlightUpdatePromiseRef.current = null;
-      }
-    }
+    const updated = await window.kapsula.updateItem(effectiveId, patch);
+    if (updated) onItemUpdated(updated);
   };
 
-  const refreshRevisions = async (expectedId?: string, expectedSessionSeq?: number) => {
-    const sessionBefore = expectedSessionSeq ?? noteSessionSeqRef.current;
-    const effectiveId = expectedId ?? (persistedDraftIdRef.current || itemRef.current.id);
+  const refreshRevisions = async () => {
+    const effectiveId = persistedDraftIdRef.current || item.id;
     if (!effectiveId || effectiveId.startsWith('__draft__')) return [];
     const list = await window.kapsula.listRevisions(effectiveId);
-    if (
-      noteSessionSeqRef.current === sessionBefore &&
-      (persistedDraftIdRef.current || itemRef.current.id) === effectiveId
-    ) {
-      setRevisions(list);
-    }
+    setRevisions(list);
     return list;
   };
 
   const handleOpenHistoryModal = async () => {
-    const sessionBefore = noteSessionSeqRef.current;
-    const targetId = persistedDraftIdRef.current || itemRef.current.id;
     if (dirtyRef.current) {
-      await flushDraft(targetId);
+      await flushDraft(persistedDraftIdRef.current || item.id);
     }
-    if (noteSessionSeqRef.current !== sessionBefore) return;
-    const effectiveId = persistedDraftIdRef.current || itemRef.current.id;
-    await refreshRevisions(effectiveId, sessionBefore).catch(() => []);
-    if (noteSessionSeqRef.current !== sessionBefore) return;
+    await refreshRevisions().catch(() => []);
     setHistoryOpen(true);
   };
 
@@ -1945,8 +1341,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
   };
 
   const handleBeautify = async (presetsArg?: TextTransformPreset[]) => {
-    const startEditor = editorRef.current;
-    if (!startEditor || startEditor.isDestroyed || beautifying) return;
+    if (!editor || beautifying) return;
     const presets: TextTransformPreset[] =
       Array.isArray(presetsArg) && presetsArg.length > 0
         ? presetsArg
@@ -1954,7 +1349,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           ? selectedPresets
           : ['structure'];
 
-    const rawMd = syncMarkdownFromEditor().trim();
+    const rawMd = editor.getMarkdown().trim();
     if (!rawMd) {
       toast.info(t('note.studio.writeFirstToast'));
       return;
@@ -1967,70 +1362,22 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
     const prevTitle = titleRef.current;
     const prevBody = rawMd;
-    const sessionBefore = noteSessionSeqRef.current;
-    const seqBefore = editSeqRef.current;
-    const targetIdBefore = persistedDraftIdRef.current || itemRef.current.id;
-    const wasDraftBefore = isDraftRef.current && !persistedDraftIdRef.current;
+
+    if (isDraftRef.current && !persistedDraftIdRef.current) {
+      dirtyRef.current = true;
+      await flushDraft(item.id);
+    }
+    const effectiveId = persistedDraftIdRef.current || item.id;
 
     setBeautifying(true);
     setMoreMenuOpen(false);
-    let appliedBeautifyToEditor = false;
     try {
-      let effectiveId = targetIdBefore;
-      if (wasDraftBefore) {
-        dirtyRef.current = true;
-        const flushRes = await flushDraft(targetIdBefore, true);
-        if (
-          noteSessionSeqRef.current !== sessionBefore ||
-          !flushRes.ok ||
-          !flushRes.itemId ||
-          flushRes.itemId.startsWith('__draft__')
-        ) {
-          return;
-        }
-        effectiveId = flushRes.itemId;
-      }
-
-      if (
-        !effectiveId ||
-        effectiveId.startsWith('__draft__') ||
-        noteSessionSeqRef.current !== sessionBefore
-      ) {
-        return;
-      }
-      if (editSeqRef.current !== seqBefore) {
-        if (dirtyRef.current && saveTimerRef.current === null) {
-          saveTimerRef.current = window.setTimeout(() => {
-            void flushDraft(effectiveId);
-          }, 420);
-        }
-        return;
-      }
-
       const res = await window.kapsula.transformText({
         itemId: effectiveId,
         text: rawMd,
         preset: presets[0],
         presets,
       });
-
-      const curEditor = editorRef.current;
-      if (
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        noteSessionSeqRef.current !== sessionBefore ||
-        !curEditor ||
-        curEditor.isDestroyed
-      ) {
-        return;
-      }
-      if (editSeqRef.current !== seqBefore) {
-        if (dirtyRef.current && saveTimerRef.current === null) {
-          saveTimerRef.current = window.setTimeout(() => {
-            void flushDraft(effectiveId);
-          }, 420);
-        }
-        return;
-      }
 
       const didChange =
         res.changed !== undefined
@@ -2053,20 +1400,18 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         return;
       }
 
+      if ((persistedDraftIdRef.current || itemRef.current.id) !== effectiveId) {
+        return;
+      }
+
       loadingItemRef.current = true;
-      curEditor.commands.setContent(res.formattedText, {
+      editor.commands.setContent(res.formattedText, {
         contentType: 'markdown',
         emitUpdate: false,
       });
       loadingItemRef.current = false;
-      appliedBeautifyToEditor = true;
 
-      const nextMd = curEditor.getMarkdown();
-      markdownSyncPendingRef.current = false;
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
+      const nextMd = editor.getMarkdown();
       bodyMarkdownRef.current = nextMd;
       setLiveBody(nextMd);
       const nextTitle =
@@ -2080,94 +1425,15 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
       dirtyRef.current = false;
       setSaveState('saved');
-
-      while (inFlightUpdatePromiseRef.current || inFlightNoteSavesById.has(effectiveId)) {
-        const pendingByItem = inFlightNoteSavesById.get(effectiveId);
-        const pending =
-          inFlightUpdatePromiseRef.current ??
-          (pendingByItem &&
-          (pendingByItem.ownerInstanceId !== studioInstanceIdRef.current ||
-            pendingByItem.ownerSessionSeq !== sessionBefore)
-            ? pendingByItem.promise
-            : undefined);
-        if (pending) await pending.catch(() => {});
-        else break;
-      }
-      if (
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        noteSessionSeqRef.current !== sessionBefore
-      ) {
-        return;
-      }
-
-      if (editSeqRef.current === seqBefore) {
-        setSaveState('saving');
-      }
-      const updatePromise = window.kapsula.updateItem(effectiveId, {
+      const updated = await window.kapsula.updateItem(effectiveId, {
         title: nextTitle,
         body: nextMd,
         ...(res.summary ? { summary: res.summary } : {}),
         skipAutoRevision: true,
       });
-      const guard = updatePromise.then(
-        () => {},
-        () => {}
-      );
-      const saveEntry: PendingNoteSaveEntry = {
-        ownerInstanceId: studioInstanceIdRef.current!,
-        ownerSessionSeq: sessionBefore,
-        promise: guard,
-        title: nextTitle,
-        body: nextMd,
-        ok: false,
-      };
-      inFlightUpdatePromiseRef.current = guard;
-      inFlightNoteSavesById.set(effectiveId, saveEntry);
-      let updated: VaultItem | null = null;
-      try {
-        updated = await updatePromise;
-        saveEntry.ok = Boolean(updated);
-        lastSavedStateRef.current = {
-          id: effectiveId,
-          seq: seqBefore,
-          title: nextTitle,
-          body: nextMd,
-        };
-      } finally {
-        if (inFlightUpdatePromiseRef.current === guard) {
-          inFlightUpdatePromiseRef.current = null;
-        }
-        if (inFlightNoteSavesById.get(effectiveId) === saveEntry) {
-          inFlightNoteSavesById.delete(effectiveId);
-        }
-      }
+      if (updated) onItemUpdated(updated);
 
-      if (updated) onItemUpdatedRef.current(updated);
-      if (
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        noteSessionSeqRef.current !== sessionBefore
-      ) {
-        return;
-      }
-      if (updated) {
-        if (editSeqRef.current === seqBefore) {
-          dirtyRef.current = false;
-          setSaveState('saved');
-          clearSlowPersist();
-        }
-      } else {
-        dirtyRef.current = true;
-        setSaveState('error');
-        clearSlowPersist();
-      }
-
-      const revs = await refreshRevisions(effectiveId, sessionBefore);
-      if (
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        noteSessionSeqRef.current !== sessionBefore
-      ) {
-        return;
-      }
+      const revs = await refreshRevisions();
       beautifyUndoStackRef.current = [...beautifyUndoStackRef.current, { title: prevTitle, body: prevBody }];
       setQuickRevertSnapshot({ title: prevTitle, body: prevBody });
       setQuickRevertRevId(
@@ -2183,51 +1449,32 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           : t('note.studio.beautifiedLocalDesc'),
       });
     } catch (err) {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        if (appliedBeautifyToEditor) {
-          dirtyRef.current = true;
-          setSaveState('error');
-          clearSlowPersist();
-        }
-        toast.error(friendlyErrorMessage(err, t('note.studio.beautifyFailed'), locale));
-      }
+      toast.error(friendlyErrorMessage(err, t('note.studio.beautifyFailed'), locale));
     } finally {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        setBeautifying(false);
-      }
+      setBeautifying(false);
     }
   };
 
   const handleTranscribeVoice = async (extractTasks = false) => {
-    const curEditor = editorRef.current;
-    if (!curEditor || curEditor.isDestroyed || transcribing || extractingVoiceTasks) return;
-    const sessionBefore = noteSessionSeqRef.current;
-    const seqBefore = editSeqRef.current;
-    const effectiveId = persistedDraftIdRef.current || itemRef.current.id;
-    const mediaPath = itemRef.current.mediaPath;
-    const mediaDurationSec = itemRef.current.mediaDurationSec;
-    if (!effectiveId || effectiveId.startsWith('__draft__') || !mediaPath) return;
+    if (!editor || transcribing || extractingVoiceTasks) return;
+    const effectiveId = persistedDraftIdRef.current || item.id;
+    if (!effectiveId || effectiveId.startsWith('__draft__') || !item.mediaPath) return;
 
     if (extractTasks) setExtractingVoiceTasks(true);
     else setTranscribing(true);
-
-    const isStillSameSession = () =>
-      noteSessionSeqRef.current === sessionBefore &&
-      (persistedDraftIdRef.current || itemRef.current.id) === effectiveId;
 
     try {
       const res = await transcribeItemWithWavFallback(
         {
           id: effectiveId,
-          mediaPath,
-          mediaDurationSec,
+          mediaPath: item.mediaPath,
+          mediaDurationSec: item.mediaDurationSec,
         },
         { extractTasks }
       );
 
       if (!res.ok) {
-        if (!isStillSameSession()) return;
-        if (extractTasks && syncMarkdownFromEditor().trim()) {
+        if (extractTasks && editor.getMarkdown().trim()) {
           // Graceful fallback: transform existing transcript text into a checklist
           await handleBeautify(['tasks']);
           return;
@@ -2254,28 +1501,11 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         if (patched) res.item = patched;
       }
 
-      if (res.item) onItemUpdatedRef.current(res.item);
-
-      const edAfter = editorRef.current;
-      if (
-        !isStillSameSession() ||
-        !edAfter ||
-        edAfter.isDestroyed ||
-        editSeqRef.current !== seqBefore
-      ) {
-        return;
-      }
-
       if (nextBody) {
         loadingItemRef.current = true;
-        edAfter.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
+        editor.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
         loadingItemRef.current = false;
-        const normalizedMd = edAfter.getMarkdown();
-        if (markdownSyncTimerRef.current !== null) {
-          window.clearTimeout(markdownSyncTimerRef.current);
-          markdownSyncTimerRef.current = null;
-        }
-        markdownSyncPendingRef.current = false;
+        const normalizedMd = editor.getMarkdown();
         bodyMarkdownRef.current = normalizedMd;
         setLiveBody(normalizedMd);
       }
@@ -2287,32 +1517,24 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
       dirtyRef.current = false;
       setSaveState('saved');
-      await refreshRevisions(effectiveId, sessionBefore);
-      if (!isStillSameSession()) return;
+      if (res.item) onItemUpdated(res.item);
+      await refreshRevisions();
       playTactileTick(soundEnabled, 'success');
       toast.success(
         extractTasks ? t('note.studio.audioTasksExtracted') : t('cards.transcribed')
       );
     } catch (err) {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        toast.error(
-          friendlyErrorMessage(err, t('note.studio.audioTranscribeFailed'), locale)
-        );
-      }
+      toast.error(
+        friendlyErrorMessage(err, t('note.studio.audioTranscribeFailed'), locale)
+      );
     } finally {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        setTranscribing(false);
-        setExtractingVoiceTasks(false);
-      }
+      setTranscribing(false);
+      setExtractingVoiceTasks(false);
     }
   };
 
   const handleQuickRevert = async (revisionId?: string) => {
-    const startEditor = editorRef.current;
-    const sessionBefore = noteSessionSeqRef.current;
-    const seqBefore = editSeqRef.current;
-    const effectiveId = persistedDraftIdRef.current || itemRef.current.id;
-    const itemSnapshot = itemRef.current;
+    const effectiveId = persistedDraftIdRef.current || item.id;
     const isQuickHeaderRevert = !revisionId;
     const stackTop =
       isQuickHeaderRevert && beautifyUndoStackRef.current.length > 0
@@ -2324,9 +1546,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       (snap ? '__snapshot__' : undefined) ||
       quickRevertRevId ||
       revisions[0]?.id;
-    if (!targetRevId || !startEditor || startEditor.isDestroyed || !effectiveId || effectiveId.startsWith('__draft__')) {
-      return;
-    }
+    if (!targetRevId || !editor) return;
 
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
@@ -2335,7 +1555,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
     setRestoringRevId(targetRevId);
     try {
-      const currentBodyBefore = syncMarkdownFromEditor();
+      const currentBodyBefore = bodyMarkdownRef.current;
       let reverted: VaultItem | null = null;
 
       if (targetRevId !== '__snapshot__') {
@@ -2344,15 +1564,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         } catch (err) {
           if (!isQuickHeaderRevert || !snap) throw err;
         }
-      }
-
-      if (
-        noteSessionSeqRef.current !== sessionBefore ||
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        editSeqRef.current !== seqBefore
-      ) {
-        if (reverted) onItemUpdatedRef.current(reverted);
-        return;
       }
 
       const dbRevertMatchedCurrentOrFailed =
@@ -2372,33 +1583,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
             body: snap.body,
             skipAutoRevision: true,
           });
-          reverted = patched ?? { ...itemSnapshot, title: fallbackTitle, body: snap.body };
+          reverted = patched ?? { ...itemRef.current, title: fallbackTitle, body: snap.body };
         }
       }
 
       if (!reverted) return;
-      onItemUpdatedRef.current(reverted);
-
-      const edAfter = editorRef.current;
-      if (
-        noteSessionSeqRef.current !== sessionBefore ||
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId ||
-        !edAfter ||
-        edAfter.isDestroyed ||
-        editSeqRef.current !== seqBefore
-      ) {
-        return;
-      }
 
       const nextBody = reverted.body || '';
       loadingItemRef.current = true;
-      edAfter.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
+      editor.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
       loadingItemRef.current = false;
-      markdownSyncPendingRef.current = false;
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
       bodyMarkdownRef.current = nextBody;
       setLiveBody(nextBody);
       setTitle(reverted.title || '');
@@ -2418,41 +1612,27 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         setQuickRevertSnapshot(null);
       }
       setHistoryOpen(false);
-      await refreshRevisions(effectiveId, sessionBefore);
-      if (
-        noteSessionSeqRef.current !== sessionBefore ||
-        (persistedDraftIdRef.current || itemRef.current.id) !== effectiveId
-      ) {
-        return;
-      }
+      onItemUpdated(reverted);
+      await refreshRevisions();
       playTactileTick(soundEnabled, 'soft');
       toast.success(t('note.studio.versionRestored'));
     } catch (err) {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        toast.error(friendlyErrorMessage(err, t('note.studio.versionRestoreFailed'), locale));
-      }
+      toast.error(friendlyErrorMessage(err, t('note.studio.versionRestoreFailed'), locale));
     } finally {
-      if (noteSessionSeqRef.current === sessionBefore) {
-        setRestoringRevId(null);
-      }
+      setRestoringRevId(null);
     }
   };
 
   const applyNoteTemplate = useCallback(
     (tpl: NoteTemplate, replaceEntireDoc = false) => {
       if (!editor) return;
-      const existingMd = syncMarkdownFromEditor().trim();
+      const existingMd = editor.getMarkdown().trim();
       if (replaceEntireDoc || !existingMd) {
         editor.commands.setContent(tpl.body, { contentType: 'markdown' });
       } else {
         editor.chain().focus().insertContent(`\n\n${tpl.body}`, { contentType: 'markdown' }).run();
       }
       const nextMd = editor.getMarkdown();
-      markdownSyncPendingRef.current = false;
-      if (markdownSyncTimerRef.current !== null) {
-        window.clearTimeout(markdownSyncTimerRef.current);
-        markdownSyncTimerRef.current = null;
-      }
       bodyMarkdownRef.current = nextMd;
       setLiveBody(nextMd);
 
@@ -2480,7 +1660,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
       editor.commands.focus('end');
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [editor, flushDraft, soundEnabled, syncMarkdownFromEditor]
+    [editor, flushDraft, soundEnabled]
   );
 
   const filteredSlashCommands = useMemo(() => {
@@ -2633,7 +1813,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const handleCopyNote = async () => {
     const cleanTitle = titleRef.current.trim();
-    const cleanBody = syncMarkdownFromEditor().trim();
+    const cleanBody = (editor?.getMarkdown() ?? bodyMarkdownRef.current).trim();
     const combined = [cleanTitle, cleanBody].filter(Boolean).join('\n\n');
     if (!combined) {
       toast.info(t('note.studio.emptyCopyInfo'));
@@ -3226,414 +2406,85 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
               itemId={!isDraftRef.current ? persistedDraftIdRef.current || item.id : undefined}
               onDictated={async (res, wav) => {
                 setShowVoiceStudio(false);
-                const curEd = editorRef.current;
-                if (!curEd || curEd.isDestroyed) return;
-                syncMarkdownFromEditor();
-                const sessionBefore = noteSessionSeqRef.current;
-                const seqBefore = editSeqRef.current;
-                const wasDraftBefore = isDraftRef.current && !persistedDraftIdRef.current;
-                const effectiveIdBefore = persistedDraftIdRef.current || itemRef.current.id;
-                const titleBefore = titleRef.current.trim();
-                const bodyBefore = bodyMarkdownRef.current;
-                const orbitSnapshot = draftOrbitRef.current || itemRef.current.orbit || undefined;
-                const boardSnapshot = draftBoardIdRef.current ?? itemRef.current.focusBoardId;
-                const remindSnapshot = draftRemindAtRef.current ?? itemRef.current.remindAt;
-                const tagsSnapshot = [...tagsRef.current];
-                const mediaMetaSnapshot = sessionMediaMetaRef.current;
-                const dictatedBody = (res.formattedText || res.transcript || '').trim();
-                const combinedBody =
-                  bodyBefore.trim() && dictatedBody
-                    ? `${bodyBefore.trim()}\n\n${dictatedBody}`
-                    : dictatedBody || bodyBefore;
+                if (!editor) return;
+                if (isDraftRef.current && !persistedDraftIdRef.current) {
+                  const dictatedBody = (res.formattedText || res.transcript || '').trim();
+                  const effectiveTitle = res.titleSuggestion || titleRef.current.trim() || undefined;
+                  const created = await window.kapsula.capture({
+                    audioBase64: wav.wavBase64,
+                    audioMime: wav.mime,
+                    audioDurationSec: wav.durationSec,
+                    title: effectiveTitle,
+                    text: dictatedBody,
+                    orbitOverride: item.orbit || undefined,
+                    focusBoardId: item.focusBoardId,
+                    mediaMeta: {
+                      ...(itemRef.current.mediaMeta ?? {}),
+                      waveformPeaks: wav.peaks,
+                      transcript: res.transcript,
+                    },
+                  });
+                  persistedDraftIdRef.current = created.id;
+                  isDraftRef.current = false;
 
-                let existingIdForAttach = effectiveIdBefore;
-                if (wasDraftBefore) {
-                  while (inflightCreateRef.current) {
-                    await inflightCreateRef.current.catch(() => {});
+                  loadingItemRef.current = true;
+                  const renderedBody = created.body || dictatedBody;
+                  editor.commands.setContent(renderedBody, {
+                    contentType: 'markdown',
+                    emitUpdate: false,
+                  });
+                  loadingItemRef.current = false;
+
+                  const nextMd = editor.getMarkdown();
+                  bodyMarkdownRef.current = nextMd;
+                  setLiveBody(nextMd);
+                  if (created.title) {
+                    setTitle(created.title);
+                    titleRef.current = created.title;
                   }
-                  const alreadyCreatedId =
-                    (noteSessionSeqRef.current === sessionBefore ? persistedDraftIdRef.current : null) ||
-                    createdDraftIdBySessionRef.current.get(sessionBefore) ||
-                    null;
+                  dirtyRef.current = false;
+                  setSaveState('saved');
 
-                  if (alreadyCreatedId) {
-                    if (!isMountedRef.current || noteSessionSeqRef.current !== sessionBefore) {
-                      if (dictatedBody) {
-                        const updated = await window.kapsula
-                          .updateItem(alreadyCreatedId, {
-                            body: combinedBody,
-                            mediaMeta: {
-                              ...(mediaMetaSnapshot ?? {}),
-                              waveformPeaks: wav.peaks,
-                              transcript: res.transcript,
-                            },
-                          })
-                          .catch(() => null);
-                        if (updated) onItemUpdatedRef.current(updated);
-                      }
-                      return;
-                    }
-                    existingIdForAttach = alreadyCreatedId;
-                  } else {
-                    const effectiveTitle =
-                      (!isGenericDraftTitle(titleBefore) ? titleBefore : '') ||
-                      res.titleSuggestion ||
-                      titleBefore ||
-                      undefined;
-                    let createdItem: VaultItem | null = null;
-                    let userTypedMeanwhileAfterCreate = false;
-                    let createFailed = false;
-                    let createTask!: Promise<void>;
-                    createTask = (async () => {
-                      inFlightSaveCountRef.current += 1;
-                      armSlowPersist();
-                      try {
-                        const created = await window.kapsula.capture({
-                          audioBase64: wav.wavBase64,
-                          audioMime: wav.mime,
-                          audioDurationSec: wav.durationSec,
-                          title: effectiveTitle,
-                          text: combinedBody,
-                          orbitOverride: orbitSnapshot,
-                          focusBoardId: boardSnapshot,
-                          remindAt: remindSnapshot,
-                          tags: tagsSnapshot,
-                          mediaMeta: {
-                            ...(mediaMetaSnapshot ?? {}),
-                            waveformPeaks: wav.peaks,
-                            transcript: res.transcript,
-                          },
-                        });
-                        if (!created) {
-                          createFailed = true;
-                          if (
-                            isMountedRef.current &&
-                            itemRef.current.id === '__draft__' &&
-                            noteSessionSeqRef.current === sessionBefore
-                          ) {
-                            dirtyRef.current = true;
-                            setSaveState('error');
-                          }
-                          return;
-                        }
-                        createdItem = created;
-                        createdDraftIdBySessionRef.current.set(sessionBefore, created.id);
-                        if (createdDraftIdBySessionRef.current.size > 32) {
-                          const oldestKey = createdDraftIdBySessionRef.current.keys().next().value;
-                          if (oldestKey !== undefined) {
-                            createdDraftIdBySessionRef.current.delete(oldestKey);
-                          }
-                        }
-                        lastSavedStateRef.current = {
-                          id: created.id,
-                          seq: seqBefore,
-                          title: titleBefore,
-                          body: bodyBefore,
-                        };
-                        if (
-                          isMountedRef.current &&
-                          noteSessionSeqRef.current === sessionBefore &&
-                          itemRef.current.id === '__draft__'
-                        ) {
-                          persistedDraftIdRef.current = created.id;
-                          isDraftRef.current = false;
-                          userTypedMeanwhileAfterCreate =
-                            dirtyRef.current &&
-                            (editSeqRef.current !== seqBefore ||
-                              titleRef.current.trim() !== titleBefore ||
-                              bodyMarkdownRef.current !== bodyBefore);
-                          if (!userTypedMeanwhileAfterCreate) {
-                            dirtyRef.current = false;
-                          }
-                        } else {
-                          onItemUpdatedRef.current(created);
-                        }
-                      } catch (err) {
-                        createFailed = true;
-                        if (
-                          isMountedRef.current &&
-                          itemRef.current.id === '__draft__' &&
-                          noteSessionSeqRef.current === sessionBefore
-                        ) {
-                          dirtyRef.current = true;
-                          setSaveState('error');
-                          toast.error(friendlyErrorMessage(err, undefined, localeRef.current));
-                        }
-                      } finally {
-                        inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
-                        if (inflightCreateRef.current === createTask) {
-                          inflightCreateRef.current = null;
-                        }
-                        if (!createFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
-                          setSaveState('saved');
-                          clearSlowPersist();
-                        } else if (createFailed) {
-                          clearSlowPersist();
-                        }
-                      }
-                    })();
-                    inflightCreateRef.current = createTask;
-                    await createTask;
-
-                    if (!createdItem) return;
-                    const persisted: VaultItem = createdItem;
-                    if (
-                      !isMountedRef.current ||
-                      noteSessionSeqRef.current !== sessionBefore ||
-                      (persistedDraftIdRef.current || itemRef.current.id) !== persisted.id
-                    ) {
-                      return;
-                    }
-
-                    const edNow = editorRef.current;
-                    if (!edNow || edNow.isDestroyed) {
-                      onDraftPersistedRef.current?.(persisted);
-                      return;
-                    }
-
-                    if (!userTypedMeanwhileAfterCreate) {
-                      loadingItemRef.current = true;
-                      const renderedBody = persisted.body || combinedBody;
-                      edNow.commands.setContent(renderedBody, {
-                        contentType: 'markdown',
-                        emitUpdate: false,
-                      });
-                      loadingItemRef.current = false;
-
-                      const nextMd = edNow.getMarkdown();
-                      markdownSyncPendingRef.current = false;
-                      if (markdownSyncTimerRef.current !== null) {
-                        window.clearTimeout(markdownSyncTimerRef.current);
-                        markdownSyncTimerRef.current = null;
-                      }
-                      bodyMarkdownRef.current = nextMd;
-                      setLiveBody(nextMd);
-                      const resolvedTitle = persisted.title || titleBefore;
-                      if (persisted.title) {
-                        setTitle(persisted.title);
-                        titleRef.current = persisted.title;
-                      }
-                      lastSavedStateRef.current = {
-                        id: persisted.id,
-                        seq: editSeqRef.current,
-                        title: resolvedTitle,
-                        body: nextMd,
-                      };
-                      dirtyRef.current = false;
-                      setSaveState('saved');
-                    } else if (dictatedBody) {
-                      edNow.chain().focus().insertContent(`\n\n${dictatedBody}`, { contentType: 'markdown' }).run();
-                      syncMarkdownFromEditor();
-                      dirtyRef.current = true;
-                      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-                      saveTimerRef.current = window.setTimeout(() => {
-                        void flushDraft(persisted.id);
-                      }, 300);
-                    }
-
-                    onDraftPersistedRef.current?.(persisted);
-                    playTactileTick(soundEnabled, 'success');
-                    toast.success(t('note.studio.voiceAndAudioSaved'));
-                    return;
-                  }
-                }
-
-                if (!existingIdForAttach || existingIdForAttach.startsWith('__draft__')) return;
-                await window.kapsula.saveRevision(existingIdForAttach, 'voice');
-                const edAfterRev = editorRef.current;
-                if (
-                  !isMountedRef.current ||
-                  noteSessionSeqRef.current !== sessionBefore ||
-                  (persistedDraftIdRef.current || itemRef.current.id) !== existingIdForAttach ||
-                  !edAfterRev ||
-                  edAfterRev.isDestroyed
-                ) {
+                  onDraftPersistedRef.current?.(created);
+                  playTactileTick(soundEnabled, 'success');
+                  toast.success(t('note.studio.voiceAndAudioSaved'));
                   return;
                 }
+                const effectiveId = persistedDraftIdRef.current || item.id;
+                await window.kapsula.saveRevision(effectiveId, 'voice');
                 const inserted = res.formattedText || res.transcript;
                 if (inserted) {
-                  if (!syncMarkdownFromEditor().trim()) {
-                    edAfterRev.commands.setContent(inserted, { contentType: 'markdown' });
+                  if (!editor.getMarkdown().trim()) {
+                    editor.commands.setContent(inserted, { contentType: 'markdown' });
                   } else {
-                    edAfterRev.chain().focus().insertContent(`\n\n${inserted}`, { contentType: 'markdown' }).run();
+                    editor.chain().focus().insertContent(`\n\n${inserted}`, { contentType: 'markdown' }).run();
                   }
-                  if (res.titleSuggestion && isGenericDraftTitle(titleRef.current)) {
+                  if (res.titleSuggestion && isGenericDraftTitle(title)) {
                     setTitle(res.titleSuggestion);
                     titleRef.current = res.titleSuggestion;
                   }
-                  const nextMd = edAfterRev.getMarkdown();
-                  markdownSyncPendingRef.current = false;
-                  if (markdownSyncTimerRef.current !== null) {
-                    window.clearTimeout(markdownSyncTimerRef.current);
-                    markdownSyncTimerRef.current = null;
-                  }
+                  const nextMd = editor.getMarkdown();
                   bodyMarkdownRef.current = nextMd;
                   setLiveBody(nextMd);
                   dirtyRef.current = true;
-                  await flushDraft(existingIdForAttach);
-                  if (!isMountedRef.current || noteSessionSeqRef.current !== sessionBefore) return;
-                  await refreshRevisions(existingIdForAttach, sessionBefore);
-                  if (!isMountedRef.current || noteSessionSeqRef.current !== sessionBefore) return;
+                  await flushDraft(effectiveId);
+                  await refreshRevisions();
                   playTactileTick(soundEnabled, 'success');
                 }
-                if (isMountedRef.current && noteSessionSeqRef.current === sessionBefore) {
-                  toast.success(t('note.studio.voiceAndAudioAttached'));
-                }
+                toast.success(t('note.studio.voiceAndAudioAttached'));
               }}
               onFallbackSaveAudio={async (wav) => {
                 setShowVoiceStudio(false);
-                syncMarkdownFromEditor();
-                const sessionBefore = noteSessionSeqRef.current;
-                const seqBefore = editSeqRef.current;
-                const wasDraftBefore = isDraftRef.current && !persistedDraftIdRef.current;
-                const titleBefore = titleRef.current.trim();
-                const bodyBefore = bodyMarkdownRef.current;
-                const orbitSnapshot = draftOrbitRef.current || itemRef.current.orbit || undefined;
-                const boardSnapshot = draftBoardIdRef.current ?? itemRef.current.focusBoardId;
-                const remindSnapshot = draftRemindAtRef.current ?? itemRef.current.remindAt;
-                const tagsSnapshot = [...tagsRef.current];
-                const mediaMetaSnapshot = sessionMediaMetaRef.current;
-
-                if (wasDraftBefore) {
-                  while (inflightCreateRef.current) {
-                    await inflightCreateRef.current.catch(() => {});
-                  }
-                  const alreadyCreatedId =
-                    (noteSessionSeqRef.current === sessionBefore ? persistedDraftIdRef.current : null) ||
-                    createdDraftIdBySessionRef.current.get(sessionBefore) ||
-                    null;
-
-                  if (alreadyCreatedId) {
-                    const updated = await window.kapsula
-                      .updateItem(alreadyCreatedId, {
-                        mediaMeta: { ...(mediaMetaSnapshot ?? {}), waveformPeaks: wav.peaks },
-                      })
-                      .catch(() => null);
-                    if (updated) onItemUpdatedRef.current(updated);
-                    if (isMountedRef.current && noteSessionSeqRef.current === sessionBefore) {
-                      toast.success(t('note.studio.audioSaved'));
-                    }
-                    return;
-                  }
-
-                  let createdItem: VaultItem | null = null;
-                  let createFailed = false;
-                  let createTask!: Promise<void>;
-                  createTask = (async () => {
-                    inFlightSaveCountRef.current += 1;
-                    armSlowPersist();
-                    try {
-                      const created = await window.kapsula.capture({
-                        audioBase64: wav.wavBase64,
-                        audioMime: wav.mime,
-                        audioDurationSec: wav.durationSec,
-                        ...(titleBefore ? { title: titleBefore } : {}),
-                        ...(bodyBefore.trim() ? { text: bodyBefore } : {}),
-                        source: 'vault_ui',
-                        orbitOverride: orbitSnapshot,
-                        focusBoardId: boardSnapshot,
-                        remindAt: remindSnapshot,
-                        tags: tagsSnapshot,
-                        mediaMeta: { ...(mediaMetaSnapshot ?? {}), waveformPeaks: wav.peaks },
-                      });
-                      if (!created) {
-                        createFailed = true;
-                        if (
-                          isMountedRef.current &&
-                          itemRef.current.id === '__draft__' &&
-                          noteSessionSeqRef.current === sessionBefore
-                        ) {
-                          dirtyRef.current = true;
-                          setSaveState('error');
-                        }
-                        return;
-                      }
-                      createdItem = created;
-                      createdDraftIdBySessionRef.current.set(sessionBefore, created.id);
-                      if (createdDraftIdBySessionRef.current.size > 32) {
-                        const oldestKey = createdDraftIdBySessionRef.current.keys().next().value;
-                        if (oldestKey !== undefined) {
-                          createdDraftIdBySessionRef.current.delete(oldestKey);
-                        }
-                      }
-                      lastSavedStateRef.current = {
-                        id: created.id,
-                        seq: seqBefore,
-                        title: titleBefore,
-                        body: bodyBefore,
-                      };
-                      if (
-                        isMountedRef.current &&
-                        noteSessionSeqRef.current === sessionBefore &&
-                        itemRef.current.id === '__draft__'
-                      ) {
-                        persistedDraftIdRef.current = created.id;
-                        isDraftRef.current = false;
-                        const userTypedMeanwhile =
-                          dirtyRef.current &&
-                          (editSeqRef.current !== seqBefore ||
-                            titleRef.current.trim() !== titleBefore ||
-                            bodyMarkdownRef.current !== bodyBefore);
-                        if (!userTypedMeanwhile) {
-                          dirtyRef.current = false;
-                        }
-                        onDraftPersistedRef.current?.(created);
-                        if (userTypedMeanwhile) {
-                          dirtyRef.current = true;
-                          setSaveState('saving');
-                          if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-                          saveTimerRef.current = window.setTimeout(() => {
-                            void flushDraft(created.id);
-                          }, 300);
-                        }
-                      } else {
-                        onItemUpdatedRef.current(created);
-                      }
-                    } catch (err) {
-                      createFailed = true;
-                      if (
-                        isMountedRef.current &&
-                        itemRef.current.id === '__draft__' &&
-                        noteSessionSeqRef.current === sessionBefore
-                      ) {
-                        dirtyRef.current = true;
-                        setSaveState('error');
-                        toast.error(friendlyErrorMessage(err, undefined, localeRef.current));
-                      }
-                    } finally {
-                      inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
-                      if (inflightCreateRef.current === createTask) {
-                        inflightCreateRef.current = null;
-                      }
-                      if (!createFailed && !dirtyRef.current && inFlightSaveCountRef.current === 0) {
-                        setSaveState('saved');
-                        clearSlowPersist();
-                      } else if (createFailed) {
-                        clearSlowPersist();
-                      }
-                    }
-                  })();
-                  inflightCreateRef.current = createTask;
-                  await createTask;
-                  if (createdItem && isMountedRef.current && noteSessionSeqRef.current === sessionBefore) {
-                    toast.success(t('note.studio.audioSaved'));
-                  }
-                  return;
-                }
-
                 const created = await window.kapsula.capture({
                   audioBase64: wav.wavBase64,
                   audioMime: wav.mime,
                   audioDurationSec: wav.durationSec,
                   source: 'vault_ui',
-                  orbitOverride: orbitSnapshot,
-                  mediaMeta: { ...(mediaMetaSnapshot ?? {}), waveformPeaks: wav.peaks },
+                  orbitOverride: item.orbit || undefined,
+                  mediaMeta: { ...(itemRef.current.mediaMeta ?? {}), waveformPeaks: wav.peaks },
                 });
-                if (!created) return;
-                onItemUpdatedRef.current(created);
-                if (isMountedRef.current && noteSessionSeqRef.current === sessionBefore) {
-                  toast.success(t('note.studio.audioSaved'));
-                }
+                if (isDraftRef.current) onDraftPersisted?.(created);
+                toast.success(t('note.studio.audioSaved'));
               }}
               onCancel={() => setShowVoiceStudio(false)}
             />
@@ -3872,7 +2723,6 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
                 availableTags={resolvedAvailableTags}
                 onChange={(nextTags) => {
                   setTags(nextTags);
-                  tagsRef.current = nextTags;
                   void applyMetaPatch({ tags: nextTags });
                 }}
               />

@@ -36,7 +36,6 @@ interface MemoryAssistantDrawerProps {
   onClose: () => void;
   onOpenCitation: (itemId: string, opts?: { keepAssistantOpen?: boolean }) => void;
   onSynthesizeFound?: (itemIds: string[]) => void;
-  onExited?: () => void;
 }
 
 const STARTER_PROMPT_KEYS = [
@@ -130,7 +129,6 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
   onClose,
   onOpenCitation,
   onSynthesizeFound,
-  onExited,
 }) => {
   const { t, locale } = useI18n();
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -218,7 +216,7 @@ export const MemoryAssistantDrawer: React.FC<MemoryAssistantDrawerProps> = ({
     widthMode === 'wide' ? Math.max(540, customWidth) : Math.min(460, Math.max(340, customWidth));
 
   return (
-    <AnimatePresence initial={false} onExitComplete={onExited}>
+    <AnimatePresence initial={false}>
       {open ? (
         <motion.aside
           key="assistant-docked-panel"

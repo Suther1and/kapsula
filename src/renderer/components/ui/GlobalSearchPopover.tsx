@@ -389,13 +389,7 @@ export const GlobalSearchPopover: React.FC<GlobalSearchPopoverProps> = ({
                           >
                             <span className="w-7 h-7 rounded-lg bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] flex items-center justify-center shrink-0 overflow-hidden">
                               {thumb ? (
-                                <img
-                                  src={thumb}
-                                  alt=""
-                                  loading="lazy"
-                                  decoding="async"
-                                  className="w-full h-full object-cover"
-                                />
+                                <img src={thumb} alt="" className="w-full h-full object-cover" />
                               ) : (
                                 renderItemIcon(it)
                               )}

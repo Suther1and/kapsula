@@ -2,7 +2,6 @@ import React, {
   Suspense,
   lazy,
   useCallback,
-  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 import NumberFlow from '@number-flow/react';
 import { Highlight, HighlightItem } from '@animate-ui/react/primitives/effects/highlight';
 import { toast } from 'sonner';
@@ -67,7 +67,6 @@ import { isDedicatedNote, isMediaItem } from '@shared/item-helpers';
 import { formatShortcutCompact, isMacPlatform } from '@shared/shortcuts';
 import { parseMarkdownTasks, toggleMarkdownTaskInBody } from '@shared/task-helpers';
 import { getDnaHumanLabel } from '../lib/format';
-import { hydrateFullVaultItem } from '../lib/hydrate-item';
 import { playTactileTick } from '../lib/tactileSound';
 import { KapsulaEmblem } from '../components/ui/KapsulaEmblem';
 import { GlobalSearchPopover } from '../components/ui/GlobalSearchPopover';
@@ -76,11 +75,6 @@ import { SelectMenu } from '../components/ui/SelectMenu';
 import { TooltipHint } from '../components/ui/TooltipHint';
 import { SegmentedControl } from '../components/ui/SegmentedControl';
 import { getSectionIconLabels, SectionIcon } from '../components/ui/SectionIcon';
-import {
-  getFeedColumns,
-  VirtualizedFixedList,
-  VirtualizedMasonryGrid,
-} from '../components/ui/VirtualGrid';
 import {
   ContextMenuSurface,
   type ContextMenuEntry,
@@ -166,40 +160,12 @@ const SmartTriageModal = lazy(() =>
   import('../components/modals/SmartTriageModal').then((m) => ({ default: m.SmartTriageModal }))
 );
 
-function usePresenceMount(
-  active: boolean,
-  fallbackMs = 220
-): { shouldMount: boolean; notifyExited: () => void } {
-  const [retaining, setRetaining] = useState(active);
-  const timerRef = useRef<number | null>(null);
-  if (active && !retaining) {
-    setRetaining(true);
+function useMountOnce(active: boolean): boolean {
+  const [mounted, setMounted] = useState(active);
+  if (active && !mounted) {
+    setMounted(true);
   }
-  useEffect(() => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (active || !retaining) return;
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      setRetaining(false);
-    }, fallbackMs);
-    return () => {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [active, retaining, fallbackMs]);
-  const notifyExited = useCallback(() => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    setRetaining(false);
-  }, []);
-  return { shouldMount: active || retaining, notifyExited };
+  return mounted || active;
 }
 import {
   computeScopedAccentTokens,
@@ -364,36 +330,63 @@ function applyOptimisticTaskToItem(
   };
 }
 
+const MASONRY_ROW_UNIT_PX = 4;
+const FEED_PAGE_SIZE = 80;
 const SERVER_ITEM_PAGE = 2000;
 
-function estimateFeedCardHeight(item: VaultItem, colWidth: number): number {
-  if (item.dna === 'secret') return 146;
-  if (item.dna === 'doc') return 158;
-  if (item.dna === 'snippet') return 260;
-  if (item.dna === 'shot') {
-    const imgH = item.imagePath || item.thumbPath ? Math.min(260, Math.round(colWidth * 0.625)) : 120;
-    return imgH + 92;
-  }
-  if (item.dna === 'link') {
-    const hasHero = Boolean(item.imagePath || item.thumbPath || item.ogImageUrl);
-    const hasDesc = Boolean(item.summary || item.body);
-    return (hasHero ? 156 : 0) + (hasDesc ? 64 : 24) + 92;
-  }
-  if (item.dna === 'voice') {
-    const actionCount = Math.min(3, item.mediaMeta?.actionItems?.length ?? 0);
-    const hasTranscript = Boolean(item.body?.trim() || item.mediaMeta?.transcript?.trim());
-    return 154 + (hasTranscript ? 48 : 0) + actionCount * 24;
-  }
-  const hasInlineImg =
-    !item.thumbPath && !item.imagePath && extractInlineMediaFilenames(item.body).length > 0;
-  const bodyLen = Math.min(item.bodyLength ?? item.body?.length ?? 0, 220);
-  const textLines = bodyLen > 0 ? Math.min(4, Math.max(1, Math.ceil(bodyLen / 42))) : 0;
-  const taskLines =
-    item.hasCheckbox || (item.body && item.body.includes('[') && item.body.includes(']'))
-      ? Math.min(4, parseMarkdownTasks(item.body || '').length)
-      : 0;
-  return 92 + (hasInlineImg ? 132 : 0) + textLines * 20 + taskLines * 24;
+const masonryMeasureCallbacks = new WeakMap<Element, () => void>();
+let sharedMasonryObserver: ResizeObserver | null = null;
+function getSharedMasonryObserver(): ResizeObserver | null {
+  if (sharedMasonryObserver) return sharedMasonryObserver;
+  if (typeof ResizeObserver === 'undefined') return null;
+  sharedMasonryObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      masonryMeasureCallbacks.get(entry.target)?.();
+    }
+  });
+  return sharedMasonryObserver;
 }
+
+interface MasonryCardCellProps {
+  children: React.ReactNode;
+}
+
+const MasonryCardCell: React.FC<MasonryCardCellProps> = React.memo(({ children }) => {
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const [rowSpan, setRowSpan] = useState<number>(36);
+
+  useLayoutEffect(() => {
+    const inner = innerRef.current;
+    if (!inner) return;
+    const measure = () => {
+      const h = Math.ceil(inner.getBoundingClientRect().height);
+      const next = Math.max(1, Math.ceil(h / MASONRY_ROW_UNIT_PX));
+      setRowSpan((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    const ro = getSharedMasonryObserver();
+    if (!ro) return;
+    masonryMeasureCallbacks.set(inner, measure);
+    ro.observe(inner);
+    return () => {
+      masonryMeasureCallbacks.delete(inner);
+      ro.unobserve(inner);
+    };
+  }, []);
+
+  return (
+    <div
+      ref={outerRef}
+      style={{ gridRowEnd: `span ${rowSpan}` }}
+      className="min-w-0"
+    >
+      <div ref={innerRef} style={{ paddingBottom: 'var(--k-grid-gap)' }}>
+        {children}
+      </div>
+    </div>
+  );
+});
 
 function extractTaskLinesSignature(body: string | null | undefined): string {
   if (!body || !body.includes('[') || !body.includes(']')) return '';
@@ -768,6 +761,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 }) => {
   const { t, locale, dateLocale } = useI18n();
   const prefersReduced = useReducedMotion();
+  const [feedGridAnimRef, enableFeedGridAnim] = useAutoAnimate<HTMLDivElement>({
+    duration: prefersReduced ? 0 : 180,
+    easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+  });
+  const [feedListAnimRef, enableFeedListAnim] = useAutoAnimate<HTMLDivElement>({
+    duration: prefersReduced ? 0 : 170,
+    easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+  });
+  const [feedVisibleCount, setFeedVisibleCount] = useState(FEED_PAGE_SIZE);
   const [hasMoreServerItems, setHasMoreServerItems] = useState(false);
   const loadingMoreServerRef = useRef(false);
   const [items, setItems] = useState<VaultItem[]>([]);
@@ -831,29 +833,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const [nav, setNav] = useState<NavView>({ type: 'flow' });
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarSlotOpen, setSidebarSlotOpen] = useState(true);
-  const sidebarCloseTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (sidebarCloseTimerRef.current !== null) {
-      window.clearTimeout(sidebarCloseTimerRef.current);
-      sidebarCloseTimerRef.current = null;
-    }
-    if (sidebarOpen || prefersReduced) {
-      setSidebarSlotOpen(sidebarOpen);
-      return;
-    }
-    sidebarCloseTimerRef.current = window.setTimeout(() => {
-      sidebarCloseTimerRef.current = null;
-      setSidebarSlotOpen(false);
-    }, 110);
-    return () => {
-      if (sidebarCloseTimerRef.current !== null) {
-        window.clearTimeout(sidebarCloseTimerRef.current);
-        sidebarCloseTimerRef.current = null;
-      }
-    };
-  }, [sidebarOpen, prefersReduced]);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
       const raw = Number(localStorage.getItem('kapsula.sidebar.width'));
@@ -874,7 +853,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sidebarRailSnapping, setSidebarRailSnapping] = useState(false);
   const sidebarRailSnapTimerRef = useRef<number | null>(null);
 
-  // Pre-warm NoteStudio chunk + syntax highlighter on idle so first card open on macOS has zero lag
+  // Pre-warm NoteStudio + core modal & hub chunks on idle so first opens have zero lag
   useEffect(() => {
     let cancelled = false;
     const warm = () => {
@@ -884,19 +863,27 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           if (!cancelled) mod.warmNoteStudioRuntime?.();
         })
         .catch(() => {});
+      void import('../components/ui/QuickLookModal').catch(() => {});
+      void import('../components/modals/SettingsModal').catch(() => {});
+      void import('../components/modals/NewSecretModal').catch(() => {});
+      void import('../components/studio/SecretStudioSheet').catch(() => {});
+      void import('../components/studio/NotesHubView').catch(() => {});
+      void import('../components/studio/MediaHubView').catch(() => {});
+      void import('../components/studio/TasksHubView').catch(() => {});
+      void import('../components/studio/CalendarHubView').catch(() => {});
     };
     const w = window as unknown as {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
     };
     if (typeof w.requestIdleCallback === 'function') {
-      const id = w.requestIdleCallback(warm, { timeout: 1400 });
+      const id = w.requestIdleCallback(warm, { timeout: 900 });
       return () => {
         cancelled = true;
         w.cancelIdleCallback?.(id);
       };
     }
-    const timer = window.setTimeout(warm, 650);
+    const timer = window.setTimeout(warm, 450);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -1007,7 +994,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const [sortOrder, setSortOrder] = useState<SortMode>('flow');
 
   const [searchQuery, setSearchQuery] = useState('');
-  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [serverSearchIds, setServerSearchIds] = useState<string[] | null>(null);
   const serverSearchReqIdRef = useRef(0);
   const [filterMediaOnly, setFilterMediaOnly] = useState(false);
@@ -1105,16 +1091,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     (archivedLoadedRef.current ? archivedItems.length : vaultStats.archivedCount) === 0 &&
     (trashedLoadedRef.current ? trashedItems.length : vaultStats.trashedCount) === 0 &&
     orbits.length === 0;
-  const presenceFallbackMs = prefersReduced ? 140 : 220;
-  const assistantMount = usePresenceMount(assistantOpen, presenceFallbackMs);
-  const quickLookMount = usePresenceMount(Boolean(quickLookItem), presenceFallbackMs);
-  const lightboxMount = usePresenceMount(Boolean(lightboxItem), presenceFallbackMs);
-  const newSecretMount = usePresenceMount(newSecretOpen, presenceFallbackMs);
-  const unlockMount = usePresenceMount(unlockOpen, presenceFallbackMs);
-  const onboardingMount = usePresenceMount(onboardingShouldOpen, presenceFallbackMs);
-  const settingsMount = usePresenceMount(settingsOpen, presenceFallbackMs);
-  const synthesizeMount = usePresenceMount(synthesizeOpen, presenceFallbackMs);
-  const triageMount = usePresenceMount(triageOpen, presenceFallbackMs);
+  const mountAssistant = useMountOnce(assistantOpen);
+  const mountQuickLook = useMountOnce(Boolean(quickLookItem));
+  const mountLightbox = useMountOnce(Boolean(lightboxItem));
+  const mountNewSecret = useMountOnce(newSecretOpen);
+  const mountUnlock = useMountOnce(unlockOpen);
+  const mountOnboarding = useMountOnce(onboardingShouldOpen);
+  const mountSettings = useMountOnce(settingsOpen);
+  const mountSynthesize = useMountOnce(synthesizeOpen);
+  const mountTriage = useMountOnce(triageOpen);
 
   const [sectionEditor, setSectionEditor] = useState<SectionEditorState | null>(null);
   const [sectionSaving, setSectionSaving] = useState(false);
@@ -1285,6 +1270,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const sidebarElRef = useRef<HTMLElement | null>(null);
   const feedCanvasRef = useRef<HTMLDivElement | null>(null);
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
   const studioCloseHandlerRef = useRef<(() => Promise<void>) | null>(null);
   const navRef = useRef(nav);
   navRef.current = nav;
@@ -1376,12 +1362,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     setStudioOpen(false);
   }, []);
 
-  const handleStudioSelectRelated = useCallback(async (rel: VaultItem) => {
-    const reqId = ++openItemReqRef.current;
-    const resolved = rel.isCardProjection ? await hydrateFullVaultItem(rel) : rel;
-    if (openItemReqRef.current !== reqId) return;
+  const handleStudioSelectRelated = useCallback((rel: VaultItem) => {
+    openItemReqRef.current += 1;
     setStudioDraftMode(false);
-    setActiveItem(resolved);
+    setActiveItem(rel);
   }, []);
 
   const handleStudioClose = useCallback(() => {
@@ -1419,14 +1403,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         await Promise.all([
           window.kapsula.queryVault({
             includeSecrets: true,
-            projection: 'card',
             limit: SERVER_ITEM_PAGE,
           }),
           needArchived
             ? window.kapsula.queryVault({
                 archivedOnly: true,
                 includeSecrets: true,
-                projection: 'card',
                 limit: 300,
               })
             : Promise.resolve<VaultItem[] | null>(null),
@@ -1434,7 +1416,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             ? window.kapsula.queryVault({
                 onlyDeleted: true,
                 includeSecrets: true,
-                projection: 'card',
                 limit: 300,
               })
             : Promise.resolve<VaultItem[] | null>(null),
@@ -1477,7 +1458,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   useEffect(() => {
     if (nav.type === 'archive' && !archivedLoadedRef.current) {
       void window.kapsula
-        .queryVault({ archivedOnly: true, includeSecrets: true, projection: 'card', limit: 300 })
+        .queryVault({ archivedOnly: true, includeSecrets: true, limit: 300 })
         .then((rows) => {
           archivedLoadedRef.current = true;
           setArchivedItems(rows.filter((r) => r.isArchived && !r.deletedAt && !r.purgedAt));
@@ -1485,7 +1466,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         .catch(() => {});
     } else if (nav.type === 'trash' && !trashedLoadedRef.current) {
       void window.kapsula
-        .queryVault({ onlyDeleted: true, includeSecrets: true, projection: 'card', limit: 300 })
+        .queryVault({ onlyDeleted: true, includeSecrets: true, limit: 300 })
         .then((rows) => {
           trashedLoadedRef.current = true;
           setTrashedItems(rows.filter((r) => Boolean(r.deletedAt) && !r.purgedAt));
@@ -1508,19 +1489,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   }, [refreshAll]);
 
   const handleOpenItem = useCallback((item: VaultItem) => {
-    const reqId = ++openItemReqRef.current;
-    if (!item.isCardProjection) {
-      setStudioDraftMode(false);
-      setActiveItem(item);
-      setStudioOpen(true);
-      return;
-    }
-    void hydrateFullVaultItem(item).then((full) => {
-      if (openItemReqRef.current !== reqId) return;
-      setStudioDraftMode(false);
-      setActiveItem(full);
-      setStudioOpen(true);
-    });
+    openItemReqRef.current += 1;
+    setStudioDraftMode(false);
+    setActiveItem(item);
+    setStudioOpen(true);
   }, []);
 
   const handleOpenBlankDraft = useCallback(() => {
@@ -1740,7 +1712,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
       if (trashedLoadedRef.current || navRef.current.type === 'trash') {
         void window.kapsula
-          .queryVault({ onlyDeleted: true, includeSecrets: true, projection: 'card', limit: 300 })
+          .queryVault({ onlyDeleted: true, includeSecrets: true, limit: 300 })
           .then((rows) => {
             trashedLoadedRef.current = true;
             setTrashedItems(rows.filter((r) => Boolean(r.deletedAt) && !r.purgedAt));
@@ -1749,7 +1721,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       }
       if (archivedLoadedRef.current || navRef.current.type === 'archive') {
         void window.kapsula
-          .queryVault({ archivedOnly: true, includeSecrets: true, projection: 'card', limit: 300 })
+          .queryVault({ archivedOnly: true, includeSecrets: true, limit: 300 })
           .then((rows) => {
             archivedLoadedRef.current = true;
             setArchivedItems(rows.filter((r) => r.isArchived && !r.deletedAt && !r.purgedAt));
@@ -1950,7 +1922,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         const res = await window.kapsula.queryVault({
           search: q,
           includeSecrets: true,
-          projection: 'card',
           limit: 2000,
         });
         if (!cancelled && reqId === serverSearchReqIdRef.current) {
@@ -2128,7 +2099,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         : nav.type === 'trash'
           ? trashedItems
           : items;
-    const q = deferredSearchQuery.trim();
+    const q = searchQuery.trim();
     const serverSet = serverSearchIds ? new Set(serverSearchIds) : null;
     const scoreMap = q ? new Map<string, number>() : null;
     const orbitNameMap = q ? new Map(orbits.map((o) => [o.id, o.name])) : null;
@@ -2296,7 +2267,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     items,
     archivedItems,
     trashedItems,
-    deferredSearchQuery,
+    searchQuery,
     serverSearchIds,
     filterMediaOnly,
     filterPinnedOnly,
@@ -2358,16 +2329,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     });
   }, [selectableVisibleIds]);
 
-  const navResetMountedRef = useRef(false);
+  const renderedItems = useMemo(
+    () => visibleItems.slice(0, feedVisibleCount),
+    [visibleItems, feedVisibleCount],
+  );
+
   useEffect(() => {
-    if (!navResetMountedRef.current) {
-      navResetMountedRef.current = true;
-      return;
-    }
-    const scroller = feedCanvasRef.current?.querySelector('.overflow-y-auto') as HTMLElement | null;
-    if (scroller && scroller.scrollTop !== 0) {
-      scroller.scrollTop = 0;
-    }
+    setFeedVisibleCount(FEED_PAGE_SIZE);
   }, [
     nav,
     searchQuery,
@@ -2388,7 +2356,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     try {
       const more = await window.kapsula.queryVault({
         includeSecrets: true,
-        projection: 'card',
         limit: 1000,
         offset: itemsRef.current.length,
       });
@@ -2403,6 +2370,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           );
           return extra.length > 0 ? [...prev, ...extra] : prev;
         });
+        setFeedVisibleCount((prev) => prev + FEED_PAGE_SIZE);
       }
     } catch {
       // ignore transient pagination fetch errors
@@ -2411,11 +2379,34 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }
   }, [hasMoreServerItems]);
 
-  const handleFeedReachEnd = useCallback(() => {
-    if (hasMoreServerItems && navRef.current.type !== 'archive' && navRef.current.type !== 'trash') {
-      void loadMoreServerItems();
-    }
-  }, [hasMoreServerItems, loadMoreServerItems]);
+  const enableAutoAnimate = renderedItems.length <= 60 && !prefersReduced;
+  useLayoutEffect(() => {
+    enableFeedGridAnim(enableAutoAnimate);
+    enableFeedListAnim(enableAutoAnimate);
+  }, [enableAutoAnimate, enableFeedGridAnim, enableFeedListAnim]);
+
+  const showFeedPaginationSentinel =
+    feedVisibleCount < visibleItems.length ||
+    (hasMoreServerItems && nav.type !== 'archive' && nav.type !== 'trash');
+
+  useEffect(() => {
+    if (!showFeedPaginationSentinel) return;
+    const el = feedSentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        if (feedVisibleCount < visibleItems.length) {
+          setFeedVisibleCount((prev) => Math.min(visibleItems.length, prev + FEED_PAGE_SIZE));
+        } else if (hasMoreServerItems && nav.type !== 'archive' && nav.type !== 'trash') {
+          void loadMoreServerItems();
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [showFeedPaginationSentinel, feedVisibleCount, visibleItems.length, hasMoreServerItems, nav.type, loadMoreServerItems]);
 
   // Handlers
   const handleToggleTheme = async () => {
@@ -2475,10 +2466,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       try {
         const found = await window.kapsula.getVaultItem(itemId, { includeDeleted: true });
         if (openItemReqRef.current !== reqId || !found) return;
-        const resolved = found.isCardProjection ? await hydrateFullVaultItem(found) : found;
-        if (openItemReqRef.current !== reqId) return;
         setStudioDraftMode(false);
-        setActiveItem(resolved);
+        setActiveItem(found);
         setStudioOpen(true);
       } catch {
         // ignore
@@ -2685,21 +2674,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             fromToggled && (!fromItems || fromToggled.updatedAt >= fromItems.updatedAt)
               ? fromToggled
               : fromItems ?? target;
-          let resolved = latestLocal.isCardProjection
-            ? await hydrateFullVaultItem(latestLocal)
-            : latestLocal;
-          if (resolved.isCardProjection && resolved.isBodyTruncated) {
-            const fetched = await window.kapsula
-              .getVaultItem(itemId, { includeDeleted: Boolean(latestLocal.deletedAt) })
-              .catch(() => null);
-            if (!fetched) {
-              if (toggleNotesHubSeqRef.current.get(itemId) === seq) {
-                toast.error(friendlyErrorMessage(undefined, undefined, locale));
-              }
-              return;
-            }
-            resolved = fetched;
-          }
+          const resolved = latestLocal;
           if (toggleNotesHubSeqRef.current.get(itemId) !== seq) return;
           if (Boolean(resolved.mediaMeta?.inNotesHub) === inNotesHub) return;
 
@@ -2984,11 +2959,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const res = await window.kapsula.bulkUpdateItems(
-        ids,
-        { orbit: orbitId },
-        { projection: 'card' }
-      );
+      const res = await window.kapsula.bulkUpdateItems(ids, { orbit: orbitId });
       if (res.items.length > 0) {
         applyBatchUpsertedRef.current?.(res.items);
         toast.success(t('workspace.toast.movedCount', { count: res.items.length }));
@@ -3008,11 +2979,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const res = await window.kapsula.bulkUpdateItems(
-        ids,
-        { isPinned: pin },
-        { projection: 'card' }
-      );
+      const res = await window.kapsula.bulkUpdateItems(ids, { isPinned: pin });
       if (res.items.length > 0) {
         applyBatchUpsertedRef.current?.(res.items, { skipTaskRefresh: true });
         toast.success(
@@ -3036,11 +3003,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     try {
-      const res = await window.kapsula.bulkUpdateItems(
-        ids,
-        { isMuted: mute },
-        { projection: 'card' }
-      );
+      const res = await window.kapsula.bulkUpdateItems(ids, { isMuted: mute });
       if (res.items.length > 0) {
         applyBatchUpsertedRef.current?.(res.items, { skipTaskRefresh: true });
         toast.success(
@@ -3470,7 +3433,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       defaultFocusBoardId={defaultFocusBoardId}
       orbits={orbits}
       focusBoards={boards}
-      globalSearchQuery={deferredSearchQuery}
+      globalSearchQuery={searchQuery}
       serverSearchIds={serverSearchIds}
       soundEnabled={soundEnabled}
       createDraftTrigger={notesDraftTrigger}
@@ -3489,125 +3452,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     />
   );
 
-  const feedGridGapPx = appearanceConfig.density === 'compact' ? 10 : 14;
-  const getFeedItemKey = useCallback((item: VaultItem) => item.id, []);
   const hasSelectionActive = selectedIds.length > 0;
-
-  const renderFeedCard = useCallback(
-    (item: VaultItem) => (
-      <MemoryCardRouter
-        item={item}
-        orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
-        orbits={orbits}
-        focusBoards={boards}
-        vaultLocked={vaultLocked}
-        wipeSeconds={wipeSeconds}
-        selected={selectedIdSet.has(item.id)}
-        selectionMode={hasSelectionActive}
-        onToggleSelect={handleToggleSelect}
-        onOpenStudio={handleOpenItem}
-        onQuickLook={handleQuickLook}
-        onHoverItem={handleHoverItem}
-        onOpenSecretSheet={handleOpenItem}
-        onOpenShotLightbox={handleOpenShotLightbox}
-        onDelete={handleDeleteItem}
-        onTogglePin={handleTogglePin}
-        onToggleMute={handleToggleMute}
-        onToggleNotesHub={handleToggleNotesHub}
-        onMoveToOrbit={handleMoveToOrbit}
-        onMoveToBoard={handleMoveToBoard}
-        onDuplicate={handleDuplicateItem}
-        onExportMarkdown={handleExportMarkdown}
-        onUnlockVaultRequest={handleUnlockVaultRequest}
-        onToggleMarkdownTask={handleToggleMarkdownTask}
-        onToggleVoiceAction={handleToggleVoiceAction}
-      />
-    ),
-    [
-      orbitMap,
-      orbits,
-      boards,
-      vaultLocked,
-      wipeSeconds,
-      selectedIdSet,
-      hasSelectionActive,
-      handleToggleSelect,
-      handleOpenItem,
-      handleQuickLook,
-      handleHoverItem,
-      handleOpenShotLightbox,
-      handleDeleteItem,
-      handleTogglePin,
-      handleToggleMute,
-      handleToggleNotesHub,
-      handleMoveToOrbit,
-      handleMoveToBoard,
-      handleDuplicateItem,
-      handleExportMarkdown,
-      handleUnlockVaultRequest,
-      handleToggleMarkdownTask,
-      handleToggleVoiceAction,
-    ]
-  );
-
-  const renderFeedListRow = useCallback(
-    (item: VaultItem) => (
-      <MemoryCardRouter
-        item={item}
-        orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
-        orbits={orbits}
-        focusBoards={boards}
-        compactList
-        vaultLocked={vaultLocked}
-        wipeSeconds={wipeSeconds}
-        selected={selectedIdSet.has(item.id)}
-        selectionMode={hasSelectionActive}
-        onToggleSelect={handleToggleSelect}
-        onOpenStudio={handleOpenItem}
-        onQuickLook={handleQuickLook}
-        onHoverItem={handleHoverItem}
-        onOpenSecretSheet={handleOpenItem}
-        onOpenShotLightbox={handleOpenShotLightbox}
-        onDelete={handleDeleteItem}
-        onTogglePin={handleTogglePin}
-        onToggleMute={handleToggleMute}
-        onToggleNotesHub={handleToggleNotesHub}
-        onMoveToOrbit={handleMoveToOrbit}
-        onMoveToBoard={handleMoveToBoard}
-        onDuplicate={handleDuplicateItem}
-        onExportMarkdown={handleExportMarkdown}
-        onUnlockVaultRequest={handleUnlockVaultRequest}
-        onToggleMarkdownTask={handleToggleMarkdownTask}
-        onToggleVoiceAction={handleToggleVoiceAction}
-      />
-    ),
-    [
-      orbitMap,
-      orbits,
-      boards,
-      vaultLocked,
-      wipeSeconds,
-      selectedIdSet,
-      hasSelectionActive,
-      handleToggleSelect,
-      handleOpenItem,
-      handleQuickLook,
-      handleHoverItem,
-      handleOpenShotLightbox,
-      handleDeleteItem,
-      handleTogglePin,
-      handleToggleMute,
-      handleToggleNotesHub,
-      handleMoveToOrbit,
-      handleMoveToBoard,
-      handleDuplicateItem,
-      handleExportMarkdown,
-      handleUnlockVaultRequest,
-      handleToggleMarkdownTask,
-      handleToggleVoiceAction,
-    ]
-  );
-
   const isFullHeightCanvas = nav.type === 'notes' || isInlineNotesMode;
 
   const feedBackgroundMenuEntries: ContextMenuEntry[] = useMemo(
@@ -3667,51 +3512,38 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
   const glassEnabled = (appearanceConfig.glassPreset ?? 'off') !== 'off';
 
-  const effectiveSidebarWidth = sidebarRail ? 62 : sidebarWidth;
-
   return (
     <div
       data-testid="studio-workspace"
       className="relative h-screen w-screen flex flex-row overflow-hidden bg-[var(--k-bg-canvas)] text-[var(--k-ink-primary)] select-none"
     >
       {glassEnabled ? <div aria-hidden="true" className="k-glass-mesh" /> : null}
-      {/* Full-Height Left Sidebar (1-frame slot snap + GPU translate3d/opacity, zero frame-by-frame width reflow) */}
-      <aside
+      {/* Full-Height Animated Left Sidebar (Linear/Things split-shell: drag-resizable down to 62px Icon-Rail or full collapse) */}
+      <motion.aside
         ref={sidebarElRef}
         key="workspace-sidebar"
         data-testid="workspace-sidebar"
         data-sidebar-rail={sidebarRail ? 'true' : 'false'}
         aria-hidden={!sidebarOpen}
-        style={{
-          width: sidebarSlotOpen ? `${effectiveSidebarWidth}px` : '0px',
-          display: sidebarSlotOpen ? 'flex' : 'none',
-          pointerEvents: sidebarOpen ? 'auto' : 'none',
-        }}
-        className={`relative z-[2] shrink-0 h-full overflow-x-clip bg-[var(--k-bg-rail)] flex-col ${
-          sidebarSlotOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
+        initial={false}
+        animate={
+          sidebarOpen
+            ? { width: sidebarRail ? 62 : sidebarWidth, opacity: 1 }
+            : { width: 0, opacity: 0 }
+        }
+        transition={
+          sidebarDragging && !sidebarRailSnapping
+            ? { duration: 0 }
+            : prefersReduced
+              ? { duration: 0.08 }
+              : { duration: 0.27, ease: [0.22, 1, 0.36, 1] }
+        }
+        style={{ pointerEvents: sidebarOpen ? 'auto' : 'none' }}
+        className={`relative z-[2] shrink-0 h-full overflow-hidden bg-[var(--k-bg-rail)] flex flex-col ${
+          sidebarOpen ? 'border-r border-[var(--k-border-hairline)]' : ''
         }`}
       >
-        <motion.div
-          initial={false}
-          animate={
-            sidebarOpen
-              ? { opacity: 1, transform: 'translate3d(0px, 0px, 0px)' }
-              : prefersReduced
-                ? { opacity: 0, transform: 'translate3d(0px, 0px, 0px)' }
-                : { opacity: 0, transform: 'translate3d(-16px, 0px, 0px)' }
-          }
-          transition={
-            sidebarDragging && !sidebarRailSnapping
-              ? { duration: 0 }
-              : prefersReduced
-                ? { duration: 0.06 }
-                : sidebarOpen
-                  ? { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
-                  : { duration: 0.1, ease: [0.32, 0.72, 0, 1] }
-          }
-          style={{ width: `${effectiveSidebarWidth}px` }}
-          className="min-w-0 h-full flex flex-col relative will-change-[transform,opacity]"
-        >
+        <div className="w-full min-w-0 h-full flex flex-col relative">
           {/* Sidebar Integrated Top Brand Bar (draggable; reserves macOS traffic-light safe zone) */}
           <div
             className={`h-[46px] shrink-0 flex items-center justify-between k-drag-region overflow-hidden ${
@@ -4529,7 +4361,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               />
             </div>
           </div>
-        </motion.div>
+        </div>
         {sidebarOpen ? (
           <div
             role="separator"
@@ -4552,7 +4384,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             />
           </div>
         ) : null}
-      </aside>
+      </motion.aside>
 
       {/* Right Main Column: Seamless Slim Chrome + Smoothly Reflowing Workspace */}
       <div className="relative z-[1] flex-1 min-w-0 h-full flex flex-col overflow-hidden">
@@ -4658,7 +4490,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
             <GlobalSearchPopover
               open={searchFocused}
-              query={deferredSearchQuery}
+              query={searchQuery}
               items={items}
               calendarEvents={calendarEvents}
               tasks={tasks}
@@ -4803,7 +4635,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     items={items}
                     orbits={orbits}
                     focusBoards={boards}
-                    searchQuery={deferredSearchQuery}
+                    searchQuery={searchQuery}
                     serverSearchIds={serverSearchIds}
                     soundEnabled={soundEnabled}
                     onOpenStudio={handleOpenItem}
@@ -5666,16 +5498,45 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     })}
                   </div>
                 ) : effectiveLayoutMode === 'list' && showFeedToolbar ? (
-                  <VirtualizedFixedList
+                  <div
                     key="feed-list"
-                    testId="feed-list-container"
-                    items={visibleItems}
-                    getKey={getFeedItemKey}
-                    rowHeight={52}
-                    onReachEnd={handleFeedReachEnd}
-                    renderRow={renderFeedListRow}
-                    className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-hidden shadow-[var(--k-shadow-card)]"
-                  />
+                    ref={feedListAnimRef}
+                    data-testid="feed-list-container"
+                    className="rounded-2xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] divide-y divide-[var(--k-border-hairline)] overflow-hidden shadow-[var(--k-shadow-card)]"
+                  >
+                    {renderedItems.map((item) => (
+                      <div key={item.id}>
+                        <MemoryCardRouter
+                          item={item}
+                          orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
+                          orbits={orbits}
+                          focusBoards={boards}
+                          compactList
+                          vaultLocked={vaultLocked}
+                          wipeSeconds={wipeSeconds}
+                          selected={selectedIdSet.has(item.id)}
+                          selectionMode={hasSelectionActive}
+                          onToggleSelect={handleToggleSelect}
+                          onOpenStudio={handleOpenItem}
+                          onQuickLook={handleQuickLook}
+                          onHoverItem={handleHoverItem}
+                          onOpenSecretSheet={handleOpenItem}
+                          onOpenShotLightbox={handleOpenShotLightbox}
+                          onDelete={handleDeleteItem}
+                          onTogglePin={handleTogglePin}
+                          onToggleMute={handleToggleMute}
+                          onToggleNotesHub={handleToggleNotesHub}
+                          onMoveToOrbit={handleMoveToOrbit}
+                          onMoveToBoard={handleMoveToBoard}
+                          onDuplicate={handleDuplicateItem}
+                          onExportMarkdown={handleExportMarkdown}
+                          onUnlockVaultRequest={handleUnlockVaultRequest}
+                          onToggleMarkdownTask={handleToggleMarkdownTask}
+                          onToggleVoiceAction={handleToggleVoiceAction}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 ) : nav.type === 'secrets' ? (
                   <div
                     key="feed-secrets"
@@ -5683,7 +5544,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     style={{ gap: 'var(--k-grid-gap)' }}
                     className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
                   >
-                    {visibleItems.map((item) => (
+                    {renderedItems.map((item) => (
                       <MemoryCardRouter
                         key={item.id}
                         item={item}
@@ -5714,18 +5575,49 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     ))}
                   </div>
                 ) : (
-                  <VirtualizedMasonryGrid
+                  <div
                     key="feed-grid"
-                    testId="feed-grid-container"
-                    items={visibleItems}
-                    getKey={getFeedItemKey}
-                    estimateHeight={estimateFeedCardHeight}
-                    getColumns={getFeedColumns}
-                    gapPx={feedGridGapPx}
-                    onReachEnd={handleFeedReachEnd}
-                    renderItem={renderFeedCard}
-                  />
+                    ref={feedGridAnimRef}
+                    data-testid="feed-grid-container"
+                    style={{ gridAutoRows: `${MASONRY_ROW_UNIT_PX}px`, columnGap: 'var(--k-grid-gap)' }}
+                    className="grid grid-cols-1 @[560px]:grid-cols-2 @[880px]:grid-cols-3 items-start"
+                  >
+                    {renderedItems.map((item) => (
+                      <MasonryCardCell key={item.id}>
+                        <MemoryCardRouter
+                          item={item}
+                          orbit={item.orbit ? orbitMap.get(item.orbit) : undefined}
+                          orbits={orbits}
+                          focusBoards={boards}
+                          vaultLocked={vaultLocked}
+                          wipeSeconds={wipeSeconds}
+                          selected={selectedIdSet.has(item.id)}
+                          selectionMode={hasSelectionActive}
+                          onToggleSelect={handleToggleSelect}
+                          onOpenStudio={handleOpenItem}
+                          onQuickLook={handleQuickLook}
+                          onHoverItem={handleHoverItem}
+                          onOpenSecretSheet={handleOpenItem}
+                          onOpenShotLightbox={handleOpenShotLightbox}
+                          onDelete={handleDeleteItem}
+                          onTogglePin={handleTogglePin}
+                          onToggleMute={handleToggleMute}
+                          onToggleNotesHub={handleToggleNotesHub}
+                          onMoveToOrbit={handleMoveToOrbit}
+                          onMoveToBoard={handleMoveToBoard}
+                          onDuplicate={handleDuplicateItem}
+                          onExportMarkdown={handleExportMarkdown}
+                          onUnlockVaultRequest={handleUnlockVaultRequest}
+                          onToggleMarkdownTask={handleToggleMarkdownTask}
+                          onToggleVoiceAction={handleToggleVoiceAction}
+                        />
+                      </MasonryCardCell>
+                    ))}
+                  </div>
                 )}
+                {showFeedPaginationSentinel ? (
+                  <div ref={feedSentinelRef} aria-hidden="true" className="h-4 w-full" />
+                ) : null}
                 </motion.div>
               </div>
             )}
@@ -5880,12 +5772,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </div>
         </ScopedAccentContext.Provider>
 
-        {assistantMount.shouldMount ? (
+        {mountAssistant ? (
           <Suspense fallback={null}>
             <MemoryAssistantDrawer
               open={assistantOpen}
               onClose={() => setAssistantOpen(false)}
-              onExited={assistantMount.notifyExited}
               onOpenCitation={(itemId, opts) => {
                 if (!opts?.keepAssistantOpen) setAssistantOpen(false);
                 void handleOpenItemById(itemId);
@@ -5917,22 +5808,33 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               <motion.div
                 data-testid="studio-document-backdrop"
                 onClick={closeStudioCleanly}
-                initial={{ opacity: 0 }}
-                animate={{
-                  opacity: 1,
-                  transition: prefersReduced
-                    ? { duration: 0.1 }
-                    : { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
-                }}
-                exit={{
-                  opacity: 0,
-                  transition: prefersReduced
-                    ? { duration: 0.08 }
-                    : { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
-                }}
-                className={`fixed inset-0 bg-[var(--k-bg-backdrop)] ${
-                  prefersReduced ? 'backdrop-blur-[4px]' : 'backdrop-blur-[6px]'
-                }`}
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                      }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : {
+                        backgroundColor: 'var(--k-bg-backdrop)',
+                        backdropFilter: 'blur(6px)',
+                        transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0, transition: { duration: 0.12 } }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                        transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] },
+                      }
+                }
+                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[4px]' : ''}`}
               />
 
               <motion.div
@@ -6029,22 +5931,33 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             >
               <motion.div
                 onClick={closeStudioCleanly}
-                initial={{ opacity: 0 }}
-                animate={{
-                  opacity: 1,
-                  transition: prefersReduced
-                    ? { duration: 0.1 }
-                    : { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
-                }}
-                exit={{
-                  opacity: 0,
-                  transition: prefersReduced
-                    ? { duration: 0.08 }
-                    : { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
-                }}
-                className={`fixed inset-0 bg-[var(--k-bg-backdrop)] ${
-                  prefersReduced ? 'backdrop-blur-[2px]' : 'backdrop-blur-[4px]'
-                }`}
+                initial={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                      }
+                }
+                animate={
+                  prefersReduced
+                    ? { opacity: 1 }
+                    : {
+                        backgroundColor: 'var(--k-bg-backdrop)',
+                        backdropFilter: 'blur(4px)',
+                        transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                      }
+                }
+                exit={
+                  prefersReduced
+                    ? { opacity: 0, transition: { duration: 0.12 } }
+                    : {
+                        backgroundColor: 'rgba(0, 0, 0, 0)',
+                        backdropFilter: 'blur(0px)',
+                        transition: { duration: 0.14, ease: [0.32, 0.72, 0, 1] },
+                      }
+                }
+                className={`fixed inset-0 ${prefersReduced ? 'bg-[var(--k-bg-backdrop)] backdrop-blur-[2px]' : ''}`}
               />
 
               <motion.div
@@ -6242,7 +6155,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
       {/* Modals & Drawers */}
       <ScopedAccentContext.Provider value={workspaceAccentStyle}>
-        {quickLookMount.shouldMount ? (
+        {mountQuickLook ? (
           <Suspense fallback={null}>
             <QuickLookModal
               item={quickLookItem}
@@ -6250,19 +6163,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               orbit={quickLookItem?.orbit ? orbitMap.get(quickLookItem.orbit) : undefined}
               onSelectItem={setQuickLookItem}
               onClose={() => setQuickLookItem(null)}
-              onExited={quickLookMount.notifyExited}
               onEditInStudio={(item) => handleOpenItem(item)}
               onTogglePin={(item) => void handleTogglePin(item)}
             />
           </Suspense>
         ) : null}
 
-        {lightboxMount.shouldMount ? (
+        {mountLightbox ? (
           <Suspense fallback={null}>
             <ShotLightbox
               item={lightboxItem}
               onClose={() => setLightboxItem(null)}
-              onExited={lightboxMount.notifyExited}
               onEditInStudio={(item) => {
                 setLightboxItem(null);
                 handleOpenItem(item);
@@ -6275,7 +6186,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         ) : null}
       </ScopedAccentContext.Provider>
 
-      {newSecretMount.shouldMount ? (
+      {mountNewSecret ? (
         <Suspense fallback={null}>
           <NewSecretModal
             open={newSecretOpen}
@@ -6289,7 +6200,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {unlockMount.shouldMount ? (
+      {mountUnlock ? (
         <Suspense fallback={null}>
           <UnlockPinDialog
             open={unlockOpen}
@@ -6389,7 +6300,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       </ModalDialog>
 
       {/* Universal First-Run Onboarding (shown once on genuinely empty vault) */}
-      {onboardingMount.shouldMount ? (
+      {mountOnboarding ? (
         <Suspense fallback={null}>
           <OnboardingModal
             open={onboardingShouldOpen}
@@ -6407,7 +6318,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {settingsMount.shouldMount ? (
+      {mountSettings ? (
         <Suspense fallback={null}>
           <SettingsModal
             open={settingsOpen}
@@ -6423,7 +6334,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </Suspense>
       ) : null}
 
-      {synthesizeMount.shouldMount ? (
+      {mountSynthesize ? (
         <ScopedAccentContext.Provider value={workspaceAccentStyle}>
           <Suspense fallback={null}>
             <SynthesizeNotesModal
@@ -6446,7 +6357,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </ScopedAccentContext.Provider>
       ) : null}
 
-      {triageMount.shouldMount ? (
+      {mountTriage ? (
         <Suspense fallback={null}>
           <SmartTriageModal
             open={triageOpen}

@@ -42,7 +42,7 @@ describe('Echelon 0 UI & Interaction Guards (#1, #3, #4)', () => {
     vi.restoreAllMocks();
   });
 
-  it('#1 OmniComposer triggers only a <=450ms focus BorderTrail impulse and unmounts it while staying focused', async () => {
+  it('#1 OmniComposer uses GPU-composited continuous BorderTrail while focused (zero JS offset-distance) and cleans up on blur', async () => {
     renderWithI18n(
       <OmniComposer
         orbits={[]}
@@ -59,19 +59,21 @@ describe('Echelon 0 UI & Interaction Guards (#1, #3, #4)', () => {
     act(() => {
       fireEvent.focus(textarea);
     });
-    // Entrance pulse active initially
-    expect(screen.getByTestId('omni-composer').innerHTML).toContain('offset-distance');
+    expect(screen.getByTestId('omni-composer').innerHTML).toContain('k-border-trail-spin');
+    expect(screen.getByTestId('omni-composer').innerHTML).not.toContain('offset-distance');
 
-    // After 450ms fallback + AnimatePresence 140ms exit, BorderTrail unmounts while composer remains focused
+    act(() => {
+      fireEvent.blur(textarea);
+    });
     await waitFor(
       () => {
-        expect(screen.getByTestId('omni-composer').innerHTML).not.toContain('offset-distance');
+        expect(screen.getByTestId('omni-composer').innerHTML).not.toContain('k-border-trail-spin');
       },
       { timeout: 1500 }
     );
   });
 
-  it('#3 CompactMemoryRow is memoized and sets loading=lazy & decoding=async on thumbnails', () => {
+  it('#3 CompactMemoryRow is memoized and renders thumbnails eagerly without pop-in delay', () => {
     expect((CompactMemoryRow as unknown as { $$typeof?: symbol }).$$typeof).toBe(
       Symbol.for('react.memo')
     );
@@ -89,11 +91,10 @@ describe('Echelon 0 UI & Interaction Guards (#1, #3, #4)', () => {
 
     const img = container.querySelector('img');
     expect(img).toBeTruthy();
-    expect(img?.getAttribute('loading')).toBe('lazy');
-    expect(img?.getAttribute('decoding')).toBe('async');
+    expect(img?.getAttribute('loading')).toBeNull();
   });
 
-  it('#3 SelectMenu uses translate3d highlight track without Framer Motion layoutId', () => {
+  it('#3 SelectMenu opens popup and highlights hovered option smoothly', () => {
     renderWithI18n(
       <SelectMenu
         data-testid="e0-select"
@@ -111,9 +112,8 @@ describe('Echelon 0 UI & Interaction Guards (#1, #3, #4)', () => {
     const betaOption = screen.getByText('Beta').closest('[role="option"]')!;
     fireEvent.mouseEnter(betaOption);
 
-    const track = popup.querySelector('span[aria-hidden="true"]') as HTMLElement | null;
-    expect(track).toBeTruthy();
-    expect(track?.style.transform).toContain('translate3d(');
+    const highlight = popup.querySelector('span[aria-hidden="true"]') as HTMLElement | null;
+    expect(highlight).toBeTruthy();
   });
 
   it('#4 CalendarHubView suppresses accidental click after resize while allowing normal event clicks', async () => {

@@ -187,7 +187,12 @@ if (!singleInstanceLock) {
             : MEDIA_MIME_TYPES[ext] ?? 'application/octet-stream';
         const totalSize = stat.size;
         const rangeHeader = request.headers.get('range');
-        const cacheHeader = 'no-store';
+        const isImmutableMediaName = /^(?:[a-f0-9]{16,}|(?:shot|thumb|img|vid|vc|aud|doc|voice|noteimg|media|clip|tg|og|file|att|cam)_)/i.test(
+          safeName
+        );
+        const cacheHeader = isImmutableMediaName
+          ? 'private, max-age=31536000, immutable'
+          : 'private, max-age=3600';
 
         const range = parseHttpByteRange(rangeHeader, totalSize);
         if (range.status === 416) {

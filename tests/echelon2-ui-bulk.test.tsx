@@ -88,8 +88,7 @@ describe('Echelon 2 (#10): UI Batch IPC Wiring (Zero N×IPC / Zero refreshAll)',
     });
     expect(api.bulkUpdateItems).toHaveBeenCalledWith(
       ['b-1', 'b-2', 'b-3'],
-      { isMuted: true },
-      { projection: 'card' }
+      { isMuted: true }
     );
     expect(api.updateItem).not.toHaveBeenCalled();
     expect((api.queryVault as ReturnType<typeof vi.fn>).mock.calls.length).toBe(queryCallsBeforeBulk);

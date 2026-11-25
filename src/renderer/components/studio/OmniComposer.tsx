@@ -118,29 +118,11 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
   const [beautifyHistory, setBeautifyHistory] = useState<string[]>([]);
   const [textOverflowing, setTextOverflowing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [focusTrailActive, setFocusTrailActive] = useState(false);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingImagesRef = useRef<PendingImageDraft[]>([]);
-  const wasFocusTriggerRef = useRef(false);
-
-  useEffect(() => {
-    const active = focused || dragHover;
-    if (active && !wasFocusTriggerRef.current && !beautifying && !prefersReduced) {
-      setFocusTrailActive(true);
-    } else if (!active) {
-      setFocusTrailActive(false);
-    }
-    wasFocusTriggerRef.current = active;
-  }, [focused, dragHover, beautifying, prefersReduced]);
-
-  useEffect(() => {
-    if (!focusTrailActive) return;
-    const timer = window.setTimeout(() => setFocusTrailActive(false), 450);
-    return () => window.clearTimeout(timer);
-  }, [focusTrailActive]);
 
   useEffect(() => {
     setOrbitOverride(null);
@@ -597,13 +579,13 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
       }`}
     >
       <AnimatePresence>
-        {(beautifying || focusTrailActive) && !prefersReduced ? (
+        {(focused || beautifying || dragHover) && !prefersReduced ? (
           <motion.div
             key={beautifying ? 'omni-beam-ai' : 'omni-beam-focus'}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: beautifying ? 0.24 : 0.14, ease: [0.23, 1, 0.32, 1] }}
+            transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
             className="pointer-events-none absolute inset-0 rounded-[inherit]"
           >
             <BorderTrail
@@ -612,22 +594,11 @@ export const OmniComposer: React.FC<OmniComposerProps> = ({
               thickness={40}
               glow
               dual={beautifying}
-              transition={
-                beautifying
-                  ? {
-                      repeat: Infinity,
-                      duration: 2.5,
-                      ease: 'linear',
-                    }
-                  : {
-                      repeat: 0,
-                      duration: 0.42,
-                      ease: [0.22, 1, 0.36, 1],
-                    }
-              }
-              onAnimationComplete={
-                beautifying ? undefined : () => setFocusTrailActive(false)
-              }
+              transition={{
+                repeat: Infinity,
+                duration: beautifying ? 2.5 : 7.4,
+                ease: 'linear',
+              }}
               className={beautifying ? 'opacity-95' : 'opacity-85'}
             />
           </motion.div>

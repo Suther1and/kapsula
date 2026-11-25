@@ -500,7 +500,7 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
 
       if (res.items.length > 0) {
         const broadcastItems =
-          opts?.projection === 'card' ? res.items : res.items.map(projectItemForCard);
+          opts?.projection === 'card' ? res.items : res.items;
         svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-upserted', broadcastItems);
         if (
           cleanPatch.orbit !== undefined ||
@@ -657,12 +657,10 @@ export function registerIpcHandlers(svc: AppRuntimeServices): {
         }
       }
     }
-    const projection = opts?.projection ?? 'card';
+    const projection = opts?.projection ?? 'full';
     const res = svc.repo.bulkRestoreItems(uniqueIds, { projection });
     if (res.items.length > 0) {
-      const broadcastItems =
-        projection === 'card' ? res.items : res.items.map(projectItemForCard);
-      svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-upserted', broadcastItems);
+      svc.windows.broadcastExcept(e.sender.id, 'vault:items-batch-upserted', res.items);
       emitCountsChanged();
       if (res.items.some((it) => Boolean(it.remindAt))) {
         svc.refreshReminders?.();

@@ -119,8 +119,6 @@ export const SmartLinkCard: React.FC<SmartLinkCardProps> = React.memo(({
           <img
             src={localBannerSrc!}
             alt={cleanTitle}
-            loading="lazy"
-            decoding="async"
             onError={() => setBannerError(true)}
             className="w-full h-[156px] object-cover block"
           />

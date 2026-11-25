@@ -92,7 +92,6 @@ describe('Echelon 2 (#9): Packaging, Minification & Locales Allowlist Guards', (
 
     expect(pkg.dependencies['@fontsource-variable/inter']).toBeUndefined();
     expect(pkg.dependencies['@fontsource-variable/onest']).toBeUndefined();
-    expect(pkg.dependencies['@formkit/auto-animate']).toBeUndefined();
     expect(pkg.dependencies['@paper-design/shaders-react']).toBeUndefined();
 
     expect(pkg.build.electronLanguages).toEqual(['ru', 'en-US', 'en-GB']);

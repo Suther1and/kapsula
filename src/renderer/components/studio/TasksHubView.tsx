@@ -2279,7 +2279,9 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                             />
                           ) : null}
                           <ContextMenuSurface entries={buildTaskContextMenu(task)}>
-                            <div
+                            <motion.div
+                              layout={!prefersReduced && !dragVisual?.active}
+                              transition={{ type: 'spring', stiffness: 460, damping: 36, mass: 0.7 }}
                               data-kanban-card-id={task.id}
                               data-testid={`kanban-card-${task.id}`}
                               onPointerDown={(e) => handleCardPointerDown(e, task)}
@@ -2295,7 +2297,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                               }`}
                             >
                               {renderKanbanCardBody(task, false)}
-                            </div>
+                            </motion.div>
                           </ContextMenuSurface>
                         </React.Fragment>
                       );
@@ -2862,6 +2864,7 @@ export const TasksHubView: React.FC<TasksHubViewProps> = ({
                         return (
                           <ContextMenuSurface key={task.id} entries={buildTaskContextMenu(task)}>
                             <motion.div
+                              layout={!prefersReduced}
                               initial={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
                               animate={prefersReduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
                               exit={prefersReduced ? { opacity: 0 } : { opacity: 0, height: 0, marginBottom: 0 }}

@@ -134,13 +134,7 @@ export const CompactMemoryRow: React.FC<CompactMemoryRowProps> = React.memo(({
               }`}
             >
               {thumbUrl ? (
-                <img
-                  src={thumbUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="w-full h-full object-cover"
-                />
+                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
               ) : (
                 renderTypeBadge(item)
               )}

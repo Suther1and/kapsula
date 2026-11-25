@@ -5,7 +5,7 @@ import {
   Highlight as AnimateHighlight,
   HighlightItem,
 } from '@animate-ui/react/primitives/effects/highlight';
-import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
+import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import TaskList from '@tiptap/extension-task-list';
@@ -66,7 +66,6 @@ import { extractInlineMediaFilenames } from '@shared/sync-contract';
 import { isStandaloneTaskSource } from '@shared/task-helpers';
 import '../styles/editor.css';
 import { hydrateAppearanceFromSettings } from '../lib/appearance';
-import { hydrateFullVaultItem } from '../lib/hydrate-item';
 import { useTotpSnapshot } from '../lib/totp-ticker';
 import {
   formatDateCompact,
@@ -336,235 +335,6 @@ const HudTotpCopyPill: React.FC<HudTotpCopyPillProps> = ({
   );
 };
 
-interface HudToolbarSnapshot {
-  h2: boolean;
-  bullet: boolean;
-  task: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
-}
-
-const DEFAULT_HUD_TOOLBAR_STATE: HudToolbarSnapshot = {
-  h2: false,
-  bullet: false,
-  task: false,
-  canUndo: false,
-  canRedo: false,
-};
-
-interface HudTipTapEditorProps {
-  itemId: string;
-  initialBody: string;
-  externalBody: string;
-  locale: string;
-  placeholder: string;
-  editorRef: React.MutableRefObject<Editor | null>;
-  loadingEditorRef: React.MutableRefObject<boolean>;
-  pendingCmdRef: React.MutableRefObject<((ed: Editor) => void) | null>;
-  onUpdateBody: (itemId: string, md: string) => void;
-  onInsertImages: (ed: Editor, files: File[], insertPos?: number | null) => Promise<void>;
-  onOpenLightbox: (info: KapsulaImageLightboxInfo) => void;
-  onNavigateWiki: (linkTitle: string, targetId?: string | null) => void;
-  onToolbarStateChange: (next: HudToolbarSnapshot) => void;
-}
-
-const HudTipTapEditor: React.FC<HudTipTapEditorProps> = ({
-  itemId,
-  initialBody,
-  externalBody,
-  locale,
-  placeholder,
-  editorRef,
-  loadingEditorRef,
-  pendingCmdRef,
-  onUpdateBody,
-  onInsertImages,
-  onOpenLightbox,
-  onNavigateWiki,
-  onToolbarStateChange,
-}) => {
-  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
-  const placeholderRef = useRef(placeholder);
-  placeholderRef.current = placeholder;
-  const itemIdRef = useRef(itemId);
-  itemIdRef.current = itemId;
-  const lastSyncedExternalRef = useRef(initialBody);
-  const timerRef = useRef<number | null>(null);
-
-  const onUpdateBodyRef = useRef(onUpdateBody);
-  onUpdateBodyRef.current = onUpdateBody;
-  const onInsertImagesRef = useRef(onInsertImages);
-  onInsertImagesRef.current = onInsertImages;
-  const onOpenLightboxRef = useRef(onOpenLightbox);
-  onOpenLightboxRef.current = onOpenLightbox;
-  const onNavigateWikiRef = useRef(onNavigateWiki);
-  onNavigateWikiRef.current = onNavigateWiki;
-
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        horizontalRule: false,
-        link: {
-          openOnClick: false,
-          autolink: true,
-          HTMLAttributes: {
-            rel: 'noopener noreferrer',
-          },
-        },
-      }),
-      KapsulaHorizontalRule,
-      Markdown,
-      TaskList,
-      TaskItem.configure({
-        nested: true,
-      }),
-      Typography,
-      KapsulaHighlight,
-      TextColorMark,
-      TextSizeMark,
-      Placeholder.configure({
-        placeholder: () => placeholderRef.current,
-      }),
-      KapsulaImage.configure({
-        compact: true,
-        onOpenLightbox: (info) => onOpenLightboxRef.current(info),
-      }),
-      WikiLink.configure({
-        onNavigate: (linkTitle, targetId) => onNavigateWikiRef.current(linkTitle, targetId),
-      }),
-    ],
-    content: initialBody,
-    contentType: 'markdown',
-    immediatelyRender: true,
-    editorProps: {
-      attributes: {
-        class: 'k-prose k-prose-hud min-h-[120px] pb-6',
-        'data-testid': 'hud-right-editor',
-      },
-      handleClick: (_view, _pos, event) => {
-        const target = event.target as HTMLElement | null;
-        const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
-        if (anchor) {
-          const href = anchor.getAttribute('href');
-          if (href && /^https?:\/\/|^mailto:/i.test(href)) {
-            event.preventDefault();
-            void window.kapsula.openExternal(href);
-            return true;
-          }
-        }
-        return false;
-      },
-      handlePaste: (_view, event) => {
-        const files = extractImageFilesFromDataTransfer(event.clipboardData);
-        if (files.length === 0) return false;
-        event.preventDefault();
-        if (editorRef.current) {
-          void onInsertImagesRef.current(editorRef.current, files);
-        }
-        return true;
-      },
-      handleDrop: (view, event, _slice, moved) => {
-        if (moved) return false;
-        const files = extractImageFilesFromDataTransfer(event.dataTransfer);
-        if (files.length === 0) return false;
-        event.preventDefault();
-        const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
-        if (editorRef.current) {
-          void onInsertImagesRef.current(editorRef.current, files, coords?.pos ?? null);
-        }
-        return true;
-      },
-    },
-    onUpdate: ({ editor: ed }) => {
-      if (loadingEditorRef.current) return;
-      const md = ed.getMarkdown();
-      lastSyncedExternalRef.current = md;
-      onUpdateBodyRef.current(itemIdRef.current, md);
-    },
-  });
-
-  useEffect(() => {
-    editorRef.current = editor;
-    if (editor && !editor.isDestroyed && pendingCmdRef.current) {
-      const cmd = pendingCmdRef.current;
-      pendingCmdRef.current = null;
-      cmd(editor);
-    }
-    return () => {
-      if (editorRef.current === editor) {
-        editorRef.current = null;
-      }
-    };
-  }, [editor, editorRef, pendingCmdRef]);
-
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    if (externalBody === lastSyncedExternalRef.current) return;
-    lastSyncedExternalRef.current = externalBody;
-    if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    loadingEditorRef.current = true;
-    editor.commands.setContent(externalBody, { contentType: 'markdown', emitUpdate: false });
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      loadingEditorRef.current = false;
-    }, 12);
-    return () => {
-      if (timerRef.current) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-        loadingEditorRef.current = false;
-      }
-    };
-  }, [editor, externalBody, loadingEditorRef]);
-
-  useEffect(() => {
-    if (editor && !editor.isDestroyed) {
-      editor.view.dispatch(editor.state.tr);
-    }
-  }, [editor, locale]);
-
-  const toolbarSnap = useEditorState({
-    editor,
-    selector: (ctx) => ({
-      h2: ctx.editor?.isActive('heading', { level: 2 }) ?? false,
-      bullet: ctx.editor?.isActive('bulletList') ?? false,
-      task: ctx.editor?.isActive('taskList') ?? false,
-      canUndo: ctx.editor?.can().undo() ?? false,
-      canRedo: ctx.editor?.can().redo() ?? false,
-    }),
-  });
-
-  useEffect(() => {
-    if (toolbarSnap) {
-      onToolbarStateChange(toolbarSnap);
-    }
-    return () => onToolbarStateChange(DEFAULT_HUD_TOOLBAR_STATE);
-  }, [toolbarSnap, onToolbarStateChange]);
-
-  return (
-    <div ref={setHostEl} className="relative flex-1 min-h-0">
-      <EditorContent editor={editor} className="min-h-full" />
-      <ProseCaretOverlay editor={editor} containerEl={hostEl} />
-      <EditorBlockContextMenu
-        editor={editor}
-        containerEl={hostEl}
-        onOpenImageLightbox={(src, alt) =>
-          onOpenLightboxRef.current({
-            src,
-            alt,
-            localFilename: src.startsWith('kapsula-media://local/')
-              ? src.slice('kapsula-media://local/'.length)
-              : null,
-          })
-        }
-      />
-    </div>
-  );
-};
-
 /* ---------- Main Command HUD Surface ---------- */
 
 export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
@@ -654,12 +424,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const hudTitleRef = useRef<HTMLTextAreaElement | null>(null);
   const hudImageInputRef = useRef<HTMLInputElement | null>(null);
-  const hudEditorRef = useRef<Editor | null>(null);
-  const [hudEditorActive, setHudEditorActive] = useState(false);
-  const [hudToolbarState, setHudToolbarState] = useState<HudToolbarSnapshot>(
-    DEFAULT_HUD_TOOLBAR_STATE
-  );
-  const pendingHudCmdRef = useRef<((ed: Editor) => void) | null>(null);
+  const [hudEditorHostEl, setHudEditorHostEl] = useState<HTMLDivElement | null>(null);
 
   const searchRef = useRef(search);
   searchRef.current = search;
@@ -674,28 +439,14 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
   const editorItemIdRef = useRef<string | null>(null);
   const editorTitleRef = useRef('');
   const editorBodyRef = useRef('');
-  const hudBodyDirtyRef = useRef(false);
   const dirtyItemIdRef = useRef<string | null>(null);
   const editorEditSeqRef = useRef(0);
   const savingItemIdRef = useRef<string | null>(null);
   const loadingEditorRef = useRef(false);
+  const loadingEditorTimerRef = useRef<number | null>(null);
   const loadSeqRef = useRef(0);
   const savingTaskRef = useRef(false);
-  const hudHydrateSeqRef = useRef(0);
-  const pastingBackRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
-
-  const loadedSlicesRef = useRef({ orbits: false, today: false, clip: false });
-  const staleSlicesRef = useRef({ orbits: false, today: false, clip: true });
-  const searchEffectMountedRef = useRef(false);
-  const lastSearchedRef = useRef('');
-  const lockEffectMountedRef = useRef(false);
-  const prevLockKeyRef = useRef(
-    `${settings.hasMasterPin ? 1 : 0}:${settings.vaultUnlocked ? 1 : 0}`
-  );
-  const lastPreventCloseSentRef = useRef(false);
-  const lastProtectSentRef = useRef(false);
-  const visibilitySyncTimerRef = useRef<number | null>(null);
 
   const activeItem = useMemo(() => {
     if (!selectedValue.startsWith('item:')) return null;
@@ -734,35 +485,28 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     const seq = editorEditSeqRef.current;
     savingItemIdRef.current = targetId;
     const nextTitle = editorTitleRef.current.trim();
-    const shouldIncludeBody = hudBodyDirtyRef.current;
     const nextBody = editorBodyRef.current;
-    const existingItem =
-      itemsRef.current.find((i) => i.id === targetId) ||
-      allItemsRef.current.find((i) => i.id === targetId);
-    const fallbackTitle = existingItem?.title || fallbackNoteTitleRef.current;
-    const safeIncludeBody =
-      shouldIncludeBody && !(existingItem?.isCardProjection && existingItem?.isBodyTruncated);
+    const fallbackTitle =
+      itemsRef.current.find((i) => i.id === targetId)?.title ||
+      allItemsRef.current.find((i) => i.id === targetId)?.title ||
+      fallbackNoteTitleRef.current;
 
     let saveFailed = false;
     armHudSlowPersist();
     try {
-      const patch: { title: string; body?: string } = {
+      const updated = await window.kapsula.updateItem(targetId, {
         title: nextTitle || fallbackTitle,
-      };
-      if (safeIncludeBody) {
-        patch.body = nextBody;
-      }
-      const updated = await window.kapsula.updateItem(targetId, patch);
+        body: nextBody,
+      });
       const stillSameItem = editorItemIdRef.current === targetId;
       const userTypedMeanwhile =
         stillSameItem &&
         (editorEditSeqRef.current !== seq ||
           editorTitleRef.current.trim() !== nextTitle ||
-          (safeIncludeBody && editorBodyRef.current !== nextBody));
+          editorBodyRef.current !== nextBody);
 
       if (dirtyItemIdRef.current === targetId && !userTypedMeanwhile) {
         dirtyItemIdRef.current = null;
-        hudBodyDirtyRef.current = false;
       }
 
       if (updated) {
@@ -844,89 +588,132 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     }
   };
 
-  const handleHudBodyUpdate = useCallback((itemId: string, md: string) => {
-    if (editorItemIdRef.current !== itemId) return;
-    hudBodyDirtyRef.current = true;
-    editorBodyRef.current = md;
-    setEditorLiveBody(md);
-    dirtyItemIdRef.current = itemId;
-    editorEditSeqRef.current += 1;
-    setEditorSaveState('saving');
-    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      void flushHudEditorSaveRef.current();
-    }, 350);
-  }, []);
-
-  const handleHudInsertImages = useCallback(
-    async (ed: Editor, files: File[], insertPos?: number | null) => {
-      if (files.length === 0) return;
-      const count = await saveAndInsertImageFiles(ed, files, {
-        insertPos,
-        onBeforeSave: () => setHudInsertingImage(true),
-        onAfterSave: () => setHudInsertingImage(false),
-      });
-      if (count > 0) {
-        toast.success(
-          count === 1
-            ? tRef.current('hud.photoAddedOne')
-            : tRef.current('hud.photoAddedMany', { count })
-        );
-      }
-    },
-    []
-  );
-
   const hudInsertImagesRef = useRef<(files: File[], insertPos?: number | null) => Promise<void>>(
     async () => {}
   );
+
+  const hudEditor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        horizontalRule: false,
+        link: {
+          openOnClick: false,
+          autolink: true,
+          HTMLAttributes: {
+            rel: 'noopener noreferrer',
+          },
+        },
+      }),
+      KapsulaHorizontalRule,
+      Markdown,
+      TaskList,
+      TaskItem.configure({
+        nested: true,
+      }),
+      Typography,
+      KapsulaHighlight,
+      TextColorMark,
+      TextSizeMark,
+      Placeholder.configure({
+        placeholder: () => hudPlaceholderRef.current,
+      }),
+      KapsulaImage.configure({
+        compact: true,
+        onOpenLightbox: (info) => openHudLightboxRef.current(info),
+      }),
+      WikiLink.configure({
+        onNavigate: (linkTitle, targetId) => navigateHudWikiRef.current(linkTitle, targetId),
+      }),
+    ],
+    content: '',
+    contentType: 'markdown',
+    immediatelyRender: false,
+    editorProps: {
+      attributes: {
+        class: 'k-prose k-prose-hud min-h-[120px] pb-6',
+        'data-testid': 'hud-right-editor',
+      },
+      handleClick: (_view, _pos, event) => {
+        const target = event.target as HTMLElement | null;
+        const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
+        if (anchor) {
+          const href = anchor.getAttribute('href');
+          if (href && /^https?:\/\/|^mailto:/i.test(href)) {
+            event.preventDefault();
+            void window.kapsula.openExternal(href);
+            return true;
+          }
+        }
+        return false;
+      },
+      handlePaste: (_view, event) => {
+        const files = extractImageFilesFromDataTransfer(event.clipboardData);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void hudInsertImagesRef.current(files);
+        return true;
+      },
+      handleDrop: (view, event, _slice, moved) => {
+        if (moved) return false;
+        const files = extractImageFilesFromDataTransfer(event.dataTransfer);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        void hudInsertImagesRef.current(files, coords?.pos ?? null);
+        return true;
+      },
+    },
+    onUpdate: ({ editor: ed }) => {
+      if (loadingEditorRef.current) return;
+      const curId = editorItemIdRef.current;
+      if (!curId) return;
+      const md = ed.getMarkdown();
+      editorBodyRef.current = md;
+      setEditorLiveBody(md);
+      dirtyItemIdRef.current = curId;
+      editorEditSeqRef.current += 1;
+      setEditorSaveState('saving');
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
+        void flushHudEditorSaveRef.current();
+      }, 350);
+    },
+  });
+
   hudInsertImagesRef.current = async (files, insertPos) => {
-    if (files.length === 0) return;
-    if (!hudEditorRef.current || hudEditorRef.current.isDestroyed) {
-      await activateHudEditor((ed) => {
-        void handleHudInsertImages(ed, files, insertPos);
-      });
-      return;
+    if (!hudEditor || files.length === 0) return;
+    const count = await saveAndInsertImageFiles(hudEditor, files, {
+      insertPos,
+      onBeforeSave: () => setHudInsertingImage(true),
+      onAfterSave: () => setHudInsertingImage(false),
+    });
+    if (count > 0) {
+      toast.success(
+        count === 1
+          ? tRef.current('hud.photoAddedOne')
+          : tRef.current('hud.photoAddedMany', { count })
+      );
     }
-    await handleHudInsertImages(hudEditorRef.current, files, insertPos);
   };
 
-  const activateHudEditor = useCallback(
-    async (afterReady?: (ed: Editor) => void) => {
-      const cur = activeItemRef.current;
-      if (!cur || cur.dna === 'secret') return;
-      if (afterReady) {
-        pendingHudCmdRef.current = afterReady;
-      }
-      if (cur.isCardProjection && cur.isBodyTruncated) {
-        const targetId = cur.id;
-        const seq = ++hudHydrateSeqRef.current;
-        const full = await hydrateFullVaultItem(cur);
-        if (hudHydrateSeqRef.current !== seq || editorItemIdRef.current !== targetId) return;
-        if (full.isCardProjection && full.isBodyTruncated) {
-          pendingHudCmdRef.current = null;
-          toast.error(friendlyErrorMessage(undefined, undefined, locale));
-          return;
-        }
-        patchLocalItem(full);
-        if (!hudBodyDirtyRef.current && dirtyItemIdRef.current !== targetId) {
-          const fullBody = full.body || '';
-          editorBodyRef.current = fullBody;
-          setEditorLiveBody(fullBody);
-        }
-      }
-      if (hudEditorRef.current && !hudEditorRef.current.isDestroyed) {
-        const cmd = pendingHudCmdRef.current;
-        pendingHudCmdRef.current = null;
-        cmd?.(hudEditorRef.current);
-        return;
-      }
-      setHudEditorActive(true);
-    },
-    [locale, patchLocalItem]
-  );
+  useEffect(() => {
+    if (hudEditor && !hudEditor.isDestroyed) {
+      hudEditor.view.dispatch(hudEditor.state.tr);
+    }
+  }, [hudEditor, locale]);
 
-  // Sync active item into HUD right-pane state & hydrate truncated/projected items on demand
+  const hudToolbarState = useEditorState({
+    editor: hudEditor,
+    selector: (ctx) => ({
+      h2: ctx.editor?.isActive('heading', { level: 2 }) ?? false,
+      bullet: ctx.editor?.isActive('bulletList') ?? false,
+      task: ctx.editor?.isActive('taskList') ?? false,
+      canUndo: ctx.editor?.can().undo() ?? false,
+      canRedo: ctx.editor?.can().redo() ?? false,
+    }),
+  });
+
+  // Load/switch active item into HUD right-pane TipTap editor
   useEffect(() => {
     const prevId = editorItemIdRef.current;
     const nextItem = activeItem && activeItem.dna !== 'secret' ? activeItem : null;
@@ -937,18 +724,12 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     }
 
     if (!nextItem) {
-      hudHydrateSeqRef.current += 1;
       editorItemIdRef.current = null;
-      hudBodyDirtyRef.current = false;
-      setHudEditorActive(false);
       return;
     }
 
     const isSwitched = prevId !== nextId;
     if (!isSwitched) {
-      if (!nextItem.isCardProjection) {
-        hudHydrateSeqRef.current += 1;
-      }
       // Same item updated externally: never overwrite while user is typing or save is in-flight
       if (dirtyItemIdRef.current === nextId || savingItemIdRef.current === nextId) return;
       const extTitle = nextItem.title || '';
@@ -957,18 +738,24 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         editorTitleRef.current = extTitle;
       }
       const extBody = nextItem.body || '';
-      if (!nextItem.isCardProjection && extBody !== editorBodyRef.current) {
+      if (hudEditor && extBody !== editorBodyRef.current) {
         editorBodyRef.current = extBody;
         setEditorLiveBody(extBody);
+        if (loadingEditorTimerRef.current) {
+          window.clearTimeout(loadingEditorTimerRef.current);
+          loadingEditorTimerRef.current = null;
+        }
+        loadingEditorRef.current = true;
+        hudEditor.commands.setContent(extBody, { contentType: 'markdown', emitUpdate: false });
+        loadingEditorTimerRef.current = window.setTimeout(() => {
+          loadingEditorTimerRef.current = null;
+          loadingEditorRef.current = false;
+        }, 12);
       }
       return;
     }
 
     editorItemIdRef.current = nextId;
-    hudBodyDirtyRef.current = false;
-    pendingHudCmdRef.current = null;
-    setHudEditorActive(false);
-    setHudToolbarState(DEFAULT_HUD_TOOLBAR_STATE);
     const initTitle = nextItem.title || '';
     const initBody = nextItem.body || '';
     setEditorTitle(initTitle);
@@ -977,19 +764,26 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     setEditorLiveBody(initBody);
     setEditorSaveState('saved');
 
-    const seq = ++hudHydrateSeqRef.current;
-    if (nextItem.isCardProjection) {
-      void hydrateFullVaultItem(nextItem).then((full) => {
-        if (hudHydrateSeqRef.current !== seq || editorItemIdRef.current !== nextItem.id) return;
-        patchLocalItem(full);
-        if (!hudBodyDirtyRef.current && dirtyItemIdRef.current !== nextItem.id) {
-          const fullBody = full.body || '';
-          editorBodyRef.current = fullBody;
-          setEditorLiveBody(fullBody);
-        }
-      });
+    if (hudEditor) {
+      if (loadingEditorTimerRef.current) {
+        window.clearTimeout(loadingEditorTimerRef.current);
+        loadingEditorTimerRef.current = null;
+      }
+      loadingEditorRef.current = true;
+      hudEditor.commands.setContent(initBody, { contentType: 'markdown', emitUpdate: false });
+      loadingEditorTimerRef.current = window.setTimeout(() => {
+        loadingEditorTimerRef.current = null;
+        loadingEditorRef.current = false;
+      }, 12);
     }
-  }, [activeItem, flushHudEditorSave, patchLocalItem]);
+    return () => {
+      if (loadingEditorTimerRef.current) {
+        window.clearTimeout(loadingEditorTimerRef.current);
+        loadingEditorTimerRef.current = null;
+        loadingEditorRef.current = false;
+      }
+    };
+  }, [activeItem, hudEditor, flushHudEditorSave]);
 
   useLayoutEffect(() => {
     const el = hudTitleRef.current;
@@ -1007,120 +801,53 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     return () => window.removeEventListener('blur', onBlur);
   }, []);
 
-  const ensureTabSlices = useCallback(async (targetTab: HudTab, forceAll = false) => {
-    const loaded = loadedSlicesRef.current;
-    const stale = staleSlicesRef.current;
-    const needOrbits =
-      (forceAll || targetTab === 'capture' || targetTab === 'important') &&
-      (!loaded.orbits || stale.orbits);
-    const needToday =
-      (forceAll || targetTab === 'today') && (!loaded.today || stale.today);
-    const needClip =
-      (forceAll || targetTab === 'capture' || targetTab === 'important') &&
-      (!loaded.clip || stale.clip);
+  const loadHudData = useCallback(async (searchQuery = '') => {
+    const reqSeq = ++loadSeqRef.current;
+    try {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(
+        startOfDay.getFullYear(),
+        startOfDay.getMonth(),
+        startOfDay.getDate(),
+        24,
+        0,
+        0,
+        0
+      ).getTime();
+      const trimmedSearch = searchQuery.trim();
 
-    if (!needOrbits && !needToday && !needClip) return;
-
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(
-      startOfDay.getFullYear(),
-      startOfDay.getMonth(),
-      startOfDay.getDate(),
-      24,
-      0,
-      0,
-      0
-    ).getTime();
-
-    const [orbitsRes, tasksRes, eventsRes, clipRes] = await Promise.all([
-      needOrbits ? window.kapsula.listOrbits() : Promise.resolve(null),
-      needToday ? window.kapsula.listTasks() : Promise.resolve(null),
-      needToday
-        ? window.kapsula.listCalendarEvents({ startAt: startOfDay.getTime(), endAt: endOfDay })
-        : Promise.resolve(null),
-      needClip
-        ? window.kapsula.getHudClipboardPreview().catch(() => ({ hasImage: false, text: '' }))
-        : Promise.resolve(null),
-    ]);
-
-    if (orbitsRes !== null) {
-      loaded.orbits = true;
-      stale.orbits = false;
-      setOrbits(orbitsRes);
-    }
-    if (tasksRes !== null) {
-      loaded.today = true;
-      stale.today = false;
-      setTasks(tasksRes);
-    }
-    if (eventsRes !== null) {
-      setTodayEvents(eventsRes);
-    }
-    if (clipRes !== null) {
-      loaded.clip = true;
-      stale.clip = false;
-      setClipPreview(clipRes);
-    }
-  }, []);
-
-  const loadHudData = useCallback(
-    async (
-      searchQuery = '',
-      opts?: { scope?: 'search_only' | 'active_tab' | 'all' }
-    ) => {
-      const reqSeq = ++loadSeqRef.current;
-      try {
-        const trimmedSearch = searchQuery.trim();
-        const scope =
-          opts?.scope ?? (tabRef.current === 'search' ? 'search_only' : 'active_tab');
-        const needBackfillAll = Boolean(trimmedSearch) && allItemsRef.current.length === 0;
-
-        const [fetchedSearch, fetchedAll] = await Promise.all([
+      const [fetchedSearch, fetchedAll, fetchedOrbits, fetchedTasks, fetchedEvents, clip] =
+        await Promise.all([
           window.kapsula.queryVault({
             includeArchived: false,
             includeSecrets: true,
-            projection: 'card',
             search: trimmedSearch || undefined,
             limit: 1000,
           }),
-          needBackfillAll
+          trimmedSearch
             ? window.kapsula.queryVault({
                 includeArchived: false,
                 includeSecrets: true,
-                projection: 'card',
                 limit: 1000,
               })
             : Promise.resolve(null),
+          window.kapsula.listOrbits(),
+          window.kapsula.listTasks(),
+          window.kapsula.listCalendarEvents({ startAt: startOfDay.getTime(), endAt: endOfDay }),
+          window.kapsula.getHudClipboardPreview().catch(() => ({ hasImage: false, text: '' })),
         ]);
-        if (reqSeq !== loadSeqRef.current) return;
-
-        setItems(fetchedSearch);
-        if (!trimmedSearch) {
-          allItemsRef.current = fetchedSearch;
-          setAllItems(fetchedSearch);
-        } else if (fetchedAll) {
-          allItemsRef.current = fetchedAll;
-          setAllItems(fetchedAll);
-        }
-
-        if (scope === 'all') {
-          await ensureTabSlices(tabRef.current, true);
-        } else if (scope === 'active_tab' && tabRef.current !== 'search') {
-          await ensureTabSlices(tabRef.current, false);
-        }
-      } catch {
-        // ignore transient startup races
-      }
-    },
-    [ensureTabSlices]
-  );
-
-  useEffect(() => {
-    if (tab !== 'search') {
-      void ensureTabSlices(tab, false);
+      if (reqSeq !== loadSeqRef.current) return;
+      setItems(fetchedSearch);
+      setAllItems(fetchedAll ?? fetchedSearch);
+      setOrbits(fetchedOrbits);
+      setTasks(fetchedTasks);
+      setTodayEvents(fetchedEvents);
+      setClipPreview(clip);
+    } catch {
+      // ignore transient startup races
     }
-  }, [tab, ensureTabSlices]);
+  }, []);
 
   const dirtyWhileHiddenRef = useRef(false);
 
@@ -1129,233 +856,156 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     if (isHidden()) {
       dirtyWhileHiddenRef.current = true;
     } else {
-      void loadHudData('', {
-        scope: tabRef.current === 'search' ? 'search_only' : 'active_tab',
-      });
+      void loadHudData('');
     }
-
-    const onVisibilityChange = () => {
-      if (isHidden() || !dirtyWhileHiddenRef.current) return;
-      if (visibilitySyncTimerRef.current !== null) {
-        window.clearTimeout(visibilitySyncTimerRef.current);
+    const refreshIfVisible = () => {
+      if (isHidden()) {
+        dirtyWhileHiddenRef.current = true;
+        return;
       }
-      visibilitySyncTimerRef.current = window.setTimeout(() => {
-        visibilitySyncTimerRef.current = null;
-        if (!isHidden() && dirtyWhileHiddenRef.current) {
-          dirtyWhileHiddenRef.current = false;
-          void loadHudData(searchRef.current, {
-            scope: tabRef.current === 'search' ? 'search_only' : 'active_tab',
-          });
-        }
-      }, 16);
+      dirtyWhileHiddenRef.current = false;
+      void loadHudData(searchRef.current);
     };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    const patchBatchByUpsert = (upsertedList: VaultItem[]) => {
-      if (!upsertedList || upsertedList.length === 0) return;
-      const removeIds = new Set<string>();
-      const upsertMap = new Map<string, VaultItem>();
-      for (const up of upsertedList) {
-        if (up.purgedAt || up.deletedAt || up.isArchived) {
-          removeIds.add(up.id);
-        } else {
-          upsertMap.set(up.id, up);
-        }
-      }
-      setAllItems((prev) => {
+    const patchItemsLocal = (incoming: VaultItem[]) => {
+      if (!incoming || incoming.length === 0) return;
+      const byId = new Map(incoming.map((it) => [it.id, it]));
+      const apply = (prev: VaultItem[]) => {
         const next: VaultItem[] = [];
         const seen = new Set<string>();
         for (const it of prev) {
-          if (removeIds.has(it.id)) continue;
-          const up = upsertMap.get(it.id);
-          if (up) {
-            next.push(up);
+          const upd = byId.get(it.id);
+          if (upd) {
             seen.add(it.id);
+            if (!upd.isArchived && !upd.deletedAt && !upd.purgedAt) {
+              next.push(upd);
+            }
           } else {
             next.push(it);
           }
         }
         const added: VaultItem[] = [];
-        for (const [id, up] of upsertMap.entries()) {
-          if (!seen.has(id)) added.push(up);
+        for (const upd of incoming) {
+          if (!seen.has(upd.id) && !upd.isArchived && !upd.deletedAt && !upd.purgedAt) {
+            added.push(upd);
+          }
         }
         return added.length > 0 ? [...added, ...next] : next;
-      });
-      const isEmptySearch = searchRef.current.trim() === '';
-      setItems((prev) => {
-        const next: VaultItem[] = [];
-        const seen = new Set<string>();
-        for (const it of prev) {
-          if (removeIds.has(it.id)) continue;
-          const up = upsertMap.get(it.id);
-          if (up) {
-            next.push(up);
-            seen.add(it.id);
-          } else {
-            next.push(it);
-          }
-        }
-        if (isEmptySearch) {
-          const added: VaultItem[] = [];
-          for (const [id, up] of upsertMap.entries()) {
-            if (!seen.has(id)) added.push(up);
-          }
-          if (added.length > 0) return [...added, ...next];
-        }
-        return next;
-      });
-
-      if (!isHidden() && tabRef.current === 'today') {
-        staleSlicesRef.current.today = false;
-        void window.kapsula.listTasks().then(setTasks).catch(() => {});
+      };
+      setAllItems(apply);
+      if (!searchRef.current.trim()) {
+        setItems(apply);
       } else {
-        staleSlicesRef.current.today = true;
+        setItems((prev) =>
+          prev
+            .map((it) => byId.get(it.id) ?? it)
+            .filter((it) => !it.isArchived && !it.deletedAt && !it.purgedAt)
+        );
       }
     };
-
-    const patchByUpsert = (upserted: VaultItem) => {
-      patchBatchByUpsert([upserted]);
-    };
-
-    const patchBatchByDelete = (deletedIds: string[]) => {
-      if (!deletedIds || deletedIds.length === 0) return;
-      const idSet = new Set(deletedIds);
+    const removeItemsLocal = (ids: string[]) => {
+      if (!ids || ids.length === 0) return;
+      const idSet = new Set(ids);
       setAllItems((prev) => prev.filter((it) => !idSet.has(it.id)));
       setItems((prev) => prev.filter((it) => !idSet.has(it.id)));
-      setTasks((prev) => prev.filter((tk) => !idSet.has(tk.itemId)));
-      if (editorItemIdRef.current && idSet.has(editorItemIdRef.current)) {
-        editorItemIdRef.current = null;
-        dirtyItemIdRef.current = null;
-        hudBodyDirtyRef.current = false;
-        setHudEditorActive(false);
+    };
+    const onVisibilityChange = () => {
+      if (!isHidden() && dirtyWhileHiddenRef.current) {
+        dirtyWhileHiddenRef.current = false;
+        void loadHudData(searchRef.current);
       }
     };
-
+    document.addEventListener('visibilitychange', onVisibilityChange);
     const unsubs = [
       window.kapsula.onHudOpened(() => {
-        if (visibilitySyncTimerRef.current !== null) {
-          window.clearTimeout(visibilitySyncTimerRef.current);
-          visibilitySyncTimerRef.current = null;
-        }
         void flushHudEditorSaveRef.current();
-        lastSearchedRef.current = '';
-        searchRef.current = '';
         setSearch('');
         setVaultSearch('');
         setSelectedValue('');
-        setHudEditorActive(false);
+        searchRef.current = '';
         dirtyWhileHiddenRef.current = false;
-        staleSlicesRef.current.clip = true;
         setRecordingVoice(false);
         setCaptureOrbitMenuOpen(false);
         captureOrbitMenuOpenRef.current = false;
         setHudPickingImage(false);
         setHudLightboxItem(null);
-        if (lastPreventCloseSentRef.current !== false) {
-          lastPreventCloseSentRef.current = false;
-          void window.kapsula.setHudPreventClose(false);
-        }
-        if (lastProtectSentRef.current !== shouldProtectHudRef.current) {
-          lastProtectSentRef.current = shouldProtectHudRef.current;
-          void window.kapsula.setScreenProtection?.(shouldProtectHudRef.current);
-        }
-        void loadHudData('', {
-          scope: tabRef.current === 'search' ? 'search_only' : 'active_tab',
-        });
-        if (tabRef.current === 'search') {
-          searchInputRef.current?.focus();
-        } else {
-          window.setTimeout(() => {
-            if (tabRef.current === 'capture') captureInputRef.current?.focus();
-          }, 20);
-        }
+        void window.kapsula.setHudPreventClose(false);
+        void window.kapsula.setScreenProtection?.(shouldProtectHudRef.current);
+        void loadHudData('');
+        window.setTimeout(() => {
+          if (tabRef.current === 'search') searchInputRef.current?.focus();
+          else if (tabRef.current === 'capture') captureInputRef.current?.focus();
+        }, 20);
       }),
-      window.kapsula.onVaultItemUpserted(patchByUpsert),
-      window.kapsula.onVaultItemsBatchUpserted(patchBatchByUpsert),
-      window.kapsula.onVaultItemDeleted((deletedId: string) => {
-        patchBatchByDelete([deletedId]);
-      }),
-      window.kapsula.onVaultItemsBatchDeleted(patchBatchByDelete),
-      window.kapsula.onVaultBatchSynced(() => {
-        staleSlicesRef.current.today = true;
-        staleSlicesRef.current.orbits = true;
+      window.kapsula.onVaultItemUpserted((item: VaultItem) => {
         if (isHidden()) {
           dirtyWhileHiddenRef.current = true;
           return;
         }
-        dirtyWhileHiddenRef.current = false;
-        void loadHudData(searchRef.current, {
-          scope: tabRef.current === 'search' ? 'search_only' : 'active_tab',
-        });
+        patchItemsLocal([item]);
       }),
-      window.kapsula.onOrbitsChanged(() => {
-        if (!isHidden() && (tabRef.current === 'capture' || tabRef.current === 'important')) {
-          staleSlicesRef.current.orbits = false;
-          void window.kapsula.listOrbits().then((rows) => {
-            loadedSlicesRef.current.orbits = true;
-            setOrbits(rows);
-          }).catch(() => {});
-        } else {
-          staleSlicesRef.current.orbits = true;
+      window.kapsula.onVaultItemsBatchUpserted?.((batch: VaultItem[]) => {
+        if (isHidden()) {
+          dirtyWhileHiddenRef.current = true;
+          return;
         }
-      }),
-      window.kapsula.onCalendarChanged(() => {
-        if (!isHidden() && tabRef.current === 'today') {
-          staleSlicesRef.current.today = true;
-          void ensureTabSlices('today', false);
-        } else {
-          staleSlicesRef.current.today = true;
+        patchItemsLocal(batch);
+      }) ?? (() => {}),
+      window.kapsula.onVaultItemDeleted((id: string) => {
+        if (isHidden()) {
+          dirtyWhileHiddenRef.current = true;
+          return;
         }
+        removeItemsLocal([id]);
       }),
+      window.kapsula.onVaultItemsBatchDeleted?.((ids: string[]) => {
+        if (isHidden()) {
+          dirtyWhileHiddenRef.current = true;
+          return;
+        }
+        removeItemsLocal(ids);
+      }) ?? (() => {}),
+      window.kapsula.onVaultBatchSynced(refreshIfVisible),
+      window.kapsula.onOrbitsChanged(refreshIfVisible),
+      window.kapsula.onCalendarChanged(refreshIfVisible),
     ];
     return () => {
-      if (visibilitySyncTimerRef.current !== null) {
-        window.clearTimeout(visibilitySyncTimerRef.current);
-        visibilitySyncTimerRef.current = null;
-      }
       document.removeEventListener('visibilitychange', onVisibilityChange);
       for (const u of unsubs) u();
     };
-  }, [loadHudData, ensureTabSlices]);
+  }, [loadHudData]);
 
-  // Bilingual RU↔EN backend query on typing (skip redundant initial mount & duplicate query)
+  // Bilingual RU↔EN backend query on typing (skip redundant initial mount reload)
+  const searchMountedRef = useRef(false);
   useEffect(() => {
-    if (!searchEffectMountedRef.current) {
-      searchEffectMountedRef.current = true;
-      lastSearchedRef.current = search;
+    if (!searchMountedRef.current) {
+      searchMountedRef.current = true;
       return;
     }
-    if (search === lastSearchedRef.current) return;
     if (typeof document !== 'undefined' && document.hidden) {
       dirtyWhileHiddenRef.current = true;
       return;
     }
-    const timer = window.setTimeout(() => {
+    const t = window.setTimeout(() => {
       if (typeof document !== 'undefined' && document.hidden) {
         dirtyWhileHiddenRef.current = true;
         return;
       }
-      lastSearchedRef.current = search;
-      void loadHudData(search, { scope: 'search_only' });
+      void loadHudData(search);
     }, 80);
-    return () => window.clearTimeout(timer);
+    return () => window.clearTimeout(t);
   }, [search, loadHudData]);
 
   // Refresh HUD vault items whenever PIN state or lock status actually changes
+  const prevLockKeyRef = useRef(`${settings.hasMasterPin ? 1 : 0}:${settings.vaultUnlocked ? 1 : 0}`);
   useEffect(() => {
     const lockKey = `${settings.hasMasterPin ? 1 : 0}:${settings.vaultUnlocked ? 1 : 0}`;
-    if (!lockEffectMountedRef.current) {
-      lockEffectMountedRef.current = true;
-      prevLockKeyRef.current = lockKey;
-      return;
-    }
-    if (lockKey === prevLockKeyRef.current) return;
+    if (prevLockKeyRef.current === lockKey) return;
     prevLockKeyRef.current = lockKey;
     if (typeof document !== 'undefined' && document.hidden) {
       dirtyWhileHiddenRef.current = true;
       return;
     }
-    void loadHudData(searchRef.current, { scope: 'search_only' });
+    void loadHudData(searchRef.current);
   }, [settings.hasMasterPin, settings.vaultUnlocked, loadHudData]);
 
   // Keep current selection stable across autosave refreshes; only auto-select first when selection is missing
@@ -1387,51 +1037,32 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
 
   // Engage screen protection ONLY when HUD is viewing Vault tab or a secret in Search tab
   useEffect(() => {
-    if (lastProtectSentRef.current === shouldProtectHud) return;
-    lastProtectSentRef.current = shouldProtectHud;
     void window.kapsula.setScreenProtection?.(shouldProtectHud);
     return () => {
-      if (lastProtectSentRef.current) {
-        lastProtectSentRef.current = false;
-        void window.kapsula.setScreenProtection?.(false);
-      }
+      void window.kapsula.setScreenProtection?.(false);
     };
   }, [shouldProtectHud]);
 
   // Keep HUD open while recording voice, typing PIN, prompting Touch ID, picking an image, or transcribing
   useEffect(() => {
-    const nextPrevent = Boolean(
+    void window.kapsula.setHudPreventClose(
       recordingVoice ||
         unlockingPin ||
         unlockingBiometric ||
         hudPickingImage ||
         hudTranscribingId !== null
     );
-    if (lastPreventCloseSentRef.current === nextPrevent) return;
-    lastPreventCloseSentRef.current = nextPrevent;
-    void window.kapsula.setHudPreventClose(nextPrevent);
   }, [recordingVoice, unlockingPin, unlockingBiometric, hudPickingImage, hudTranscribingId]);
 
   const handleHudPasteBack = useCallback(async (target: VaultItem) => {
-    if (pastingBackRef.current) return;
-    pastingBackRef.current = true;
-    try {
-      await flushHudEditorSaveRef.current();
-      const isCurrentEdited = editorItemIdRef.current === target.id && hudBodyDirtyRef.current;
-      const resolvedTarget =
-        !isCurrentEdited && target.isCardProjection
-          ? await hydrateFullVaultItem(target)
-          : target;
-      const latestBody = isCurrentEdited ? editorBodyRef.current : resolvedTarget.body;
-      const latestTitle =
-        editorItemIdRef.current === target.id ? editorTitleRef.current : resolvedTarget.title;
-      const payload = resolvedTarget.url || latestBody || latestTitle;
-      const pasted = await window.kapsula.pasteBackFromHud(payload, false);
-      if (!pasted && isMacPlatform(window.kapsula?.platform)) {
-        toast.info(t('hud.accessibilityHint'));
-      }
-    } finally {
-      pastingBackRef.current = false;
+    await flushHudEditorSaveRef.current();
+    const isCurrentEdited = editorItemIdRef.current === target.id;
+    const latestBody = isCurrentEdited ? editorBodyRef.current : target.body;
+    const latestTitle = isCurrentEdited ? editorTitleRef.current : target.title;
+    const payload = target.url || latestBody || latestTitle;
+    const pasted = await window.kapsula.pasteBackFromHud(payload, false);
+    if (!pasted && isMacPlatform(window.kapsula?.platform)) {
+      toast.info(t('hud.accessibilityHint'));
     }
   }, [t]);
 
@@ -1467,7 +1098,6 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
           return;
         }
         e.preventDefault();
-        lastProtectSentRef.current = false;
         void window.kapsula.setScreenProtection?.(false);
         void flushHudEditorSaveRef.current().finally(() => {
           void window.kapsula.closeHud();
@@ -1475,17 +1105,18 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
         return;
       }
 
-      // Tab from search bar activates & focuses right-pane live editor
+      // Tab from search bar jumps straight into right-pane live editor
       if (
         e.key === 'Tab' &&
         !e.shiftKey &&
         tab === 'search' &&
         !inRightPane &&
         activeItem &&
-        activeItem.dna !== 'secret'
+        activeItem.dna !== 'secret' &&
+        hudEditor
       ) {
         e.preventDefault();
-        void activateHudEditor((ed) => ed.commands.focus('end'));
+        hudEditor.commands.focus('end');
         return;
       }
 
@@ -1551,7 +1182,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
     recordingVoice,
     hudLightboxItem,
     activeItem,
-    activateHudEditor,
+    hudEditor,
     setTab,
     handleHudPasteBack,
     settings.hasMasterPin,
@@ -1586,7 +1217,10 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
       }
       const nextBody = res.item?.body || res.transcript || '';
       if (res.item) patchLocalItem(res.item);
-      if (editorItemIdRef.current === target.id && nextBody) {
+      if (editorItemIdRef.current === target.id && hudEditor && nextBody) {
+        loadingEditorRef.current = true;
+        hudEditor.commands.setContent(nextBody, { contentType: 'markdown', emitUpdate: false });
+        loadingEditorRef.current = false;
         editorBodyRef.current = nextBody;
         setEditorLiveBody(nextBody);
         if (res.item?.title) {
@@ -1594,7 +1228,6 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
           editorTitleRef.current = res.item.title;
         }
         dirtyItemIdRef.current = null;
-        hudBodyDirtyRef.current = false;
         setEditorSaveState('saved');
       }
       toast.success(t('cards.transcribed'));
@@ -2260,18 +1893,16 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               aria-label={t('hud.headingBtn')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() =>
-                                void activateHudEditor((ed) =>
-                                  ed.chain().focus().toggleHeading({ level: 2 }).run()
-                                )
+                                hudEditor?.chain().focus().toggleHeading({ level: 2 }).run()
                               }
                               className={`k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md cursor-pointer ${
-                                hudToolbarState.h2
+                                hudToolbarState?.h2
                                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-3)] hover:text-[var(--k-ink-primary)]'
                               }`}
                             >
                               <TextHTwo
-                                weight={hudToolbarState.h2 ? 'bold' : 'regular'}
+                                weight={hudToolbarState?.h2 ? 'bold' : 'regular'}
                                 className="w-3.5 h-3.5"
                               />
                             </button>
@@ -2280,19 +1911,15 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               title={t('hud.bulletList')}
                               aria-label={t('hud.listShort')}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={() =>
-                                void activateHudEditor((ed) =>
-                                  ed.chain().focus().toggleBulletList().run()
-                                )
-                              }
+                              onClick={() => hudEditor?.chain().focus().toggleBulletList().run()}
                               className={`k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md cursor-pointer ${
-                                hudToolbarState.bullet
+                                hudToolbarState?.bullet
                                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-3)] hover:text-[var(--k-ink-primary)]'
                               }`}
                             >
                               <ListBullets
-                                weight={hudToolbarState.bullet ? 'bold' : 'regular'}
+                                weight={hudToolbarState?.bullet ? 'bold' : 'regular'}
                                 className="w-3.5 h-3.5"
                               />
                             </button>
@@ -2301,19 +1928,15 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               title={t('hud.checklist')}
                               aria-label={t('hud.checklist')}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={() =>
-                                void activateHudEditor((ed) =>
-                                  ed.chain().focus().toggleTaskList().run()
-                                )
-                              }
+                              onClick={() => hudEditor?.chain().focus().toggleTaskList().run()}
                               className={`k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md cursor-pointer ${
-                                hudToolbarState.task
+                                hudToolbarState?.task
                                   ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                                   : 'text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-3)] hover:text-[var(--k-ink-primary)]'
                               }`}
                             >
                               <CheckSquare
-                                weight={hudToolbarState.task ? 'bold' : 'regular'}
+                                weight={hudToolbarState?.task ? 'bold' : 'regular'}
                                 className="w-3.5 h-3.5"
                               />
                             </button>
@@ -2325,7 +1948,6 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               aria-label={t('note.studio.insertPhoto')}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
-                                void activateHudEditor();
                                 setHudPickingImage(true);
                                 const resetAfterFocus = () => {
                                   window.setTimeout(() => setHudPickingImage(false), 350);
@@ -2346,11 +1968,9 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               type="button"
                               title={isMac ? t('hud.undoMac') : t('hud.undoWin')}
                               aria-label={t('common.undo')}
-                              disabled={!hudToolbarState.canUndo}
+                              disabled={!hudToolbarState?.canUndo}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={() =>
-                                void activateHudEditor((ed) => ed.chain().focus().undo().run())
-                              }
+                              onClick={() => hudEditor?.chain().focus().undo().run()}
                               className="k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-3)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-35"
                             >
                               <ArrowUUpLeft className="w-3.5 h-3.5" />
@@ -2359,11 +1979,9 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                               type="button"
                               title={isMac ? t('hud.redoMac') : t('hud.redoWin')}
                               aria-label={t('hud.redo')}
-                              disabled={!hudToolbarState.canRedo}
+                              disabled={!hudToolbarState?.canRedo}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={() =>
-                                void activateHudEditor((ed) => ed.chain().focus().redo().run())
-                              }
+                              onClick={() => hudEditor?.chain().focus().redo().run()}
                               className="k-interactive inline-flex items-center justify-center w-6.5 h-6 rounded-md text-[var(--k-ink-secondary)] hover:bg-[var(--k-bg-surface-3)] hover:text-[var(--k-ink-primary)] cursor-pointer disabled:opacity-35"
                             >
                               <ArrowUUpRight className="w-3.5 h-3.5" />
@@ -2408,7 +2026,7 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
-                                void activateHudEditor((ed) => ed.commands.focus());
+                                hudEditor?.commands.focus();
                               }
                             }}
                             placeholder={t('hud.titlePlaceholder')}
@@ -2503,143 +2121,24 @@ export const CommandHudSurface: React.FC<CommandHudSurfaceProps> = ({
                             </div>
                           ) : null}
 
-                          {/* Lazy-Mounted TipTap Markdown Canvas (mounts on click/Tab/Enter/toolbar/paste) */}
-                          {hudEditorActive ? (
-                            <HudTipTapEditor
-                              key={activeItem.id}
-                              itemId={activeItem.id}
-                              initialBody={editorLiveBody}
-                              externalBody={editorLiveBody}
-                              locale={locale}
-                              placeholder={hudPlaceholderRef.current}
-                              editorRef={hudEditorRef}
-                              loadingEditorRef={loadingEditorRef}
-                              pendingCmdRef={pendingHudCmdRef}
-                              onUpdateBody={handleHudBodyUpdate}
-                              onInsertImages={handleHudInsertImages}
-                              onOpenLightbox={(info) => openHudLightboxRef.current(info)}
-                              onNavigateWiki={(linkTitle, targetId) =>
-                                navigateHudWikiRef.current(linkTitle, targetId)
+                          {/* Live TipTap Markdown Canvas */}
+                          <div ref={setHudEditorHostEl} className="relative flex-1 min-h-0">
+                            <EditorContent editor={hudEditor} className="min-h-full" />
+                            <ProseCaretOverlay editor={hudEditor} containerEl={hudEditorHostEl} />
+                            <EditorBlockContextMenu
+                              editor={hudEditor}
+                              containerEl={hudEditorHostEl}
+                              onOpenImageLightbox={(src, alt) =>
+                                openHudLightboxRef.current({
+                                  src,
+                                  alt,
+                                  localFilename: src.startsWith('kapsula-media://local/')
+                                    ? src.slice('kapsula-media://local/'.length)
+                                    : null,
+                                })
                               }
-                              onToolbarStateChange={setHudToolbarState}
                             />
-                          ) : (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              data-testid="hud-right-preview"
-                              onClick={() =>
-                                void activateHudEditor((ed) => ed.commands.focus('end'))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  void activateHudEditor((ed) => ed.commands.focus('end'));
-                                }
-                              }}
-                              onPaste={(e) => {
-                                const files = extractImageFilesFromDataTransfer(e.clipboardData);
-                                if (files.length === 0) return;
-                                e.preventDefault();
-                                void activateHudEditor((ed) => {
-                                  void handleHudInsertImages(ed, files);
-                                });
-                              }}
-                              onDragOver={(e) => {
-                                if (e.dataTransfer?.types?.includes('Files')) {
-                                  e.preventDefault();
-                                }
-                              }}
-                              onDrop={(e) => {
-                                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
-                                if (files.length === 0) return;
-                                e.preventDefault();
-                                void activateHudEditor((ed) => {
-                                  void handleHudInsertImages(ed, files);
-                                });
-                              }}
-                              className="relative flex-1 min-h-[120px] pb-6 cursor-text text-[13.5px] leading-[1.62] text-[var(--k-ink-secondary)] outline-none"
-                            >
-                              {editorLiveBody.trim() ? (
-                                <div className="space-y-1.5 k-selectable">
-                                  {editorLiveBody
-                                    .split(/\r?\n/)
-                                    .slice(0, 32)
-                                    .map((rawLine, lineIdx) => {
-                                      const trimmed = rawLine.trim();
-                                      if (!trimmed) {
-                                        return <div key={lineIdx} className="h-1.5" />;
-                                      }
-                                      const taskM =
-                                        /^[-*•]\s+(?:\\\[|\[)([ xX])(?:\\\]|\])\s+(.+)$/.exec(
-                                          trimmed
-                                        );
-                                      if (taskM) {
-                                        const checked = (taskM[1] ?? '').toLowerCase() === 'x';
-                                        return (
-                                          <div
-                                            key={lineIdx}
-                                            className="flex items-start gap-2 text-[13px]"
-                                          >
-                                            <span
-                                              className={`mt-1 w-3.5 h-3.5 rounded-[4px] border inline-flex items-center justify-center shrink-0 text-[9px] font-bold ${
-                                                checked
-                                                  ? 'bg-[var(--k-accent)] border-[var(--k-accent)] text-[var(--k-ink-on-accent)]'
-                                                  : 'border-[var(--k-border-strong)] bg-[var(--k-bg-surface-2)]'
-                                              }`}
-                                            >
-                                              {checked ? '✓' : ''}
-                                            </span>
-                                            <span
-                                              className={
-                                                checked
-                                                  ? 'line-through text-[var(--k-ink-muted)]'
-                                                  : 'text-[var(--k-ink-primary)]'
-                                              }
-                                            >
-                                              {cleanInlineSyntax(taskM[2] ?? '')}
-                                            </span>
-                                          </div>
-                                        );
-                                      }
-                                      const headingM = /^(#{1,3})\s+(.+)$/.exec(trimmed);
-                                      if (headingM) {
-                                        return (
-                                          <div
-                                            key={lineIdx}
-                                            className="font-semibold text-[14.5px] text-[var(--k-ink-primary)] pt-0.5"
-                                          >
-                                            {cleanInlineSyntax(headingM[2] ?? '')}
-                                          </div>
-                                        );
-                                      }
-                                      const bulletM = /^[-*•]\s+(.+)$/.exec(trimmed);
-                                      if (bulletM) {
-                                        return (
-                                          <div
-                                            key={lineIdx}
-                                            className="flex items-start gap-2 pl-0.5"
-                                          >
-                                            <span className="mt-2 w-1.5 h-1.5 rounded-full bg-[var(--k-accent)] shrink-0" />
-                                            <span>{cleanInlineSyntax(bulletM[1] ?? '')}</span>
-                                          </div>
-                                        );
-                                      }
-                                      const cleanLine = cleanInlineSyntax(rawLine);
-                                      return cleanLine ? (
-                                        <p key={lineIdx} className="m-0">
-                                          {cleanLine}
-                                        </p>
-                                      ) : null;
-                                    })}
-                                </div>
-                              ) : (
-                                <div className="text-[13px] text-[var(--k-ink-muted)] select-none">
-                                  {hudPlaceholderRef.current}
-                                </div>
-                              )}
-                            </div>
-                          )}
+                          </div>
                         </div>
 
                         {/* Bottom Action Footer (100% solid opaque) */}

@@ -119,7 +119,6 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
                 src={poster}
                 alt=""
                 loading="lazy"
-                decoding="async"
                 className="w-full h-full object-cover block opacity-90 group-hover/yt:opacity-100 transition-opacity"
               />
             ) : null}
@@ -148,7 +147,7 @@ export const InlineReferenceVideo: React.FC<InlineReferenceVideoProps> = ({
           alt=""
           loading="lazy"
           decoding="async"
-          className={`w-full aspect-video ${heightClass} object-contain bg-black block`}
+          className={`w-full ${heightClass} object-contain bg-black block`}
         />
       ) : (
         <video

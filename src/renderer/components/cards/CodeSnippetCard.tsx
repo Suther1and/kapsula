@@ -3,7 +3,6 @@ import { Code } from '@phosphor-icons/react';
 import type { VaultItem } from '@shared/types';
 import { useI18n } from '@shared/i18n/react';
 import { extractFirstCodeBlock } from '../../lib/format';
-import { hydrateFullVaultItem } from '../../lib/hydrate-item';
 import { CopySlotPill } from '../ui/CopySlotPill';
 
 interface CodeSnippetCardProps {
@@ -41,14 +40,7 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = React.memo(({
           copiedLabel={t('common.done')}
           widthPx={84}
           heightPx={28}
-          onCopy={async () => {
-            const resolved =
-              item.isCardProjection && item.isBodyTruncated
-                ? await hydrateFullVaultItem(item)
-                : item;
-            const fullCode = extractFirstCodeBlock(resolved.body)?.code || resolved.body.trim();
-            return window.kapsula.copyText(fullCode);
-          }}
+          onCopy={() => window.kapsula.copyText(codeText)}
         />
       </div>
     );
@@ -80,14 +72,7 @@ export const CodeSnippetCard: React.FC<CodeSnippetCardProps> = React.memo(({
           copiedLabel={t('common.done')}
           widthPx={152}
           heightPx={28}
-          onCopy={async () => {
-            const resolved =
-              item.isCardProjection && item.isBodyTruncated
-                ? await hydrateFullVaultItem(item)
-                : item;
-            const fullCode = extractFirstCodeBlock(resolved.body)?.code || resolved.body.trim();
-            return window.kapsula.copyText(fullCode);
-          }}
+          onCopy={() => window.kapsula.copyText(codeText)}
         />
       </div>
     </div>
