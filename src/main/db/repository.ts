@@ -1707,6 +1707,10 @@ export class VaultRepository {
     return Array.from(refs);
   }
 
+  public runInTransaction<T>(fn: () => T): T {
+    return this.inTx(fn);
+  }
+
   private inTx<T>(fn: () => T): T {
     const isOuter = this.txDepth === 0;
     this.txDepth++;
