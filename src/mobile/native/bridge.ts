@@ -5,6 +5,7 @@ import {
   computeVersionCodeFromSemver,
   type MobileDistChannel,
 } from '@shared/app-version';
+import { isSafeExternalUrl } from '@shared/url-safety';
 import { tm } from '../lib/mobile-i18n';
 import { base64ToBytes } from '../sync/mobile-crypto';
 
@@ -79,6 +80,15 @@ export interface ApkInstallResult {
   error?: string;
 }
 
+export interface ExternalTextFetchResult {
+  ok: boolean;
+  status: number;
+  finalUrl: string;
+  contentType: string;
+  body: string;
+  error?: string;
+}
+
 interface KapsulaNativePluginInterface {
   getDeviceInfo(): Promise<NativeDeviceInfo>;
   getAppVersion(): Promise<NativeAppVersion>;
@@ -124,6 +134,12 @@ interface KapsulaNativePluginInterface {
     backgroundHex?: string;
   }): Promise<{ ok: boolean }>;
   openExternalUrl(options: { url: string }): Promise<{ ok: boolean }>;
+  fetchExternalText(options: {
+    url: string;
+    accept?: string;
+    userAgent?: string;
+    timeoutMs?: number;
+  }): Promise<ExternalTextFetchResult>;
   addListener(
     eventName: 'shareReceived',
     listenerFunc: (payload: SharedIntentPayload) => void
@@ -851,6 +867,147 @@ export const mobileBridge = {
       }
     } finally {
       endFlow();
+    }
+  },
+
+  async fetchExternalText(options: {
+    url: string;
+    accept?: string;
+    userAgent?: string;
+    timeoutMs?: number;
+  }): Promise<ExternalTextFetchResult> {
+    const cleanUrl = options.url.trim();
+    if (!isSafeExternalUrl(cleanUrl)) {
+      return {
+        ok: false,
+        status: 0,
+        finalUrl: cleanUrl,
+        contentType: '',
+        body: '',
+        error: 'blocked_url',
+      };
+    }
+
+    const timeoutMs = Math.max(1000, Math.min(8000, options.timeoutMs ?? 4500));
+
+    if (isNativeAndroid()) {
+      try {
+        return await KapsulaNative.fetchExternalText({
+          url: cleanUrl,
+          accept: options.accept,
+          userAgent: options.userAgent,
+          timeoutMs,
+        });
+      } catch {
+        return {
+          ok: false,
+          status: 0,
+          finalUrl: cleanUrl,
+          contentType: '',
+          body: '',
+        };
+      }
+    }
+
+    // Web / preview / Vitest fallback with SSRF-safe manual redirect validation
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let currentUrl = cleanUrl;
+    try {
+      const headers: Record<string, string> = {};
+      if (options.accept) headers.Accept = options.accept;
+      const maxHops = 4;
+      for (let hop = 0; hop <= maxHops; hop++) {
+        if (!isSafeExternalUrl(currentUrl)) {
+          return {
+            ok: false,
+            status: 0,
+            finalUrl: currentUrl,
+            contentType: '',
+            body: '',
+            error: 'blocked_url',
+          };
+        }
+        const resp = await fetch(currentUrl, {
+          headers,
+          redirect: 'manual',
+          signal: controller.signal,
+        });
+        if (resp.status >= 300 && resp.status < 400) {
+          const loc = resp.headers.get('location');
+          if (!loc || hop >= maxHops) {
+            return {
+              ok: false,
+              status: resp.status,
+              finalUrl: currentUrl,
+              contentType: '',
+              body: '',
+              error: 'blocked_url',
+            };
+          }
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(loc.trim(), currentUrl).toString();
+          } catch {
+            return {
+              ok: false,
+              status: 0,
+              finalUrl: currentUrl,
+              contentType: '',
+              body: '',
+              error: 'blocked_url',
+            };
+          }
+          if (!isSafeExternalUrl(nextUrl)) {
+            return {
+              ok: false,
+              status: 0,
+              finalUrl: nextUrl,
+              contentType: '',
+              body: '',
+              error: 'blocked_url',
+            };
+          }
+          currentUrl = nextUrl;
+          continue;
+        }
+        const resolvedFinal = resp.url || currentUrl;
+        if (!isSafeExternalUrl(resolvedFinal)) {
+          return {
+            ok: false,
+            status: 0,
+            finalUrl: resolvedFinal,
+            contentType: '',
+            body: '',
+            error: 'blocked_url',
+          };
+        }
+        const text = await resp.text();
+        return {
+          ok: resp.ok,
+          status: resp.status,
+          finalUrl: resolvedFinal,
+          contentType: resp.headers.get('content-type') || '',
+          body: text.slice(0, 260_000),
+        };
+      }
+      return {
+        ok: false,
+        status: 0,
+        finalUrl: currentUrl,
+        contentType: '',
+        body: '',
+      };
+    } catch {
+      return {
+        ok: false,
+        status: 0,
+        finalUrl: currentUrl,
+        contentType: '',
+        body: '',
+      };
+    } finally {
+      clearTimeout(timer);
     }
   },
 

@@ -52,6 +52,12 @@ import {
   writeStoredMobileLocale,
 } from './lib/mobile-i18n';
 import {
+  classifyMobilePrivateTelegramUrl,
+  isMobileLinkStubBody,
+  isMobileLinkStubTitle,
+  unfurlMobileLink,
+} from './lib/mobile-link-unfurl';
+import {
   checkForMobileUpdate,
   GITHUB_RELEASES_PAGE_URL,
   isSelfUpdateAllowed,
@@ -562,7 +568,9 @@ export const App: React.FC = () => {
   const handleUpdateItemOptimistic = useCallback(
     async (
       id: string,
-      patch: Partial<Pick<VaultItem, 'orbit' | 'focusBoardId' | 'isPinned' | 'title' | 'body'>>
+      patch: Partial<
+        Pick<VaultItem, 'orbit' | 'focusBoardId' | 'isPinned' | 'isMuted' | 'title' | 'body'>
+      >
     ) => {
       setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
       try {
@@ -574,6 +582,103 @@ export const App: React.FC = () => {
     },
     [store, refreshFromStore]
   );
+
+  const enrichMobileLinkItem = useCallback(
+    async (
+      itemId: string,
+      rawUrl: string,
+      opts?: { manual?: boolean }
+    ): Promise<boolean> => {
+      try {
+        const res = await unfurlMobileLink(rawUrl, locale);
+        if (!res) return false;
+        const current = store.getItemById(itemId);
+        if (!current || current.deletedAt || current.url !== rawUrl) return false;
+
+        const patch: Parameters<typeof store.updateItem>[1] = {
+          domain: res.domain,
+          platform: res.platform,
+          mediaMeta: {
+            ...(current.mediaMeta ?? {}),
+            ...(res.mediaMetaPatch ?? {}),
+            ...(res.linkAccess ? { linkAccess: res.linkAccess } : {}),
+            ...(typeof res.hasVideo === 'boolean' ? { hasVideo: res.hasVideo } : {}),
+          },
+        };
+
+        if (isMobileLinkStubTitle(current.title, rawUrl) && res.title) {
+          patch.title = res.title;
+        }
+        if (isMobileLinkStubBody(current.body, rawUrl) && res.body) {
+          patch.body = res.body;
+        }
+        if ((opts?.manual || !current.summary?.trim()) && res.summary) {
+          patch.summary = res.summary;
+        }
+        if (res.ogImageUrl && (opts?.manual || !current.ogImageUrl)) {
+          patch.ogImageUrl = res.ogImageUrl;
+        }
+
+        await store.updateItem(itemId, patch);
+        if (syncStatus.state === 'synced' || syncStatus.state === 'offline') {
+          void syncEngine.syncNow().catch(() => {});
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [locale, store, syncEngine, syncStatus.state]
+  );
+
+  const handleRefreshLinkPreview = useCallback(
+    async (item: VaultItem) => {
+      if (!item.url) return;
+      const ok = await enrichMobileLinkItem(item.id, item.url, { manual: true });
+      if (ok) {
+        mobileBridge.haptic('success');
+        toast.success(t('feed.refreshPreviewDone'));
+      } else {
+        mobileBridge.haptic('error');
+        toast.error(t('feed.refreshPreviewFailed'));
+      }
+    },
+    [enrichMobileLinkItem, t]
+  );
+
+  const handleSaveNoteStable = useCallback(
+    async (
+      id: string,
+      patch: Partial<
+        Pick<
+          VaultItem,
+          'title' | 'body' | 'orbit' | 'focusBoardId' | 'isPinned' | 'tags' | 'remindAt' | 'linksOut'
+        >
+      >
+    ) => {
+      await store.updateItem(id, patch);
+    },
+    [store]
+  );
+
+  const handleListRevisionsStable = useCallback(
+    (id: string) => store.listItemRevisions(id),
+    [store]
+  );
+
+  const handleRevertRevisionStable = useCallback(
+    (itemId: string, revId: string) => store.revertItemToRevision(itemId, revId),
+    [store]
+  );
+
+  const handleOpenImageStable = useCallback((src: string, caption?: string) => {
+    setLightboxImage({ src, caption });
+  }, []);
+
+  const handleOpenExternalItemStable = useCallback((id: string) => {
+    setSelectedFeedItemId(id);
+    setActiveTab('feed');
+  }, []);
 
   // Apply theme + custom color engine tokens + dynamic system bars color synchronously
   useEffect(() => {
@@ -916,6 +1021,11 @@ export const App: React.FC = () => {
     [store, t]
   );
 
+  const handleDeleteNoteStable = useCallback(
+    (id: string) => handleDeleteItemWithUndo(id, t('common.movedToTrash')),
+    [handleDeleteItemWithUndo, t]
+  );
+
   const handleBulkDeleteWithUndo = useCallback(
     async (ids: string[]) => {
       const validIds = ids.filter((id) => Boolean(store.getRawItem(id)));
@@ -1069,6 +1179,7 @@ export const App: React.FC = () => {
         isPinned: input.isPinned,
         tags: input.tags,
         remindAt: input.remindAt,
+        mediaMeta: { inNotesHub: true },
         preserveEmptyTitle: true,
       });
       setNoteDrafts((prev) => {
@@ -1265,19 +1376,34 @@ export const App: React.FC = () => {
           else galleryPaths.push(localName);
         }
 
+        const privateTg =
+          !imagePath && data.url ? classifyMobilePrivateTelegramUrl(data.url, locale) : null;
         const created = await store.createItem({
           dna: imagePath ? 'shot' : data.url ? 'link' : 'note',
-          title: data.title,
-          body: data.body,
+          title:
+            privateTg && isMobileLinkStubTitle(data.title, data.url)
+              ? privateTg.title
+              : data.title,
+          body:
+            privateTg && isMobileLinkStubBody(data.body, data.url)
+              ? privateTg.body
+              : data.body,
+          summary: privateTg?.summary ?? '',
           url: data.url,
           orbit: data.orbit,
           focusBoardId: data.focusBoardId,
           imagePath,
           thumbPath: imagePath,
-          mediaMeta: galleryPaths.length > 0 ? { galleryPaths } : null,
+          mediaMeta:
+            galleryPaths.length > 0
+              ? { galleryPaths }
+              : privateTg?.mediaMetaPatch ?? null,
           source: 'vault_ui',
         });
         firstCreatedId = created.id;
+        if (!imagePath && data.url && !privateTg) {
+          void enrichMobileLinkItem(created.id, data.url);
+        }
       }
 
       for (let i = 0; i < nonImageFiles.length; i++) {
@@ -1310,7 +1436,7 @@ export const App: React.FC = () => {
         void syncEngine.syncNow().catch(() => {});
       }
     },
-    [store, syncEngine, syncStatus.state]
+    [store, syncEngine, syncStatus.state, locale, enrichMobileLinkItem]
   );
 
   const ensureMediaUrl = useCallback(
@@ -1628,6 +1754,7 @@ export const App: React.FC = () => {
               onBulkDeleteItems={handleBulkDeleteWithUndo}
               onTranscribeVoice={handleTranscribeVoice}
               onExtractTasks={handleExtractTasks}
+              onRefreshLinkPreview={handleRefreshLinkPreview}
               onQuickCapture={() => {
                 setCaptureTab('text');
                 setCaptureOpen(true);
@@ -1653,27 +1780,22 @@ export const App: React.FC = () => {
                 flushEditorRef={flushEditorRef}
                 onSelectOrbit={setSelectedOrbitId}
                 onSelectNote={setActiveNoteId}
-                onOpenImage={(src, caption) => setLightboxImage({ src, caption })}
+                onOpenImage={handleOpenImageStable}
                 onCreateOrbit={handleCreateOrbitQuick}
                 onCreateBoard={handleCreateBoardQuick}
                 onMaterializeDraft={handleMaterializeDraft}
                 onDraftChange={handleDraftChange}
                 onDraftSaved={handleDraftSaved}
-                onSaveNote={async (id, patch) => {
-                  await store.updateItem(id, patch);
-                }}
+                onSaveNote={handleSaveNoteStable}
                 onInsertInlinePhoto={handleInsertInlinePhoto}
                 onAttachPhoto={handleAttachPhotoToNote}
-                listRevisions={(id) => store.listItemRevisions(id)}
-                onRevertRevision={(itemId, revId) => store.revertItemToRevision(itemId, revId)}
+                listRevisions={handleListRevisionsStable}
+                onRevertRevision={handleRevertRevisionStable}
                 onTranscribeVoice={handleTranscribeVoice}
                 onExtractTasks={handleExtractTasks}
                 onPolishNote={handlePolishNote}
-                onOpenExternalItem={(id) => {
-                  setSelectedFeedItemId(id);
-                  setActiveTab('feed');
-                }}
-                onDeleteNote={(id) => handleDeleteItemWithUndo(id, t('common.movedToTrash'))}
+                onOpenExternalItem={handleOpenExternalItemStable}
+                onDeleteNote={handleDeleteNoteStable}
               />
             </Suspense>
           ) : null}
@@ -1904,14 +2026,28 @@ export const App: React.FC = () => {
             onCreateOrbit={handleCreateOrbitQuick}
             onCreateBoard={handleCreateBoardQuick}
             onSaveText={async (data) => {
-              await store.createItem({
+              const privateTg = data.url
+                ? classifyMobilePrivateTelegramUrl(data.url, locale)
+                : null;
+              const created = await store.createItem({
                 dna: data.url ? 'link' : 'note',
-                title: data.title,
-                body: data.body,
+                title:
+                  privateTg && isMobileLinkStubTitle(data.title, data.url)
+                    ? privateTg.title
+                    : data.title,
+                body:
+                  privateTg && isMobileLinkStubBody(data.body, data.url)
+                    ? privateTg.body
+                    : data.body,
+                summary: privateTg?.summary ?? '',
                 url: data.url,
                 orbit: data.orbit,
                 focusBoardId: data.focusBoardId,
+                mediaMeta: privateTg?.mediaMetaPatch ?? null,
               });
+              if (data.url && !privateTg) {
+                void enrichMobileLinkItem(created.id, data.url);
+              }
             }}
             onSaveMedia={async (data) => {
               await store.saveMediaFile(data.fileName, data.mime, data.bytes);

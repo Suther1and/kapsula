@@ -40,7 +40,7 @@ import { processDocumentIntelligence, saveDocumentAsset } from './document-pipel
 import { formatEmailAsNoteMarkdown, parseEmlBuffer } from './email-parser';
 import { generateThumbnailAndAnalyze } from './thumbnail-service';
 import { normalizeMetaText, sanitizeIngestedText } from './html-cleaner';
-import { downloadOgImage, sanitizeSafeExternalUrl, unfurlUrl } from './unfurler';
+import { classifyPrivateTelegramUrl, downloadOgImage, sanitizeSafeExternalUrl, unfurlUrl } from './unfurler';
 import { VideoCacheManager } from './video-cache';
 import {
   detectSocialVideoPlatform,
@@ -229,6 +229,103 @@ export function isGenericVoiceTitle(raw?: string | null): boolean {
   return !t || GENERIC_VOICE_TITLE_RE.test(t);
 }
 
+const BARE_LINK_TITLE_RE =
+  /^(?:ссылка(?:\s+из\s+другого\s+приложения)?|сохранённая\s+ссылка|link|saved\s+link|shared\s+link|x|twitter|telegram|instagram|youtube|github|reddit|tiktok|t\.me|x\.com|twitter\.com|instagram\.com|youtube\.com|youtu\.be)$/i;
+
+export function isLinkStubTitle(
+  rawTitle?: string | null,
+  domain?: string | null,
+  url?: string | null,
+  platform?: string | null
+): boolean {
+  const t = (rawTitle ?? '').trim();
+  if (!t) return true;
+  if (isGenericImageTitle(t) || BARE_LINK_TITLE_RE.test(t)) return true;
+  const lower = t.toLowerCase();
+  const normDomain = domain ? domain.trim().replace(/^www\./i, '').toLowerCase() : null;
+  const normPlatform = platform ? platform.trim().toLowerCase() : null;
+  if (normDomain && lower === normDomain) return true;
+  if (normPlatform && lower === normPlatform) return true;
+
+  let cleanUrlLower: string | null = null;
+  let hostLower: string | null = null;
+  let fullHostLower: string | null = null;
+  if (url) {
+    const cleanUrl = url.trim();
+    cleanUrlLower = cleanUrl.toLowerCase();
+    if (lower === cleanUrlLower) return true;
+    try {
+      const u = new URL(cleanUrl);
+      fullHostLower = u.hostname.toLowerCase();
+      hostLower = fullHostLower.replace(/^www\./i, '');
+      if (lower === hostLower || lower === fullHostLower) return true;
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  // Only treat "Ссылка: <host/url>" / "Link — <host/url>" as a stub when the suffix matches the link's own host/domain/URL
+  const prefixed = /^(?:ссылка|link)\s*[:—–-]\s*(.+)$/i.exec(t);
+  if (prefixed?.[1]) {
+    const suffix = prefixed[1].trim().replace(/^www\./i, '').toLowerCase();
+    if (
+      (normDomain && suffix === normDomain) ||
+      (normPlatform && suffix === normPlatform) ||
+      (cleanUrlLower && suffix === cleanUrlLower) ||
+      (hostLower && suffix === hostLower) ||
+      (fullHostLower && suffix === fullHostLower)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isLinkStubBody(rawBody?: string | null, url?: string | null): boolean {
+  const b = (rawBody ?? '').trim();
+  if (!b) return true;
+  if (!url) return false;
+  const cleanUrl = url.trim();
+  if (b === cleanUrl) return true;
+  const withoutUrl = b.replace(cleanUrl, '').trim();
+  return withoutUrl.length === 0;
+}
+
+function isLinkStubSummary(rawSummary?: string | null, url?: string | null, domain?: string | null): boolean {
+  const s = (rawSummary ?? '').trim();
+  if (!s) return true;
+  if (url && s === url.trim()) return true;
+  if (domain && s.toLowerCase() === domain.trim().toLowerCase()) return true;
+  if (s.startsWith('Сохранённая ссылка') || s.startsWith('Saved link')) return true;
+  return false;
+}
+
+/**
+ * Identifies genuine un-unfurled link stubs (e.g. shared from Android Share Target before desktop sync)
+ * that are safe to enrich automatically without touching user-authored notes/titles or private links.
+ */
+export function isStubLinkItem(item: VaultItem): boolean {
+  if (!item || item.dna !== 'link' || !item.url) return false;
+  if (item.deletedAt || item.isArchived || item.isDemo) return false;
+  if (item.mediaMeta?.linkAccess === 'private') return false;
+  if (item.imagePath || item.thumbPath) return false;
+  return (
+    isLinkStubTitle(item.title, item.domain, item.url, item.platform) &&
+    isLinkStubBody(item.body, item.url)
+  );
+}
+
+/**
+ * Identifies already-enriched synced link items (e.g. unfurled on Android with a remote `ogImageUrl`)
+ * that still need Desktop's local cached cover (`imagePath`/`thumbPath`) downloaded without altering text/AI.
+ */
+export function needsLocalOgDownload(item: VaultItem): boolean {
+  if (!item || item.dna !== 'link') return false;
+  if (item.deletedAt || item.isArchived || item.isDemo) return false;
+  if (item.mediaMeta?.linkAccess === 'private') return false;
+  return Boolean(item.ogImageUrl && !item.imagePath && !item.thumbPath);
+}
+
 export interface PipelineRuntimeConfig {
   activeMode: CaptureMode;
   activeFocusBoardId: string | null;
@@ -251,6 +348,8 @@ export class CapturePipeline {
   private readonly mediaDir: string;
   private readonly videoCache: VideoCacheManager;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly syncedEnrichAttempts = new Map<string, number>();
+  private readonly syncedEnrichActive = new Set<string>();
   private activeBgWorkers = 0;
   private readonly bgWaitQueue: Array<() => void> = [];
   private readonly maxBgConcurrency = 3;
@@ -286,6 +385,12 @@ export class CapturePipeline {
   public async ensureLinkVideo(itemId: string): Promise<VaultItem | null> {
     const current = this.deps.repo.getItemById(itemId);
     if (!current || !current.url || current.dna !== 'link') return current ?? null;
+    if (
+      current.mediaMeta?.linkAccess === 'private' ||
+      Boolean(classifyPrivateTelegramUrl(current.url, 'ru'))
+    ) {
+      return current;
+    }
     if (current.mediaMeta?.cachedVideoFile) {
       const check = await this.videoCache.resolveSafePathAsync(current.mediaMeta.cachedVideoFile);
       if (check.ok) {
@@ -1407,7 +1512,34 @@ export class CapturePipeline {
       return false;
     };
 
-    if (local.dna === 'link' && local.url && config.enableUrlUnfurl && !input.isDemo) {
+    const offlinePrivTg =
+      local.dna === 'link' && local.url && !input.isDemo
+        ? classifyPrivateTelegramUrl(local.url, locale)
+        : null;
+
+    if (offlinePrivTg && local.url) {
+      if (offlinePrivTg.domain) effectiveDomain = offlinePrivTg.domain;
+      if (offlinePrivTg.platform) effectivePlatform = offlinePrivTg.platform;
+      if (
+        offlinePrivTg.title &&
+        !cleanExplicitTitle &&
+        isLinkStubTitle(effectiveTitle, local.domain, local.url, local.platform)
+      ) {
+        effectiveTitle = offlinePrivTg.title;
+      }
+      const canFillBody = isBodyUrlOrStub(effectiveBody, local.url, cleanExplicitTitle || effectiveTitle);
+      if (offlinePrivTg.bodyMarkdown && canFillBody) {
+        effectiveBody = offlinePrivTg.bodyMarkdown;
+      }
+      if (offlinePrivTg.description) {
+        effectiveSummary = offlinePrivTg.description;
+      }
+      syncMediaMeta = {
+        ...(syncMediaMeta ?? {}),
+        linkAccess: 'private',
+        hasVideo: false,
+      };
+    } else if (local.dna === 'link' && local.url && config.enableUrlUnfurl && !input.isDemo) {
       const og = await Promise.race([
         unfurlUrl(local.url, locale).catch(() => null),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 5500)),
@@ -1418,11 +1550,7 @@ export class CapturePipeline {
         if (
           og.title &&
           !cleanExplicitTitle &&
-          (!effectiveTitle ||
-            effectiveTitle === local.domain ||
-            effectiveTitle === local.url ||
-            effectiveTitle.startsWith('Ссылка') ||
-            effectiveTitle.startsWith('Link'))
+          isLinkStubTitle(effectiveTitle, local.domain, local.url, local.platform)
         ) {
           effectiveTitle = og.title;
         }
@@ -1438,12 +1566,20 @@ export class CapturePipeline {
         if (og.ogImageUrl) {
           effectiveOgImageUrl = og.ogImageUrl;
         }
-        if (og.author || og.publishedAt || og.videoUrl) {
+        if (
+          og.author ||
+          og.publishedAt ||
+          og.videoUrl ||
+          og.linkAccess ||
+          og.hasVideo !== undefined
+        ) {
           syncMediaMeta = {
             ...(syncMediaMeta ?? {}),
             forwardAuthor: og.author ?? syncMediaMeta?.forwardAuthor,
             publishedAt: og.publishedAt ?? syncMediaMeta?.publishedAt,
             videoUrl: og.videoUrl ?? syncMediaMeta?.videoUrl,
+            ...(og.linkAccess ? { linkAccess: og.linkAccess } : {}),
+            ...(og.hasVideo !== undefined ? { hasVideo: og.hasVideo } : {}),
           };
         }
         if (og.extractedLinks.length > 0) {
@@ -1549,6 +1685,7 @@ export class CapturePipeline {
     const needsBackground =
       !isBlankDraftNote &&
       !local.isFleetingScratch &&
+      !offlinePrivTg &&
       (deferSyncDirtyUntilOcr ||
         (hasImage && config.enableAutoOcr) ||
         (local.dna === 'link' && Boolean(local.url) && config.enableUrlUnfurl) ||
@@ -1650,7 +1787,8 @@ export class CapturePipeline {
     hasExplicitOrbit = false,
     skipAutoCalendar = false,
     ocrAlreadyScanned = false,
-    deferSyncDirtyUntilOcr = false
+    deferSyncDirtyUntilOcr = false,
+    resultOut?: { linkUnfurlAttempted?: boolean; linkUnfurlSucceeded?: boolean }
   ): Promise<void> {
     const tempSecretImgName =
       imgAbsPath && path.dirname(path.resolve(imgAbsPath)) === path.resolve(this.mediaDir)
@@ -1874,46 +2012,50 @@ export class CapturePipeline {
 
     // B. Deep multi-platform link unfurl (`t.me`, `x.com`, `youtube`, `github`, `instagram`, articles)
     // Skip re-fetching if synchronous capture() already populated full content (unless manually re-analyzed)
+    const replacedCoverMedia: string[] = [];
     const alreadyUnfurled =
       current.dna === 'link' &&
-      Boolean(current.title && current.title !== current.domain && current.title !== current.url) &&
-      Boolean(current.body && current.body.trim() !== (current.url || '').trim());
+      !isLinkStubTitle(current.title, current.domain, current.url, current.platform) &&
+      !isLinkStubBody(current.body, current.url);
 
     if (current.url && config.enableUrlUnfurl && (!alreadyUnfurled || bypassCache)) {
+      if (resultOut) resultOut.linkUnfurlAttempted = true;
       const og = await unfurlUrl(current.url, locale);
+      const extractedAnyMetadata = Boolean(
+        og.title ||
+          og.description ||
+          og.bodyMarkdown ||
+          og.ogImageUrl ||
+          og.videoUrl ||
+          og.linkAccess
+      );
+      if (resultOut) resultOut.linkUnfurlSucceeded = extractedAnyMetadata;
+
       if (og.domain) domain = og.domain;
       if (og.platform) platform = og.platform;
-      if (
-        og.title &&
-        (title === current.domain ||
-          title.startsWith('Ссылка') ||
-          title.startsWith('Link') ||
-          title === current.url ||
-          isGenericImageTitle(title))
-      ) {
+      if (og.title && isLinkStubTitle(title, current.domain, current.url, current.platform)) {
         title = og.title;
       }
-      if (
-        og.description &&
-        (!summary ||
-          summary === current.url ||
-          summary.startsWith('Сохранённая ссылка') ||
-          summary.startsWith('Saved link'))
-      ) {
+      if (og.description && (isLinkStubSummary(summary, current.url, current.domain) || bypassCache)) {
         summary = og.description;
       }
-      if (
-        og.bodyMarkdown &&
-        (!body.trim() || body.trim() === current.url.trim())
-      ) {
+      if (og.bodyMarkdown && isLinkStubBody(body, current.url)) {
         body = og.bodyMarkdown;
       }
-      if (og.author || og.publishedAt || og.videoUrl) {
+      if (
+        og.author ||
+        og.publishedAt ||
+        og.videoUrl ||
+        og.linkAccess ||
+        og.hasVideo !== undefined
+      ) {
         mediaMeta = {
           ...(mediaMeta ?? {}),
           forwardAuthor: og.author ?? mediaMeta?.forwardAuthor,
           publishedAt: og.publishedAt ?? mediaMeta?.publishedAt,
           videoUrl: og.videoUrl ?? mediaMeta?.videoUrl,
+          ...(og.linkAccess ? { linkAccess: og.linkAccess } : {}),
+          ...(og.hasVideo !== undefined ? { hasVideo: og.hasVideo } : {}),
         };
       }
       for (const act of og.extractedLinks) {
@@ -1921,27 +2063,27 @@ export class CapturePipeline {
       }
 
       if (og.ogImageUrl) {
+        const shouldDownloadCover =
+          (!imagePath && !thumbPath) || (bypassCache && og.ogImageUrl !== current.ogImageUrl);
         ogImageUrl = og.ogImageUrl;
-        if (!imagePath && !thumbPath) {
-          const downloaded = await downloadOgImage(
-            og.ogImageUrl,
-            this.mediaDir,
-            current.contentHash.slice(0, 20)
-          );
+        if (shouldDownloadCover) {
+          const prevImg = imagePath;
+          const prevThumb = thumbPath;
+          const coverStem =
+            bypassCache && (prevImg || prevThumb)
+              ? `${current.contentHash.slice(0, 12)}_${crypto.createHash('sha256').update(og.ogImageUrl).digest('hex').slice(0, 8)}`
+              : current.contentHash.slice(0, 20);
+          const downloaded = await downloadOgImage(og.ogImageUrl, this.mediaDir, coverStem);
           if (downloaded) {
             imagePath = downloaded.filename;
-            const thumbRes = generateThumbnailAndAnalyze(
-              downloaded.buffer,
-              this.mediaDir,
-              current.contentHash.slice(0, 20)
-            );
+            const thumbRes = generateThumbnailAndAnalyze(downloaded.buffer, this.mediaDir, coverStem);
             thumbPath = thumbRes.thumbPath;
-            if (thumbRes.palette.length > 0 && colorPalette.length === 0) {
+            if (thumbRes.palette.length > 0 && (colorPalette.length === 0 || bypassCache)) {
               colorPalette = thumbRes.palette;
             }
-            if (thumbRes.isLightBanner) {
-              mediaMeta = { ...(mediaMeta ?? {}), ogIsLightBanner: true };
-            }
+            mediaMeta = { ...(mediaMeta ?? {}), ogIsLightBanner: Boolean(thumbRes.isLightBanner) };
+            if (prevImg && prevImg !== imagePath) replacedCoverMedia.push(prevImg);
+            if (prevThumb && prevThumb !== thumbPath) replacedCoverMedia.push(prevThumb);
           }
         }
       }
@@ -1969,27 +2111,87 @@ export class CapturePipeline {
       // Social video links (Instagram Reels, TikTok, Reddit, Telegram, YouTube) use the local bounded LRU cache
     }
 
-    // B2. Decoupled local social video caching & YouTube embed resolution (runs even when text/meta already unfurled)
-    if (current.dna === 'link' && current.url && config.enableUrlUnfurl) {
+    // Private Telegram posts & invite links (`t.me/c/...`, `t.me/+...`, `t.me/joinchat/...`)
+    // MUST stay strictly local: classify offline even if enableUrlUnfurl is false or alreadyUnfurled is true,
+    // persist localized metadata only, and exit BEFORE video/Vision/cloud AI.
+    const privTg =
+      current.dna === 'link' && current.url ? classifyPrivateTelegramUrl(current.url, locale) : null;
+    if (privTg) {
+      if (privTg.domain) domain = privTg.domain;
+      if (privTg.platform) platform = privTg.platform;
+      if (privTg.title && isLinkStubTitle(title, current.domain, current.url, current.platform)) {
+        title = privTg.title;
+      }
+      if (privTg.description && isLinkStubSummary(summary, current.url, current.domain)) {
+        summary = privTg.description;
+      }
+      if (privTg.bodyMarkdown && isLinkStubBody(body, current.url)) {
+        body = privTg.bodyMarkdown;
+      }
+      mediaMeta = {
+        ...(mediaMeta ?? {}),
+        linkAccess: 'private',
+        hasVideo: false,
+      };
+    }
+    const isPrivateLink = mediaMeta?.linkAccess === 'private' || Boolean(privTg);
+    if (current.dna === 'link' && isPrivateLink) {
+      const latestPriv = this.deps.repo.getItemById(itemId);
+      if (!latestPriv || latestPriv.dna === 'secret') return;
+      const userEditedTitle = latestPriv.title !== initialTitle;
+      const latestBodyIsStub = isLinkStubBody(latestPriv.body, latestPriv.url);
+      const nextTitle =
+        !userEditedTitle &&
+        title &&
+        isLinkStubTitle(latestPriv.title, latestPriv.domain, latestPriv.url, latestPriv.platform)
+          ? title
+          : latestPriv.title;
+      const updatedPriv = this.deps.repo.updateItem(itemId, {
+        title: nextTitle,
+        summary: summary || latestPriv.summary,
+        body: latestBodyIsStub && body ? body : undefined,
+        domain,
+        platform,
+        mediaMeta,
+        aiStatus: latestPriv.aiStatus === 'raw_buffer' ? 'raw_buffer' : 'local',
+      });
+      if (updatedPriv) this.deps.onItemUpserted?.(updatedPriv);
+      return;
+    }
+    // When invoked from manual link refresh (`reprocessItem`), abort immediately on unfurl failure
+    // so video extraction, Vision AI, Cloud AI, and repo.updateItem do not run or corrupt existing data.
+    if (
+      current.dna === 'link' &&
+      resultOut &&
+      resultOut.linkUnfurlAttempted &&
+      !resultOut.linkUnfurlSucceeded
+    ) {
+      return;
+    }
+    const knownNoVideo = mediaMeta?.hasVideo === false;
+    if (current.dna === 'link' && current.url && config.enableUrlUnfurl && !isPrivateLink) {
       const ytId = mediaMeta?.youtubeVideoId ?? extractYouTubeVideoId(current.url);
       if (ytId) {
         mediaMeta = {
           ...(mediaMeta ?? {}),
           youtubeVideoId: ytId,
+          hasVideo: true,
           videoExtractStatus: 'ready',
         };
-      } else if (!mediaPath) {
+      } else if (!mediaPath && !knownNoVideo) {
         const hasValidCached =
           Boolean(mediaMeta?.cachedVideoFile) &&
           (await this.videoCache.resolveSafePathAsync(mediaMeta!.cachedVideoFile!)).ok;
         const vidPlatform = detectSocialVideoPlatform(current.url);
+        const isIgVideoUrl =
+          vidPlatform === 'instagram' && /\/(?:reel|reels|tv)\//i.test(current.url);
+        const isVReddIt = vidPlatform === 'reddit' && /v\.redd\.it/i.test(current.url);
         const shouldAttemptVideo =
           Boolean(mediaMeta?.videoUrl) ||
-          vidPlatform === 'instagram' ||
+          mediaMeta?.hasVideo === true ||
+          isIgVideoUrl ||
           vidPlatform === 'tiktok' ||
-          vidPlatform === 'reddit' ||
-          vidPlatform === 'telegram' ||
-          vidPlatform === 'x';
+          isVReddIt;
         if (
           !hasValidCached &&
           shouldAttemptVideo &&
@@ -2022,13 +2224,7 @@ export class CapturePipeline {
       platform === 'telegram' || platform === 'instagram' || platform === 'x';
     const hasRichExtractedLinkTitle =
       current.dna === 'link' &&
-      Boolean(title?.trim()) &&
-      title.trim() !== (domain || '').trim() &&
-      title.trim() !== (current.url || '').trim() &&
-      !title.startsWith('Ссылка') &&
-      !title.startsWith('Link') &&
-      !isGenericImageTitle(title) &&
-      !(platform && title.trim().toLowerCase() === platform.toLowerCase());
+      !isLinkStubTitle(title, domain || current.domain, current.url, platform || current.platform);
     const hasRichExtractedLinkBody =
       current.dna === 'link' &&
       body.trim().length >= 40 &&
@@ -2048,8 +2244,9 @@ export class CapturePipeline {
     const linkNeedsVisualBody =
       current.dna === 'link' && (!body.trim() || body.trim() === (current.url || '').trim());
     const shouldRunVision =
-      current.dna !== 'link' ||
-      (!preserveExtractedLinkCopy && (isSocialPostWithMedia || linkNeedsVisualBody));
+      mode !== 'buffer' &&
+      (current.dna !== 'link' ||
+        (!preserveExtractedLinkCopy && (isSocialPostWithMedia || linkNeedsVisualBody)));
     if (
       shouldRunVision &&
       (current.dna === 'link' || ocrScreenedClean) &&
@@ -2133,10 +2330,7 @@ export class CapturePipeline {
       title:
         title !== 'Скриншот' &&
         title !== 'Screenshot' &&
-        title !== latestMid.domain &&
-        !title.startsWith('Ссылка') &&
-        !title.startsWith('Link') &&
-        !isGenericImageTitle(title)
+        !isLinkStubTitle(title, latestMid.domain, latestMid.url, latestMid.platform)
           ? title
           : null,
       ocrText,
@@ -2186,6 +2380,9 @@ export class CapturePipeline {
         extractedActions: actions,
         aiStatus: 'raw_buffer',
       });
+      if (replacedCoverMedia.length > 0) {
+        this.cleanupUnreferencedMedia(replacedCoverMedia);
+      }
       if (updated) this.deps.onItemUpserted?.(updated);
       return;
     }
@@ -2293,6 +2490,9 @@ export class CapturePipeline {
       aiStatus: aiResult.usedCloud || visionUsed ? 'enriched' : 'local',
       aiConfidence: aiResult.confidence,
     });
+    if (replacedCoverMedia.length > 0) {
+      this.cleanupUnreferencedMedia(replacedCoverMedia);
+    }
     if (updated) {
       this.deps.onItemUpserted?.(updated);
       const aiCal = !skipAutoCalendar ? visionCalSuggestion || aiResult.calendarEvent : null;
@@ -2516,6 +2716,155 @@ export class CapturePipeline {
     };
   }
 
+  /**
+   * Lightweight local-only cover image download for already-enriched synced links
+   * (e.g. unfurled on Android with a remote `ogImageUrl` but lacking local cached `imagePath`/`thumbPath`).
+   * Never modifies title, body, summary, orbit, or calls cloud AI.
+   */
+  private async downloadLocalOgCoverOnly(itemId: string): Promise<void> {
+    const item = this.deps.repo.getItemById(itemId);
+    if (!item || !needsLocalOgDownload(item) || !item.ogImageUrl) return;
+    const stem = item.contentHash.slice(0, 20);
+    const downloaded = await downloadOgImage(item.ogImageUrl, this.mediaDir, stem);
+    if (!downloaded) return;
+    const thumbRes = generateThumbnailAndAnalyze(downloaded.buffer, this.mediaDir, stem);
+
+    const latest = this.deps.repo.getItemById(itemId);
+    if (!latest || !needsLocalOgDownload(latest)) {
+      this.cleanupUnreferencedMedia([downloaded.filename, thumbRes.thumbPath].filter((f): f is string => Boolean(f)));
+      return;
+    }
+
+    const updated = this.deps.repo.updateItem(
+      itemId,
+      {
+        imagePath: downloaded.filename,
+        thumbPath: thumbRes.thumbPath,
+        ...(thumbRes.palette.length > 0 && latest.colorPalette.length === 0
+          ? { colorPalette: thumbRes.palette }
+          : {}),
+        ...(thumbRes.isLightBanner
+          ? { mediaMeta: { ...(latest.mediaMeta ?? {}), ogIsLightBanner: true } }
+          : {}),
+      },
+      { skipAutoRevision: true }
+    );
+    if (updated) {
+      this.deps.onItemUpserted?.(updated);
+    }
+  }
+
+  private enqueueSyncedLinkEnrichmentTask(itemOrId: VaultItem | string): Promise<void> | null {
+    const config = this.deps.getConfig();
+    if (!config.enableUrlUnfurl) return null;
+    const item =
+      typeof itemOrId === 'string' ? this.deps.repo.getItemById(itemOrId) : itemOrId;
+    if (!item || item.modeCaptured === 'ghost') return null;
+
+    const isStub = isStubLinkItem(item);
+    const needsCoverOnly = !isStub && needsLocalOgDownload(item);
+    if (!isStub && !needsCoverOnly) return null;
+
+    const attempts = this.syncedEnrichAttempts.get(item.id) ?? 0;
+    if (attempts >= 1 || this.syncedEnrichActive.has(item.id)) {
+      return null;
+    }
+
+    this.syncedEnrichAttempts.set(item.id, attempts + 1);
+    this.syncedEnrichActive.add(item.id);
+
+    const task = this.runWithBgSlot(() => {
+      if (needsCoverOnly) {
+        return this.downloadLocalOgCoverOnly(item.id);
+      }
+      const effectiveMode: CaptureMode =
+        item.modeCaptured === 'buffer' || (config.activeMode === 'buffer' && !item.orbit)
+          ? 'buffer'
+          : 'autopilot';
+      const preserveExistingOrbit = Boolean(item.orbit) || effectiveMode === 'buffer';
+      return this.runBackgroundEnrichment(
+        item.id,
+        null,
+        effectiveMode,
+        false,
+        preserveExistingOrbit,
+        true
+      );
+    })
+      .catch(() => {})
+      .finally(() => {
+        this.syncedEnrichActive.delete(item.id);
+        this.inFlight.delete(task);
+      });
+    this.inFlight.add(task);
+    return task;
+  }
+
+  /**
+   * Queues bounded, deduplicated background unfurling & local cover download for synced links
+   * (for example, links saved via Android Share Target while Desktop was offline).
+   * Never overwrites user-edited titles/bodies, ghost items, or private links; capped at 1 auto-attempt per item per session.
+   */
+  public enqueueSyncedLinkEnrichment(itemOrId: VaultItem | string): boolean {
+    return this.enqueueSyncedLinkEnrichmentTask(itemOrId) !== null;
+  }
+
+  /**
+   * Scans link items across pages for genuine un-unfurled stubs or remote-only OG covers and queues
+   * bounded chunks (`maxBatch`) for automatic background enrichment, chaining the next chunk after
+   * the current batch settles while remaining strictly capped at 1 attempt per item per session.
+   */
+  public scanAndEnrichStubLinks(maxBatch = 12): number {
+    const config = this.deps.getConfig();
+    if (!config.enableUrlUnfurl || maxBatch <= 0) return 0;
+
+    const pageSize = 200;
+    let offset = 0;
+    let enqueued = 0;
+    let hasMore = false;
+    const chunkTasks: Array<Promise<void>> = [];
+
+    while (true) {
+      const page = this.deps.repo.queryItems({ dna: 'link', limit: pageSize, offset });
+      if (page.length === 0) break;
+
+      for (const item of page) {
+        if (item.modeCaptured === 'ghost') continue;
+        const eligible = isStubLinkItem(item) || needsLocalOgDownload(item);
+        if (!eligible) continue;
+        if ((this.syncedEnrichAttempts.get(item.id) ?? 0) >= 1 || this.syncedEnrichActive.has(item.id)) {
+          continue;
+        }
+        if (enqueued >= maxBatch) {
+          hasMore = true;
+          break;
+        }
+        const task = this.enqueueSyncedLinkEnrichmentTask(item);
+        if (task) {
+          enqueued += 1;
+          chunkTasks.push(task);
+        }
+      }
+
+      if (hasMore || page.length < pageSize) break;
+      offset += pageSize;
+    }
+
+    if (hasMore && chunkTasks.length > 0) {
+      const continuation = Promise.allSettled(chunkTasks)
+        .then(() => {
+          this.scanAndEnrichStubLinks(maxBatch);
+        })
+        .catch(() => {})
+        .finally(() => {
+          this.inFlight.delete(continuation);
+        });
+      this.inFlight.add(continuation);
+    }
+
+    return enqueued;
+  }
+
   public async reprocessItem(id: string): Promise<VaultItem | null> {
     const item = this.deps.repo.getItemById(id);
     if (!item || item.dna === 'secret' || item.dna === 'doc') return item;
@@ -2523,9 +2872,39 @@ export class CapturePipeline {
       const res = await this.transcribeExistingItem({ itemId: id });
       return res.item ?? this.deps.repo.getItemById(id);
     }
+    const config = this.deps.getConfig();
+    if (item.dna === 'link' && item.url && !config.enableUrlUnfurl) {
+      return null;
+    }
     const absImg = item.imagePath ? path.join(this.mediaDir, item.imagePath) : null;
-    const preserveExistingOrbit = Boolean(item.orbit) && item.aiStatus !== 'raw_buffer';
-    await this.runBackgroundEnrichment(id, absImg, 'autopilot', true, preserveExistingOrbit);
+    const effectiveMode: CaptureMode =
+      item.modeCaptured === 'ghost'
+        ? 'ghost'
+        : item.dna === 'link' && (item.modeCaptured === 'buffer' || item.aiStatus === 'raw_buffer')
+          ? 'buffer'
+          : 'autopilot';
+    const preserveExistingOrbit =
+      effectiveMode === 'buffer' || (Boolean(item.orbit) && item.aiStatus !== 'raw_buffer');
+    const outcome: { linkUnfurlAttempted?: boolean; linkUnfurlSucceeded?: boolean } = {};
+    await this.runBackgroundEnrichment(
+      id,
+      absImg,
+      effectiveMode,
+      true,
+      preserveExistingOrbit,
+      false,
+      false,
+      false,
+      outcome
+    );
+    if (
+      item.dna === 'link' &&
+      item.url &&
+      outcome.linkUnfurlAttempted &&
+      !outcome.linkUnfurlSucceeded
+    ) {
+      return null;
+    }
     return this.deps.repo.getItemById(id);
   }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   CheckSquare,
@@ -91,7 +91,7 @@ function makeVirtualDraftItem(orbitId: string): VaultItem {
     mediaPath: null,
     mediaType: null,
     mediaDurationSec: null,
-    mediaMeta: null,
+    mediaMeta: { inNotesHub: true },
     ogImageUrl: null,
     ocrText: '',
     extractedActions: [],
@@ -163,6 +163,18 @@ export const NotesView: React.FC<NotesViewProps> = ({
   const [orbitPickerNote, setOrbitPickerNote] = useState<VaultItem | null>(null);
   const activeNoteIdRef = useRef(activeNoteId);
   activeNoteIdRef.current = activeNoteId;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const isExpandedRef = useRef(isExpanded);
+  isExpandedRef.current = isExpanded;
+  const onSelectNoteRef = useRef(onSelectNote);
+  onSelectNoteRef.current = onSelectNote;
+  const onOpenExternalItemRef = useRef(onOpenExternalItem);
+  onOpenExternalItemRef.current = onOpenExternalItem;
+  const onMaterializeDraftRef = useRef(onMaterializeDraft);
+  onMaterializeDraftRef.current = onMaterializeDraft;
+  const onDeleteNoteRef = useRef(onDeleteNote);
+  onDeleteNoteRef.current = onDeleteNote;
 
   const orbitMap = useMemo(() => new Map(orbits.map((o) => [o.id, o])), [orbits]);
 
@@ -271,6 +283,38 @@ export const NotesView: React.FC<NotesViewProps> = ({
       },
     },
   ];
+
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+
+  const handleOpenItemStable = useCallback((targetId: string) => {
+    const target = itemsRef.current.find((i) => i.id === targetId);
+    if (target && target.dna !== 'secret') {
+      onSelectNoteRef.current(target.id);
+    } else if (onOpenExternalItemRef.current) {
+      onOpenExternalItemRef.current(targetId);
+    }
+  }, []);
+
+  const handleMaterializeDraftStable = useCallback(async (input: MaterializeDraftInput) => {
+    const created = await onMaterializeDraftRef.current(input);
+    queueMicrotask(() => {
+      if (activeNoteIdRef.current === DRAFT_NOTE_ID) {
+        onSelectNoteRef.current(created.id);
+      }
+    });
+    return created;
+  }, []);
+
+  const handleDeleteNoteStable = useCallback(async (id: string) => {
+    await onDeleteNoteRef.current(id);
+    const next = notesRef.current.find((n) => n.id !== id);
+    onSelectNoteRef.current(isExpandedRef.current ? next?.id ?? null : null);
+  }, []);
+
+  const handleBackStable = useCallback(() => {
+    onSelectNoteRef.current(null);
+  }, []);
 
   const showListPane = isExpanded || !activeNote;
   const showEditorPane = isExpanded || Boolean(activeNote);
@@ -558,23 +602,10 @@ export const NotesView: React.FC<NotesViewProps> = ({
             ensureMediaUrl={ensureMediaUrl}
             flushRef={flushEditorRef}
             onOpenImage={onOpenImage}
-            onOpenItem={(targetId) => {
-              const target = items.find((i) => i.id === targetId);
-              if (target && target.dna !== 'secret') {
-                onSelectNote(target.id);
-              } else if (onOpenExternalItem) {
-                onOpenExternalItem(targetId);
-              }
-            }}
+            onOpenItem={handleOpenItemStable}
             onCreateOrbit={onCreateOrbit}
             onCreateBoard={onCreateBoard}
-            onMaterializeDraft={async (input) => {
-              const created = await onMaterializeDraft(input);
-              if (activeNoteIdRef.current === DRAFT_NOTE_ID) {
-                onSelectNote(created.id);
-              }
-              return created;
-            }}
+            onMaterializeDraft={handleMaterializeDraftStable}
             onDraftChange={onDraftChange}
             onDraftSaved={onDraftSaved}
             onSave={onSaveNote}
@@ -585,12 +616,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
             onTranscribeVoice={onTranscribeVoice}
             onExtractTasks={onExtractTasks}
             onPolishNote={onPolishNote}
-            onDelete={async (id) => {
-              await onDeleteNote(id);
-              const next = notes.find((n) => n.id !== id);
-              onSelectNote(isExpanded ? next?.id ?? null : null);
-            }}
-            onBack={() => onSelectNote(null)}
+            onDelete={handleDeleteNoteStable}
+            onBack={handleBackStable}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-center p-8 text-[var(--k-ink-muted)]">

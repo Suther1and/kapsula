@@ -1,6 +1,7 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ArrowCounterClockwise,
+  ArrowsClockwise,
   Bell,
   Check,
   CheckSquareOffset,
@@ -109,7 +110,7 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
     [onOpenSecretSheet]
   );
 
-  const buildContextMenuEntries = (): ContextMenuEntry[] => {
+  const buildContextMenuEntries = useCallback((): ContextMenuEntry[] => {
     const entries: ContextMenuEntry[] = [
       {
         type: 'item',
@@ -244,6 +245,25 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
           toast.success(t('common.copied'));
         },
       });
+      if (item.dna === 'link' && item.url && !item.deletedAt && window.kapsula.reprocessItem) {
+        entries.push({
+          type: 'item',
+          id: 'refresh-link-preview',
+          label: t('cards.ctx.refreshPreview'),
+          icon: <ArrowsClockwise className="w-3.5 h-3.5" />,
+          onSelect: () => {
+            void window.kapsula
+              .reprocessItem(item.id)
+              .then((res) => {
+                if (res) toast.success(t('cards.refreshPreviewDone'));
+                else toast.error(t('cards.refreshPreviewFailed'));
+              })
+              .catch(() => {
+                toast.error(t('cards.refreshPreviewFailed'));
+              });
+          },
+        });
+      }
       if (onDuplicate) {
         entries.push({
           type: 'item',
@@ -285,7 +305,49 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
     }
 
     return entries;
-  };
+  }, [
+    item,
+    selected,
+    orbits,
+    focusBoards,
+    onOpenSecretSheet,
+    onOpenStudio,
+    onQuickLook,
+    onTogglePin,
+    onToggleMute,
+    onToggleSelect,
+    onToggleNotesHub,
+    onMoveToOrbit,
+    onMoveToBoard,
+    onDuplicate,
+    onExportMarkdown,
+    onRestore,
+    onDelete,
+    t,
+  ]);
+
+  const { visibleTags, overflowTags } = useMemo(() => {
+    const redundantTags = new Set<string>([
+      ...getRedundantCardTags(),
+      t('ui.quickLook.pin').toLowerCase(),
+    ]);
+    if (item.dna === 'shot') {
+      redundantTags.add('screenshot');
+      redundantTags.add(t('dna.shot').toLowerCase());
+    }
+    if (item.dna === 'voice') {
+      redundantTags.add('voice');
+      redundantTags.add(t('dna.voice').toLowerCase());
+    }
+    if (item.platform) redundantTags.add(item.platform.toLowerCase());
+    if (orbit?.name) redundantTags.add(orbit.name.toLowerCase());
+    const filteredTags = item.tags.filter((tag) => tag && !redundantTags.has(tag.toLowerCase()));
+    const maxInlineTags = orbit && item.remindAt ? 0 : orbit || item.remindAt ? 1 : 2;
+    return {
+      visibleTags: filteredTags.slice(0, maxInlineTags),
+      overflowTags: filteredTags.slice(maxInlineTags),
+    };
+  }, [item.dna, item.platform, item.tags, item.remindAt, orbit, t]);
 
   // Single uniform ~52px List row for ALL DNA types
   if (compactList) {
@@ -365,22 +427,6 @@ export const MemoryCardRouter: React.FC<MemoryCardRouterProps> = React.memo(({
         );
     }
   };
-
-  const redundantTags = new Set<string>([...getRedundantCardTags(), t('ui.quickLook.pin').toLowerCase()]);
-  if (item.dna === 'shot') {
-    redundantTags.add('screenshot');
-    redundantTags.add(t('dna.shot').toLowerCase());
-  }
-  if (item.dna === 'voice') {
-    redundantTags.add('voice');
-    redundantTags.add(t('dna.voice').toLowerCase());
-  }
-  if (item.platform) redundantTags.add(item.platform.toLowerCase());
-  if (orbit?.name) redundantTags.add(orbit.name.toLowerCase());
-  const filteredTags = item.tags.filter((tag) => tag && !redundantTags.has(tag.toLowerCase()));
-  const maxInlineTags = orbit && item.remindAt ? 0 : orbit || item.remindAt ? 1 : 2;
-  const visibleTags = filteredTags.slice(0, maxInlineTags);
-  const overflowTags = filteredTags.slice(maxInlineTags);
 
   return (
     <ContextMenuSurface entries={buildContextMenuEntries}>

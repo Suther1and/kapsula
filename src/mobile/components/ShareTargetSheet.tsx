@@ -4,6 +4,7 @@ import { FolderSimple, Globe, Paperclip, ShareNetwork, Swatches, WarningCircle }
 import { toast } from 'sonner';
 import type { FocusBoard, OrbitDef } from '@shared/types';
 import { extractFirstUrlFromText } from '../lib/mobile-helpers';
+import { classifyMobilePrivateTelegramUrl } from '../lib/mobile-link-unfurl';
 import { useMobileI18n } from '../lib/mobile-i18n';
 import { mobileBridge, type SharedIntentPayload } from '../native/bridge';
 import { BottomSheet } from './BottomSheet';
@@ -41,7 +42,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
   onCreateBoard,
   onConfirmSave,
 }) => {
-  const { t, formatFileSize } = useMobileI18n();
+  const { t, locale, formatFileSize } = useMobileI18n();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [url, setUrl] = useState<string | null>(null);
@@ -60,10 +61,12 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
     }
     const rawText = (share.text || '').trim();
     const detectedUrl = share.url || extractFirstUrlFromText(rawText);
+    const privateTg = detectedUrl ? classifyMobilePrivateTelegramUrl(detectedUrl, locale) : null;
     const cleanedBody = rawText;
     const fallbackTitle =
       share.subject?.trim() ||
       (share.files?.[0]?.name ?? '') ||
+      privateTg?.title ||
       (detectedUrl
         ? (() => {
             try {
@@ -79,7 +82,7 @@ export const ShareTargetSheet: React.FC<ShareTargetSheetProps> = ({
     setUrl(detectedUrl);
     setOrbit('');
     setBoardId('');
-  }, [share, t]);
+  }, [share, t, locale]);
 
   const selectedOrbit = useMemo(() => orbits.find((o) => o.id === orbit) ?? null, [orbits, orbit]);
   const selectedBoard = useMemo(

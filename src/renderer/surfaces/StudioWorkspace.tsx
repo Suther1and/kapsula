@@ -8,7 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import NumberFlow from '@number-flow/react';
 import { Highlight, HighlightItem } from '@animate-ui/react/primitives/effects/highlight';
@@ -1798,78 +1798,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     };
   }, []);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && (e.code === 'KeyF' || e.key.toLowerCase() === 'f')) {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      } else if (mod && (e.code === 'KeyN' || e.key.toLowerCase() === 'n')) {
-        e.preventDefault();
-        handleOpenBlankDraft();
-      } else if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) {
-        const target = e.target as HTMLElement | null;
-        const isTyping =
-          target &&
-          (target.tagName === 'INPUT' ||
-            target.tagName === 'TEXTAREA' ||
-            target.isContentEditable ||
-            (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')));
-        if (
-          !isTyping &&
-          !studioOpen &&
-          !lightboxItem &&
-          !quickLookItem &&
-          !settingsOpen &&
-          !newSecretOpen &&
-          !triageOpen &&
-          !synthesizeOpen &&
-          !sectionEditor
-        ) {
-          const candidate =
-            hoveredItemRef.current ??
-            (selectedIds.length === 1 ? items.find((x) => x.id === selectedIds[0]) ?? null : null);
-          if (candidate && candidate.dna !== 'secret') {
-            e.preventDefault();
-            setQuickLookItem(candidate);
-          }
-        }
-      } else if (e.key === 'Escape') {
-        if (e.defaultPrevented) return;
-        if (quickLookItem) {
-          setQuickLookItem(null);
-          return;
-        }
-        if (lightboxItem) {
-          setLightboxItem(null);
-          return;
-        }
-        if (studioOpen) {
-          closeStudioCleanly();
-          return;
-        }
-        if (
-          assistantOpen &&
-          !settingsOpen &&
-          !newSecretOpen &&
-          !triageOpen &&
-          !synthesizeOpen &&
-          !sectionEditor
-        ) {
-          setAssistantOpen(false);
-          return;
-        }
-        if (selectedIds.length > 0) {
-          setSelectedIds([]);
-        }
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    nav.type,
+  const keyDownStateRef = useRef({
     handleOpenBlankDraft,
     lightboxItem,
     quickLookItem,
@@ -1883,7 +1812,95 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     closeStudioCleanly,
     selectedIds,
     items,
-  ]);
+  });
+  keyDownStateRef.current = {
+    handleOpenBlankDraft,
+    lightboxItem,
+    quickLookItem,
+    studioOpen,
+    assistantOpen,
+    settingsOpen,
+    newSecretOpen,
+    triageOpen,
+    synthesizeOpen,
+    sectionEditor,
+    closeStudioCleanly,
+    selectedIds,
+    items,
+  };
+
+  // Keyboard shortcuts — single stable listener reading live refs (avoids re-binding on every item/selection update)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const s = keyDownStateRef.current;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.code === 'KeyF' || e.key.toLowerCase() === 'f')) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (mod && (e.code === 'KeyN' || e.key.toLowerCase() === 'n')) {
+        e.preventDefault();
+        s.handleOpenBlankDraft();
+      } else if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) {
+        const target = e.target as HTMLElement | null;
+        const isTyping =
+          target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable ||
+            (typeof target.closest === 'function' && target.closest('[contenteditable="true"]')));
+        if (
+          !isTyping &&
+          !s.studioOpen &&
+          !s.lightboxItem &&
+          !s.quickLookItem &&
+          !s.settingsOpen &&
+          !s.newSecretOpen &&
+          !s.triageOpen &&
+          !s.synthesizeOpen &&
+          !s.sectionEditor
+        ) {
+          const candidate =
+            hoveredItemRef.current ??
+            (s.selectedIds.length === 1 ? s.items.find((x) => x.id === s.selectedIds[0]) ?? null : null);
+          if (candidate && candidate.dna !== 'secret') {
+            e.preventDefault();
+            setQuickLookItem(candidate);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        if (e.defaultPrevented) return;
+        if (s.quickLookItem) {
+          setQuickLookItem(null);
+          return;
+        }
+        if (s.lightboxItem) {
+          setLightboxItem(null);
+          return;
+        }
+        if (s.studioOpen) {
+          s.closeStudioCleanly();
+          return;
+        }
+        if (
+          s.assistantOpen &&
+          !s.settingsOpen &&
+          !s.newSecretOpen &&
+          !s.triageOpen &&
+          !s.synthesizeOpen &&
+          !s.sectionEditor
+        ) {
+          setAssistantOpen(false);
+          return;
+        }
+        if (s.selectedIds.length > 0) {
+          setSelectedIds([]);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Debounced bilingual backend search
   useEffect(() => {
@@ -3290,62 +3307,68 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     },
   ];
 
-  const renderQuickFilterChips = () => (
+  const navPillScopeKey =
+    nav.type === 'orbit'
+      ? `orbit-${nav.orbitId}`
+      : nav.type === 'board'
+        ? `board-${nav.boardId}`
+        : nav.type;
+
+  const renderQuickFilterChips = (slotKey: 'feed' | 'notes' | 'tasks' = 'feed') => (
     <div className="inline-flex flex-nowrap items-center gap-1">
-      {/* Primary View-Mode Switcher Capsule: Лента | Заметки | Задачи */}
-      <div
-        role="tablist"
-        aria-label={t('workspace.filter.feed')}
-        className="inline-flex items-center p-[2px] rounded-full bg-[var(--k-bg-surface-2)]/90 border border-[var(--k-border-hairline)] shrink-0"
-      >
-        {primaryModeTabs.map((tab) => {
-          const isActive = activePrimaryMode === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              data-no-press-scale="true"
-              data-testid={tab.testId}
-              onClick={tab.onClick}
-              className={`relative h-[25px] px-1.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors duration-150 ${
-                isActive
-                  ? 'text-[var(--k-accent)]'
-                  : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
-              }`}
-            >
-              {isActive ? (
-                <motion.span
-                  layoutId="workspace-mode-pill"
-                  transition={
-                    prefersReduced
-                      ? { duration: 0 }
-                      : { type: 'spring', stiffness: 580, damping: 38, mass: 0.55 }
-                  }
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 rounded-full bg-[var(--k-bg-surface-1)] border border-[var(--k-accent)]/35 shadow-[0_1px_3px_rgba(0,0,0,0.18)]"
-                />
-              ) : null}
-              <span className="relative z-10 inline-flex items-center gap-1">
-                {tab.icon}
-                <span>{tab.label}</span>
-                {tab.badge !== undefined ? (
-                  <span
-                    className={`k-tabular text-[10px] px-1 py-[0.5px] rounded-full ${
-                      isActive
-                        ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
-                        : 'bg-[var(--k-bg-surface-3)]/80 text-[var(--k-ink-muted)]'
-                    }`}
-                  >
-                    {tab.badge}
-                  </span>
+      {/* Primary View-Mode Switcher Capsule: Лента | Заметки | Задачи
+          Scoped per toolbar slot & section so the pill NEVER flies vertically across views/sections. */}
+      <LayoutGroup id={`workspace-mode-${slotKey}-${navPillScopeKey}`}>
+        <div
+          role="tablist"
+          aria-label={t('workspace.filter.feed')}
+          className="inline-flex items-center p-[2px] rounded-full bg-[var(--k-bg-surface-2)]/90 border border-[var(--k-border-hairline)] shrink-0"
+        >
+          {primaryModeTabs.map((tab) => {
+            const isActive = activePrimaryMode === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                data-no-press-scale="true"
+                data-testid={tab.testId}
+                onClick={tab.onClick}
+                className={`relative h-[25px] px-1.5 rounded-full text-[11.5px] font-medium cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors duration-150 ${
+                  isActive
+                    ? 'text-[var(--k-accent)]'
+                    : 'text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)]'
+                }`}
+              >
+                {isActive ? (
+                  <motion.span
+                    layoutId={`workspace-mode-pill-${slotKey}-${navPillScopeKey}`}
+                    transition={{ type: 'spring', stiffness: 580, damping: 38, mass: 0.55 }}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 rounded-full bg-[var(--k-bg-surface-1)] border border-[var(--k-accent)]/35 shadow-[0_1px_3px_rgba(0,0,0,0.18)]"
+                  />
                 ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+                <span className="relative z-10 inline-flex items-center gap-1">
+                  {tab.icon}
+                  <span>{tab.label}</span>
+                  {tab.badge !== undefined ? (
+                    <span
+                      className={`k-tabular text-[10px] px-1 py-[0.5px] rounded-full ${
+                        isActive
+                          ? 'bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                          : 'bg-[var(--k-bg-surface-3)]/80 text-[var(--k-ink-muted)]'
+                      }`}
+                    >
+                      {tab.badge}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </LayoutGroup>
 
       {/* Lightweight Feed Filters (only shown while viewing Feed mode) */}
       {activePrimaryMode === 'feed' ? (
@@ -3873,7 +3896,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               navigateTo({ type: 'orbit', orbitId: orbit.id });
                             }}
                             title={sidebarRail ? orbit.name : undefined}
-                            className={`group relative z-[1] flex items-center h-8 px-[8px] rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                            className={`group relative z-[1] flex items-center h-8 rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                              sidebarRail ? 'px-[8px]' : 'pl-[7px] pr-[6px]'
+                            } ${
                               isDraggingOrbit
                                 ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-medium shadow-[0_10px_26px_-6px_rgba(0,0,0,0.48)] ring-1 ring-[var(--k-border-strong)] cursor-grabbing'
                                 : active
@@ -3891,7 +3916,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 active && !isDraggingOrbit ? 'h-[14px] opacity-100' : 'h-0 opacity-0'
                               }`}
                             />
-                            <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
+                            <span
+                              className={`relative z-10 shrink-0 flex items-center justify-center ${
+                                sidebarRail ? 'w-[30px] h-[30px]' : 'w-[22px] h-[22px]'
+                              }`}
+                            >
                               <SectionIcon
                                 name={orbit.icon || 'Folder'}
                                 color={orbit.color}
@@ -3899,16 +3928,18 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               />
                             </span>
                             <span
-                              className={`relative z-10 ml-1 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                                sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                              className={`relative z-10 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'ml-0 opacity-0 pointer-events-none' : 'ml-1.5 opacity-100'
                               }`}
                             >
                               {orbit.name}
                             </span>
 
                             <div
-                              className={`relative z-10 ml-1 shrink-0 min-w-[20px] h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                                sidebarRail ? 'opacity-0 pointer-events-none w-0 ml-0 overflow-hidden' : 'opacity-100'
+                              className={`relative z-10 shrink-0 h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail
+                                  ? 'w-0 min-w-0 ml-0 opacity-0 pointer-events-none overflow-hidden'
+                                  : 'ml-1 min-w-[16px] opacity-100'
                               }`}
                             >
                               <span
@@ -4106,7 +4137,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               navigateTo({ type: 'board', boardId: board.id });
                             }}
                             title={sidebarRail ? board.name : undefined}
-                            className={`group relative z-[1] flex items-center h-8 px-[8px] rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                            className={`group relative z-[1] flex items-center h-8 rounded-[8px] select-none transition-[background-color,color,box-shadow] duration-140 ease-[var(--k-ease-out)] ${
+                              sidebarRail ? 'px-[8px]' : 'pl-[7px] pr-[6px]'
+                            } ${
                               isDraggingBoard
                                 ? 'bg-[var(--k-bg-surface-2)] text-[var(--k-ink-primary)] font-medium shadow-[0_10px_26px_-6px_rgba(0,0,0,0.48)] ring-1 ring-[var(--k-border-strong)] cursor-grabbing'
                                 : active
@@ -4124,7 +4157,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 active && !isDraggingBoard ? 'h-[14px] opacity-100' : 'h-0 opacity-0'
                               }`}
                             />
-                            <span className="relative z-10 shrink-0 w-[30px] h-[30px] flex items-center justify-center">
+                            <span
+                              className={`relative z-10 shrink-0 flex items-center justify-center ${
+                                sidebarRail ? 'w-[30px] h-[30px]' : 'w-[22px] h-[22px]'
+                              }`}
+                            >
                               <Swatches
                                 size={16}
                                 weight={active ? 'fill' : 'duotone'}
@@ -4132,15 +4169,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                               />
                             </span>
                             <span
-                              className={`relative z-10 ml-1 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                                sidebarRail ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                              className={`relative z-10 flex-1 min-w-0 truncate text-[13px] transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail ? 'ml-0 opacity-0 pointer-events-none' : 'ml-1.5 opacity-100'
                               }`}
                             >
                               {board.name}
                             </span>
                             <div
-                              className={`relative z-10 ml-1 shrink-0 min-w-[20px] h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                                sidebarRail ? 'opacity-0 pointer-events-none w-0 ml-0 overflow-hidden' : 'opacity-100'
+                              className={`relative z-10 shrink-0 h-5 flex items-center justify-end transition-opacity duration-160 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                sidebarRail
+                                  ? 'w-0 min-w-0 ml-0 opacity-0 pointer-events-none overflow-hidden'
+                                  : 'ml-1 min-w-[16px] opacity-100'
                               }`}
                             >
                               <span
@@ -4725,7 +4764,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   className="shrink-0 py-2.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)]"
                 >
                   <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
-                    {renderQuickFilterChips()}
+                    {renderQuickFilterChips('notes')}
                   </div>
                 </div>
                 <motion.div
@@ -4761,7 +4800,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                   className="shrink-0 py-2.5 border-b border-[var(--k-border-hairline)] bg-[var(--k-bg-canvas)]"
                 >
                   <div className="flex flex-wrap items-center gap-1" data-testid="feed-quick-filters">
-                    {renderQuickFilterChips()}
+                    {renderQuickFilterChips('tasks')}
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
@@ -5041,7 +5080,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     >
                       <span
                         data-testid="feed-visible-count"
-                        className="min-w-[22px] text-right text-[11.5px] text-[var(--k-ink-muted)] k-tabular hidden sm:inline-block shrink-0"
+                        className="w-[30px] text-right text-[11.5px] text-[var(--k-ink-muted)] k-tabular hidden sm:inline-block shrink-0"
                       >
                         <NumberFlow value={visibleItems.length} />
                       </span>
@@ -5062,7 +5101,9 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                   : t('workspace.filter.muteOnly')
                             }
                             aria-label={t('workspace.filter.muteAll')}
-                            className={`k-interactive inline-flex items-center gap-1.5 h-7.5 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer shrink-0 ${
+                            className={`k-interactive inline-flex items-center justify-center gap-1.5 h-7.5 rounded-lg border text-[12px] font-medium cursor-pointer shrink-0 ${
+                              filterMuteMode === 'active' ? 'px-2.5' : 'w-[50px] px-1.5'
+                            } ${
                               filterMuteMode !== 'all'
                                 ? 'border-[var(--k-accent)]/45 bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
                                 : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[var(--k-ink-secondary)] hover:text-[var(--k-ink-primary)] hover:border-[var(--k-border-strong)]'

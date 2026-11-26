@@ -135,9 +135,11 @@ export function truncateAtWordBoundary(raw: string, maxChars = 92): string {
 
 const IG_TITLE_SUFFIX_RE = /^(.+?)\s+(?:on Instagram|в Instagram|на Instagram)\s*:\s*["«“]?([\s\S]*?)["»”]?$/i;
 const IG_DESC_BOILERPLATE_EN_RE =
-  /^[\d.,\s]+[KMkm]?\s+likes?,\s*[\d.,\s]+[KMkm]?\s+comments?\s*[-–—]\s*([^:\n]+?)\s+on\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*:\s*["«“]?([\s\S]*?)["»”]?$/i;
+  /^[\d.,\s]+[KMkm]?\s+likes?,\s*[\d.,\s]+[KMkm]?\s+comments?\s*[-–—]\s*([^:\n]+?)\s+(?:on\s+)?[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*:\s*["«“]?([\s\S]*?)["»”]?$/i;
 const IG_DESC_BOILERPLATE_RU_RE =
   /^[\d.,\s]+[KMkmтыс]*\s+отмет(?:ок|ки|ка)\s*«?Нравится»?,\s*[\d.,\s]+[KMkmтыс]*\s+комментар(?:иев|ия|ий)\s*[-–—]\s*([^:\n]+?)\s*:\s*["«“]?([\s\S]*?)["»”]?$/i;
+const IG_LOGIN_WALL_RE =
+  /(?:^log\s*in\b|^войти|^войдите|create an account or log in to instagram|sign up for instagram|log in to instagram|войдите в instagram|создайте аккаунт или войдите в instagram)/i;
 
 export function cleanInstagramText(rawTitle: string, rawDescription: string): {
   author: string | null;
@@ -183,13 +185,15 @@ export function cleanInstagramText(rawTitle: string, rawDescription: string): {
   } else if (
     decodedTitle &&
     !/^instagram$/i.test(decodedTitle) &&
-    !/^log in/i.test(decodedTitle) &&
-    !/^войти/i.test(decodedTitle)
+    !IG_LOGIN_WALL_RE.test(decodedTitle)
   ) {
     cleanTitle = decodedTitle.replace(/^["«“]+|["»”]+$/g, '').trim();
   }
 
   caption = caption.replace(/^["«“]+|["»”]+$/g, '').trim();
+  if (IG_LOGIN_WALL_RE.test(caption)) {
+    caption = '';
+  }
   if (!cleanTitle && caption) {
     const firstLine = caption
       .split(/\r?\n/)

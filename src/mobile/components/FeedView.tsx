@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
+  ArrowClockwise,
   ArrowSquareOut,
   ArrowsDownUp,
   Check,
@@ -12,6 +13,7 @@ import {
   Globe,
   Image as ImageIcon,
   LinkSimple,
+  LockSimple,
   Microphone,
   NotePencil,
   Paperclip,
@@ -68,6 +70,7 @@ interface FeedViewProps {
   onBulkDeleteItems?: (ids: string[]) => Promise<void>;
   onTranscribeVoice?: (item: VaultItem) => Promise<void>;
   onExtractTasks?: (item: VaultItem) => Promise<void>;
+  onRefreshLinkPreview?: (item: VaultItem) => Promise<void>;
   onQuickCapture?: () => void;
   ensureMediaUrl: (localName?: string | null) => Promise<string | null>;
 }
@@ -180,6 +183,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   onBulkDeleteItems,
   onTranscribeVoice,
   onExtractTasks,
+  onRefreshLinkPreview,
   onQuickCapture,
   ensureMediaUrl,
 }) => {
@@ -200,6 +204,17 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const [sortPickerOpen, setSortPickerOpen] = useState(false);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
   const [extractingId, setExtractingId] = useState<string | null>(null);
+  const [refreshingLinkId, setRefreshingLinkId] = useState<string | null>(null);
+
+  const runRefreshLink = async (item: VaultItem) => {
+    if (!onRefreshLinkPreview || refreshingLinkId) return;
+    setRefreshingLinkId(item.id);
+    try {
+      await onRefreshLinkPreview(item);
+    } finally {
+      setRefreshingLinkId((cur) => (cur === item.id ? null : cur));
+    }
+  };
 
   const runTranscribeVoice = async (item: VaultItem) => {
     if (!onTranscribeVoice || transcribingId) return;
@@ -378,6 +393,18 @@ export const FeedView: React.FC<FeedViewProps> = ({
       onSelect: () =>
         setBoardPickerTarget({ itemId: item.id, currentValue: item.focusBoardId || '' }),
     },
+    ...(item.url && onRefreshLinkPreview
+      ? [
+          {
+            id: 'refresh-link',
+            label: t('feed.refreshPreview'),
+            icon: <ArrowClockwise className="w-5 h-5" />,
+            onSelect: () => {
+              void runRefreshLink(item);
+            },
+          } satisfies ActionSheetEntry,
+        ]
+      : []),
     {
       id: 'copy',
       label: item.url ? t('feed.copyLink') : t('feed.copyText'),
@@ -508,22 +535,53 @@ export const FeedView: React.FC<FeedViewProps> = ({
         ) : null}
 
         {item.url ? (
-          <button
-            type="button"
-            onClick={() => void mobileBridge.openExternalUrl(item.url!)}
-            className="k-tap w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-left"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <Globe className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
-              <div className="min-w-0">
-                <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
-                  {item.domain || t('feed.openLinkFallback')}
-                </div>
-                <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{item.url}</div>
+          <div className="space-y-1.5">
+            {item.mediaMeta?.linkAccess === 'private' ? (
+              <div
+                data-testid="feed-detail-private-link-badge"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[11.5px] font-medium text-[var(--k-ink-secondary)]"
+              >
+                <LockSimple weight="duotone" className="w-3.5 h-3.5 text-[var(--k-amber)] shrink-0" />
+                <span>{t('feed.privateLinkBadge')}</span>
               </div>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void mobileBridge.openExternalUrl(item.url!)}
+                className="k-tap flex-1 min-w-0 flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-left"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Globe className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-[var(--k-ink-primary)] truncate">
+                      {item.domain || t('feed.openLinkFallback')}
+                    </div>
+                    <div className="text-[11.5px] text-[var(--k-ink-muted)] truncate">{item.url}</div>
+                  </div>
+                </div>
+                <ArrowSquareOut className="w-4 h-4 text-[var(--k-ink-secondary)] shrink-0" />
+              </button>
+              {onRefreshLinkPreview ? (
+                <button
+                  type="button"
+                  data-testid="feed-detail-refresh-link-btn"
+                  disabled={refreshingLinkId === item.id}
+                  onClick={() => {
+                    mobileBridge.haptic('light');
+                    void runRefreshLink(item);
+                  }}
+                  aria-label={t('feed.refreshPreview')}
+                  title={t('feed.refreshPreview')}
+                  className="k-tap inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[var(--k-bg-surface-2)] border border-[var(--k-border-hairline)] text-[var(--k-ink-secondary)] disabled:opacity-50 shrink-0"
+                >
+                  <ArrowClockwise
+                    className={`w-4 h-4 ${refreshingLinkId === item.id ? 'animate-spin text-[var(--k-accent)]' : ''}`}
+                  />
+                </button>
+              ) : null}
             </div>
-            <ArrowSquareOut className="w-4 h-4 text-[var(--k-ink-secondary)] shrink-0" />
-          </button>
+          </div>
         ) : null}
 
         {readableLines.length > 0 ? (

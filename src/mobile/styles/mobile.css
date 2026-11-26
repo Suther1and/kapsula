@@ -526,3 +526,14 @@ h2,
 .k-prose mark[data-k-bg="violet"] { background: rgba(168, 85, 247, 0.27); }
 .k-prose mark[data-k-bg="pink"]   { background: rgba(236, 72, 153, 0.25); }
 .k-prose mark[data-k-bg="red"]    { background: rgba(239, 68, 68, 0.25); }
+
+:root[data-theme="light"] .k-prose mark[data-k-bg="amber"]  { background: rgba(245, 158, 11, 0.24); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="green"]  { background: rgba(34, 197, 94, 0.22); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="blue"]   { background: rgba(59, 130, 246, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="violet"] { background: rgba(168, 85, 247, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="pink"]   { background: rgba(236, 72, 153, 0.20); }
+:root[data-theme="light"] .k-prose mark[data-k-bg="red"]    { background: rgba(239, 68, 68, 0.20); }
+
+.k-mobile-prose .ProseMirror hr {
+  margin: 0.9em 0;
+}

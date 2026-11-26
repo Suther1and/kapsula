@@ -128,6 +128,8 @@ export interface MediaMeta {
   cachedVideoFile?: string;
   youtubeVideoId?: string;
   videoExtractStatus?: 'ready' | 'loading' | 'login_required' | 'unavailable';
+  linkAccess?: 'public' | 'private';
+  hasVideo?: boolean;
   taskMeta?: Record<string, TaskBoardItemMeta>;
 }
 

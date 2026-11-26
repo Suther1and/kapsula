@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { CircleNotch } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { filterDistinctKeyPoints } from '@shared/item-helpers';
@@ -35,17 +35,22 @@ export const VoiceMemoCard: React.FC<VoiceMemoCardProps> = React.memo(({
   const [transcribing, setTranscribing] = useState(false);
 
   const mediaUrl = getMediaUrl(item.mediaPath);
-  const actions = item.mediaMeta?.actionItems ?? [];
-  const checkedSet = new Set(item.mediaMeta?.checkedActionIndices ?? []);
-  const keyPoints = filterDistinctKeyPoints(
-    item.mediaMeta?.keyPoints,
-    item.title,
-    item.summary
+  const actions = useMemo(() => item.mediaMeta?.actionItems ?? [], [item.mediaMeta?.actionItems]);
+  const checkedSet = useMemo(
+    () => new Set(item.mediaMeta?.checkedActionIndices ?? []),
+    [item.mediaMeta?.checkedActionIndices]
+  );
+  const keyPoints = useMemo(
+    () => filterDistinctKeyPoints(item.mediaMeta?.keyPoints, item.title, item.summary),
+    [item.mediaMeta?.keyPoints, item.title, item.summary]
   );
   const rawTranscriptText =
     item.body?.trim() || item.mediaMeta?.transcript?.trim() || '';
   const hasTranscript = rawTranscriptText.length > 0;
-  const previewText = stripMarkdownPreview(rawTranscriptText || item.summary || '');
+  const previewText = useMemo(
+    () => stripMarkdownPreview(rawTranscriptText || item.summary || ''),
+    [rawTranscriptText, item.summary]
+  );
 
   const handleTranscribe = async (e: React.MouseEvent) => {
     e.stopPropagation();

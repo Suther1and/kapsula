@@ -16,6 +16,7 @@ import {
   ArrowCounterClockwise,
   ArrowLeft,
   ArrowSquareOut,
+  ArrowsClockwise,
   ArrowsInSimple,
   ArrowsOutSimple,
   Check,
@@ -36,6 +37,7 @@ import {
   ListBullets,
   ListChecks,
   ListNumbers,
+  LockSimple,
   Microphone,
   Minus,
   NotePencil,
@@ -421,6 +423,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
     if (slowPersistTimerRef.current) window.clearTimeout(slowPersistTimerRef.current);
   }, []);
   const [beautifying, setBeautifying] = useState(false);
+  const [refreshingLink, setRefreshingLink] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [extractingVoiceTasks, setExtractingVoiceTasks] = useState(false);
   const [insertingImage, setInsertingImage] = useState(false);
@@ -615,8 +618,8 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
 
   const lowlight = useMemo(() => getLowlight(), []);
 
-  const editor = useEditor({
-    extensions: [
+  const editorExtensions = useMemo(
+    () => [
       StarterKit.configure({
         codeBlock: false,
         horizontalRule: false,
@@ -653,15 +656,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         },
       }),
     ],
-    content: item.body || '',
-    contentType: 'markdown',
-    immediatelyRender: true,
-    editorProps: {
+    [lowlight]
+  );
+
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class: 'k-prose min-h-[340px] pb-24',
         'data-testid': 'note-studio-editor',
       },
-      handleClick: (_view, _pos, event) => {
+      handleClick: (_view: unknown, _pos: number, event: MouseEvent) => {
         const target = event.target as HTMLElement | null;
         const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
         if (anchor) {
@@ -674,14 +678,19 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }
         return false;
       },
-      handlePaste: (_view, event) => {
+      handlePaste: (_view: unknown, event: ClipboardEvent) => {
         const files = extractImageFilesFromDataTransfer(event.clipboardData);
         if (files.length === 0) return false;
         event.preventDefault();
         void insertImageFilesRef.current(files);
         return true;
       },
-      handleDrop: (view, event, _slice, moved) => {
+      handleDrop: (
+        view: { posAtCoords: (coords: { left: number; top: number }) => { pos: number } | null },
+        event: DragEvent,
+        _slice: unknown,
+        moved: boolean
+      ) => {
         if (moved) return false;
         const files = extractImageFilesFromDataTransfer(event.dataTransfer);
         if (files.length === 0) return false;
@@ -691,7 +700,7 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         void insertImageFilesRef.current(files, coords?.pos ?? null);
         return true;
       },
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (_view: unknown, event: KeyboardEvent) => {
         const curWiki = wikiMenuStateRef.current;
         if (curWiki.query !== null) {
           const count = curWiki.filtered.length;
@@ -761,7 +770,16 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
         }
         return false;
       },
-    },
+    }),
+    []
+  );
+
+  const editor = useEditor({
+    extensions: editorExtensions,
+    content: item.body || '',
+    contentType: 'markdown',
+    immediatelyRender: true,
+    editorProps,
     onUpdate: ({ editor: ed }) => {
       if (loadingItemRef.current) return;
 
@@ -2696,12 +2714,57 @@ export const NoteStudio: React.FC<NoteStudioProps> = ({
           {item.url ? (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] px-3.5 py-2.5">
               <div className="flex items-center gap-2 min-w-0">
-                <LinkSimple className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                {item.mediaMeta?.linkAccess === 'private' ? (
+                  <LockSimple className="w-4 h-4 text-[var(--k-ink-muted)] shrink-0" />
+                ) : (
+                  <LinkSimple className="w-4 h-4 text-[var(--k-accent)] shrink-0" />
+                )}
                 <span className="text-[12.5px] text-[var(--k-ink-secondary)] truncate k-selectable">
                   {item.url}
                 </span>
+                {item.mediaMeta?.linkAccess === 'private' ? (
+                  <span
+                    title={t('cards.privateLinkHint')}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[var(--k-bg-surface-1)] border border-[var(--k-border-hairline)] text-[10.5px] text-[var(--k-ink-muted)] shrink-0"
+                  >
+                    {t('cards.privateLinkBadge')}
+                  </span>
+                ) : null}
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
+                {!isDraft && item.dna === 'link' && window.kapsula.reprocessItem ? (
+                  <button
+                    type="button"
+                    data-testid="note-studio-refresh-link-btn"
+                    disabled={refreshingLink}
+                    title={t('cards.refreshPreview')}
+                    onClick={async () => {
+                      if (refreshingLink) return;
+                      setRefreshingLink(true);
+                      try {
+                        const updated = await window.kapsula.reprocessItem(item.id);
+                        if (updated) {
+                          onItemUpdated(updated);
+                          toast.success(t('cards.refreshPreviewDone'));
+                        } else {
+                          toast.error(t('cards.refreshPreviewFailed'));
+                        }
+                      } catch {
+                        toast.error(t('cards.refreshPreviewFailed'));
+                      } finally {
+                        setRefreshingLink(false);
+                      }
+                    }}
+                    className="k-interactive inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] text-[12px] font-medium text-[var(--k-ink-secondary)] hover:border-[var(--k-accent)] hover:text-[var(--k-accent)] cursor-pointer disabled:opacity-55"
+                  >
+                    <ArrowsClockwise
+                      className={`w-3.5 h-3.5 shrink-0 ${refreshingLink ? 'animate-spin' : ''}`}
+                    />
+                    <span className="hidden sm:inline">
+                      {refreshingLink ? t('cards.refreshingPreview') : t('cards.refreshPreview')}
+                    </span>
+                  </button>
+                ) : null}
                 <CopySlotPill
                   label={t('dna.link')}
                   copiedLabel={t('common.done')}

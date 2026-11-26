@@ -76,6 +76,10 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
@@ -124,6 +128,9 @@ public class KapsulaNativePlugin extends Plugin {
 
     private static final ExecutorService IO_EXECUTOR = Executors.newSingleThreadExecutor();
     private static final ExecutorService UPDATE_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static final ExecutorService LINK_FETCH_EXECUTOR = Executors.newFixedThreadPool(2);
+    private static final int MAX_EXTERNAL_TEXT_BYTES = 260 * 1024;
+    private static final int MAX_EXTERNAL_REDIRECTS = 4;
     private static final AtomicBoolean APK_DOWNLOAD_IN_PROGRESS = new AtomicBoolean(false);
     private static final long MAX_APK_DOWNLOAD_BYTES = 250L * 1024L * 1024L;
     private static final ConcurrentLinkedQueue<JSObject> PENDING_SHARES = new ConcurrentLinkedQueue<>();
@@ -2237,6 +2244,278 @@ public class KapsulaNativePlugin extends Plugin {
                 call.resolve(ret);
             } finally {
                 APK_DOWNLOAD_IN_PROGRESS.set(false);
+            }
+        });
+    }
+
+    // ==================== SSRF-SAFE EXTERNAL TEXT FETCH FOR LINK UNFURLING ====================
+
+    private static boolean isLiteralIpHostname(String host) {
+        if (host == null || host.isEmpty()) return false;
+        String bare = host;
+        if (bare.startsWith("[") && bare.endsWith("]")) {
+            bare = bare.substring(1, bare.length() - 1);
+        }
+        if (bare.contains(":")) return true;
+        if (bare.matches("^([0-9]+|0[xX][0-9a-fA-F]+)(\\.([0-9]+|0[xX][0-9a-fA-F]+))*$")) return true;
+        return false;
+    }
+
+    private static boolean isBlockedIpv4Bytes(int a, int b, int c, int d, boolean allowTunFakeIp) {
+        if (a == 0) return true; // 0.0.0.0/8
+        if (a == 10) return true; // 10.0.0.0/8
+        if (a == 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
+        if (a == 127) return true; // 127.0.0.0/8 loopback
+        if (a == 169 && b == 254) return true; // 169.254.0.0/16 link-local & cloud metadata
+        if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+        if (a == 192 && b == 0 && c == 0) return true; // 192.0.0.0/24
+        if (a == 192 && b == 0 && c == 2) return true; // 192.0.2.0/24
+        if (a == 192 && b == 168) return true; // 192.168.0.0/16
+        if (a == 198 && (b == 18 || b == 19)) return !allowTunFakeIp; // 198.18.0.0/15 TUN Fake-IP
+        if (a == 198 && b == 51 && c == 100) return true; // 198.51.100.0/24
+        if (a == 203 && b == 0 && c == 113) return true; // 203.0.113.0/24
+        if (a >= 224) return true; // multicast & reserved
+        return false;
+    }
+
+    private static boolean isUnsafeInetAddress(InetAddress addr, boolean allowTunFakeIp) {
+        if (addr == null) return true;
+        if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isLinkLocalAddress()
+            || addr.isSiteLocalAddress() || addr.isMulticastAddress()) {
+            return true;
+        }
+        byte[] raw = addr.getAddress();
+        if (addr instanceof Inet4Address && raw.length == 4) {
+            return isBlockedIpv4Bytes(raw[0] & 0xFF, raw[1] & 0xFF, raw[2] & 0xFF, raw[3] & 0xFF, allowTunFakeIp);
+        }
+        if (addr instanceof Inet6Address && raw.length == 16) {
+            int b0 = raw[0] & 0xFF;
+            int b1 = raw[1] & 0xFF;
+            if ((b0 & 0xFE) == 0xFC) return true; // fc00::/7 ULA
+            if (b0 == 0xFE && (b1 & 0xC0) == 0x80) return true; // fe80::/10 link-local
+            if (b0 == 0xFF) return true; // ff00::/8 multicast
+            // Local-use NAT64 prefix 64:ff9b:1::/48 (RFC 8215)
+            if (b0 == 0x00 && b1 == 0x64 && (raw[2] & 0xFF) == 0xFF && (raw[3] & 0xFF) == 0x9B
+                && (raw[4] & 0xFF) == 0x00 && (raw[5] & 0xFF) == 0x01) {
+                return true;
+            }
+            // Well-known NAT64 prefix 64:ff9b::/96 (RFC 6052)
+            boolean isNat64WellKnown = b0 == 0x00 && b1 == 0x64
+                && (raw[2] & 0xFF) == 0xFF && (raw[3] & 0xFF) == 0x9B;
+            if (isNat64WellKnown) {
+                for (int i = 4; i < 12; i++) {
+                    if (raw[i] != 0) {
+                        isNat64WellKnown = false;
+                        break;
+                    }
+                }
+            }
+            if (isNat64WellKnown) {
+                return isBlockedIpv4Bytes(
+                    raw[12] & 0xFF,
+                    raw[13] & 0xFF,
+                    raw[14] & 0xFF,
+                    raw[15] & 0xFF,
+                    allowTunFakeIp
+                );
+            }
+            // Check IPv4-mapped IPv6 (::ffff:a.b.c.d) and IPv4-compatible IPv6 (::a.b.c.d)
+            boolean firstTenZero = true;
+            for (int i = 0; i < 10; i++) {
+                if (raw[i] != 0) {
+                    firstTenZero = false;
+                    break;
+                }
+            }
+            if (firstTenZero) {
+                int b10 = raw[10] & 0xFF;
+                int b11 = raw[11] & 0xFF;
+                if ((b10 == 0xFF && b11 == 0xFF) || (b10 == 0x00 && b11 == 0x00)) {
+                    return isBlockedIpv4Bytes(
+                        raw[12] & 0xFF,
+                        raw[13] & 0xFF,
+                        raw[14] & 0xFF,
+                        raw[15] & 0xFF,
+                        allowTunFakeIp
+                    );
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isSafeExternalTargetUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.trim().isEmpty()) return false;
+        try {
+            URI uri = new URI(rawUrl.trim());
+            String scheme = uri.getScheme();
+            if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+                return false;
+            }
+            String host = uri.getHost();
+            if (host == null || host.trim().isEmpty()) return false;
+            String lower = host.trim().toLowerCase(Locale.ROOT);
+            while (lower.endsWith(".")) {
+                lower = lower.substring(0, lower.length() - 1);
+            }
+            if (lower.isEmpty()
+                || "localhost".equals(lower)
+                || lower.endsWith(".localhost")
+                || lower.endsWith(".local")
+                || lower.endsWith(".internal")
+                || lower.endsWith(".home.arpa")
+                || lower.endsWith(".lan")) {
+                return false;
+            }
+            boolean isLiteral = isLiteralIpHostname(lower);
+            if (!isLiteral && !lower.contains(".")) {
+                return false;
+            }
+            String bareHost = lower.startsWith("[") && lower.endsWith("]")
+                ? lower.substring(1, lower.length() - 1)
+                : lower;
+            InetAddress[] resolved = InetAddress.getAllByName(bareHost);
+            if (resolved == null || resolved.length == 0) {
+                return false;
+            }
+            // Allow RFC 2544 198.18.0.0/15 ONLY for DNS resolution of validated public non-IP domains (TUN Fake-IP)
+            boolean allowTunFakeIp = !isLiteral;
+            for (InetAddress addr : resolved) {
+                if (isUnsafeInetAddress(addr, allowTunFakeIp)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static byte[] readTruncatedBytes(InputStream in, int maxBytes) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[16384];
+        int remaining = maxBytes;
+        int n;
+        while (remaining > 0 && (n = in.read(buf, 0, Math.min(buf.length, remaining))) != -1) {
+            out.write(buf, 0, n);
+            remaining -= n;
+        }
+        return out.toByteArray();
+    }
+
+    @PluginMethod
+    public void fetchExternalText(PluginCall call) {
+        String rawUrl = call.getString("url", "");
+        String accept = call.getString("accept", "text/html,application/json;q=0.9,*/*;q=0.8");
+        String userAgent = call.getString(
+            "userAgent",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+        );
+        int requestedTimeout = call.getInt("timeoutMs", 4500);
+        final int timeoutMs = Math.max(1000, Math.min(8000, requestedTimeout));
+
+        if (rawUrl == null || rawUrl.trim().isEmpty()) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("status", 0);
+            ret.put("finalUrl", "");
+            ret.put("contentType", "");
+            ret.put("body", "");
+            call.resolve(ret);
+            return;
+        }
+
+        final String startUrl = rawUrl.trim();
+        final String reqAccept = accept != null && !accept.trim().isEmpty()
+            ? accept.trim()
+            : "text/html,application/json;q=0.9,*/*;q=0.8";
+        final String reqUa = userAgent != null && !userAgent.trim().isEmpty()
+            ? userAgent.trim()
+            : "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+
+        LINK_FETCH_EXECUTOR.execute(() -> {
+            String currentUrl = startUrl;
+            HttpURLConnection conn = null;
+            try {
+                for (int hop = 0; hop <= MAX_EXTERNAL_REDIRECTS; hop++) {
+                    if (!isSafeExternalTargetUrl(currentUrl)) {
+                        JSObject blocked = new JSObject();
+                        blocked.put("ok", false);
+                        blocked.put("status", 0);
+                        blocked.put("finalUrl", currentUrl);
+                        blocked.put("contentType", "");
+                        blocked.put("body", "");
+                        blocked.put("error", "blocked_url");
+                        call.resolve(blocked);
+                        return;
+                    }
+
+                    conn = (HttpURLConnection) new URL(currentUrl).openConnection();
+                    conn.setInstanceFollowRedirects(false);
+                    conn.setConnectTimeout(timeoutMs);
+                    conn.setReadTimeout(timeoutMs);
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("User-Agent", reqUa);
+                    conn.setRequestProperty("Accept", reqAccept);
+                    conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+
+                    int status = conn.getResponseCode();
+                    if (status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_SEE_OTHER
+                        || status == 307
+                        || status == 308) {
+                        String loc = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        conn = null;
+                        if (loc == null || loc.trim().isEmpty() || hop >= MAX_EXTERNAL_REDIRECTS) {
+                            JSObject fail = new JSObject();
+                            fail.put("ok", false);
+                            fail.put("status", status);
+                            fail.put("finalUrl", currentUrl);
+                            fail.put("contentType", "");
+                            fail.put("body", "");
+                            call.resolve(fail);
+                            return;
+                        }
+                        currentUrl = new URI(currentUrl).resolve(loc.trim()).toString();
+                        continue;
+                    }
+
+                    String contentType = conn.getContentType() != null ? conn.getContentType() : "";
+                    String body = "";
+                    InputStream stream = status >= 200 && status < 400
+                        ? conn.getInputStream()
+                        : conn.getErrorStream();
+                    if (stream != null) {
+                        try (InputStream in = stream) {
+                            byte[] bytes = readTruncatedBytes(in, MAX_EXTERNAL_TEXT_BYTES);
+                            body = new String(bytes, StandardCharsets.UTF_8);
+                        }
+                    }
+
+                    JSObject ret = new JSObject();
+                    ret.put("ok", status >= 200 && status < 300);
+                    ret.put("status", status);
+                    ret.put("finalUrl", currentUrl);
+                    ret.put("contentType", contentType);
+                    ret.put("body", body);
+                    call.resolve(ret);
+                    return;
+                }
+            } catch (Exception e) {
+                JSObject ret = new JSObject();
+                ret.put("ok", false);
+                ret.put("status", 0);
+                ret.put("finalUrl", currentUrl);
+                ret.put("contentType", "");
+                ret.put("body", "");
+                call.resolve(ret);
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
         });
     }

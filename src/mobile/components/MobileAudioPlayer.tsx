@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckSquare, Pause, Play, Sparkle, SpinnerGap, Waveform } from '@phosphor-icons/react';
 import { formatDurationMmSs } from '@renderer/lib/format';
 import { useMobileMediaCache } from '../lib/media-cache-context';
@@ -73,12 +73,14 @@ export const MobileAudioPlayer: React.FC<MobileAudioPlayerProps> = ({
     }
   }, [resolvedSrc]);
 
-  const rawBars = peaks && peaks.length >= 6 ? peaks : DEFAULT_PEAKS;
-  const targetCount = compact ? 14 : 24;
-  const bars = Array.from({ length: targetCount }, (_, i) => {
-    const srcIdx = Math.min(rawBars.length - 1, Math.floor((i / targetCount) * rawBars.length));
-    return rawBars[srcIdx] ?? 0.4;
-  });
+  const bars = useMemo(() => {
+    const rawBars = peaks && peaks.length >= 6 ? peaks : DEFAULT_PEAKS;
+    const targetCount = compact ? 14 : 24;
+    return Array.from({ length: targetCount }, (_, i) => {
+      const srcIdx = Math.min(rawBars.length - 1, Math.floor((i / targetCount) * rawBars.length));
+      return rawBars[srcIdx] ?? 0.4;
+    });
+  }, [peaks, compact]);
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
 
   const togglePlay = async (e: React.MouseEvent) => {

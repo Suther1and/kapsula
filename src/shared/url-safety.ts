@@ -91,7 +91,10 @@ function isPrivateIpLiteral(ip: string): boolean {
     ) {
       return isPrivateIpv4Tuple(h[6]! >> 8, h[6]! & 0xff, h[7]! >> 8, h[7]! & 0xff);
     }
-    // NAT64 (64:ff9b::/96)
+    // NAT64 (64:ff9b::/96 well-known & 64:ff9b:1::/48 local-use)
+    if (h[0] === 0x0064 && h[1] === 0xff9b && h[2] === 0x0001) {
+      return true;
+    }
     if (h[0] === 0x0064 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) {
       return isPrivateIpv4Tuple(h[6]! >> 8, h[6]! & 0xff, h[7]! >> 8, h[7]! & 0xff);
     }
@@ -104,18 +107,48 @@ function isPrivateIpLiteral(ip: string): boolean {
 }
 
 /**
+ * Checks whether an IP literal falls in RFC 2544 benchmarking range (`198.18.0.0/15`),
+ * commonly used by TUN VPN clients (v2rayN / Clash / Mihomo) as synthetic Fake-IPs
+ * when resolving public domain names.
+ */
+export function isTunFakeIpAddress(ip: string): boolean {
+  const clean = (ip.trim().replace(/^\[|\]$/g, '').toLowerCase().split('%')[0] ?? '').trim();
+  if (!clean) return false;
+  const v4 = parseIpv4Literal(clean);
+  if (v4) {
+    return v4[0] === 198 && (v4[1] === 18 || v4[1] === 19);
+  }
+  const h = parseIpv6Hextets(clean);
+  if (h && h.slice(0, 5).every((x) => x === 0) && (h[5] === 0xffff || h[5] === 0)) {
+    const a = h[6]! >> 8;
+    const b = h[6]! & 0xff;
+    return a === 198 && (b === 18 || b === 19);
+  }
+  return false;
+}
+
+function isLocalDomainOrHost(name: string): boolean {
+  return (
+    !name ||
+    name === 'localhost' ||
+    name.endsWith('.localhost') ||
+    name.endsWith('.local') ||
+    name.endsWith('.internal') ||
+    name.endsWith('.home.arpa') ||
+    name.endsWith('.lan')
+  );
+}
+
+/**
  * Pure JS check rejecting localhost, local domains, private/reserved IPv4 & IPv6 literals,
  * and integer/hex IP representations (safe for both Electron Node and Capacitor WebView).
+ * NOTE: Literal `198.18.0.0/15` URLs remain strictly blocked here.
  */
 export function isPrivateOrLocalHostname(hostname: string): boolean {
-  const h = (hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().split('%')[0] ?? '').trim();
-  if (
-    !h ||
-    h === 'localhost' ||
-    h.endsWith('.localhost') ||
-    h.endsWith('.local') ||
-    h.endsWith('.internal')
-  ) {
+  const h = (hostname.trim().replace(/^\[|\]$/g, '').toLowerCase().split('%')[0] ?? '')
+    .trim()
+    .replace(/\.+$/, '');
+  if (isLocalDomainOrHost(h)) {
     return true;
   }
   if (!h.includes('.') && !h.includes(':') && (/^\d+$/.test(h) || /^0x[0-9a-f]+$/i.test(h))) {
@@ -126,8 +159,9 @@ export function isPrivateOrLocalHostname(hostname: string): boolean {
   try {
     const parsedHost = new URL(h.includes(':') ? `http://[${h}]` : `http://${h}`).hostname
       .replace(/^\[|\]$/g, '')
-      .toLowerCase();
-    if (!parsedHost || parsedHost === 'localhost' || parsedHost.endsWith('.localhost')) {
+      .toLowerCase()
+      .replace(/\.+$/, '');
+    if (isLocalDomainOrHost(parsedHost)) {
       return true;
     }
     if (parsedHost !== h && isPrivateIpLiteral(parsedHost)) {
@@ -137,4 +171,31 @@ export function isPrivateOrLocalHostname(hostname: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Validates that a raw URL is an external `http:` / `https:` URL whose hostname
+ * is not localhost, a local domain, or a private/reserved IP literal.
+ */
+export function isSafeExternalUrl(rawUrl: string): boolean {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  try {
+    const u = new URL(rawUrl.trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    return !isPrivateOrLocalHostname(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates a DNS-resolved IP address for an already-validated public non-IP domain name.
+ * Permits RFC 2544 TUN Fake-IPs (`198.18.0.0/15`) returned by local VPN TUN resolvers
+ * while blocking loopback, RFC 1918 private networks, link-local/cloud metadata, CGNAT, and multicast.
+ */
+export function isSafeResolvedIpForPublicDomain(ip: string): boolean {
+  const clean = (ip.trim().replace(/^\[|\]$/g, '').toLowerCase().split('%')[0] ?? '').trim();
+  if (!clean) return false;
+  if (isTunFakeIpAddress(clean)) return true;
+  return !isPrivateOrLocalHostname(clean);
 }

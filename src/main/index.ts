@@ -721,6 +721,15 @@ if (!singleInstanceLock) {
           // Non-fatal background search warmup
         }
       }, 1200).unref?.();
+      if (process.env.KAPSULA_DISABLE_STARTUP_UNFURL !== '1') {
+        setTimeout(() => {
+          try {
+            pipeline.scanAndEnrichStubLinks(12);
+          } catch {
+            // Non-fatal background stub-link enrichment
+          }
+        }, 3500).unref?.();
+      }
     });
     // Default OFF on startup (Notes/Feed/Tasks/Calendar/Settings remain screenshot-friendly);
     // protection engages dynamically ONLY while viewing Vault / Secrets / Recovery Key.
@@ -1014,6 +1023,7 @@ if (!singleInstanceLock) {
         onItemUpserted: (item) => {
           windows?.broadcast('vault:item-upserted', item);
           reminderScheduler?.refresh();
+          pipeline.enqueueSyncedLinkEnrichment(item);
         },
         onItemDeleted: (id) => {
           windows?.broadcast('vault:item-deleted', id);
@@ -1028,9 +1038,16 @@ if (!singleInstanceLock) {
         onCalendarChanged: () => {
           windows?.broadcast('vault:calendar-changed', undefined);
         },
-        onBatchSynced: () => {
+        onBatchSynced: (upsertedItems) => {
           windows?.broadcast('vault:batch-synced', undefined);
           reminderScheduler?.refresh();
+          if (Array.isArray(upsertedItems) && upsertedItems.length > 0) {
+            for (const pulled of upsertedItems) {
+              pipeline.enqueueSyncedLinkEnrichment(pulled);
+            }
+          } else {
+            pipeline.scanAndEnrichStubLinks(12);
+          }
         },
         onWorkspacePrefsChanged: () => {
           const nextLocale = getLocale();

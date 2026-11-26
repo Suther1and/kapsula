@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/react';
 import { TextSelection } from '@tiptap/pm/state';
-import { useReducedMotion } from 'motion/react';
 import { toast } from 'sonner';
 import {
   ArrowDown,
@@ -269,7 +268,6 @@ export const EditorBlockContextMenu: React.FC<EditorBlockContextMenuProps> = ({
   onOpenImageLightbox,
 }) => {
   const { t } = useI18n();
-  const prefersReduced = useReducedMotion();
   const scopedAccentStyle = useScopedAccentStyle();
   const [menuState, setMenuState] = useState<OpenMenuState | null>(null);
   const [submenuOpenId, setSubmenuOpenId] = useState<string | null>(null);
@@ -973,16 +971,14 @@ export const EditorBlockContextMenu: React.FC<EditorBlockContextMenuProps> = ({
           <span
             aria-hidden="true"
             style={{
-              transform: `translate3d(0, ${hl.top}px, 0)`,
-              height: `${hl.height}px`,
+              top: `${Math.round(hl.top)}px`,
+              height: `${Math.round(hl.height)}px`,
               opacity: hl.visible ? 1 : 0,
-              transition: prefersReduced
-                ? 'none'
-                : hl.animatePosition
-                  ? 'transform 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1), opacity 80ms ease-out, background-color 90ms ease-out'
-                  : 'opacity 80ms ease-out, background-color 90ms ease-out',
+              transition: hl.animatePosition
+                ? 'top 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1), opacity 80ms ease-out, background-color 90ms ease-out'
+                : 'opacity 80ms ease-out, background-color 90ms ease-out',
             }}
-            className={`pointer-events-none absolute top-0 left-0 right-0 z-0 rounded-lg ${
+            className={`pointer-events-none absolute left-0 right-0 z-0 rounded-lg ${
               hl.danger ? 'bg-[var(--k-danger-soft)]' : 'bg-[var(--k-bg-surface-3)]'
             }`}
           />

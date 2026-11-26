@@ -65,7 +65,7 @@ export interface SyncEngineCallbacks {
   onOrbitsChanged?: () => void;
   onBoardsChanged?: () => void;
   onCalendarChanged?: () => void;
-  onBatchSynced?: () => void;
+  onBatchSynced?: (upsertedItems?: VaultItem[]) => void;
   onWorkspacePrefsChanged?: () => void;
   onMediaCleanup?: (filenames: string[]) => void;
 }
@@ -2134,7 +2134,7 @@ export class SyncEngine {
             upsertedItems.length + deletedItemIds.length > BATCH_UI_THRESHOLD &&
             this.callbacks.onBatchSynced
           ) {
-            this.callbacks.onBatchSynced();
+            this.callbacks.onBatchSynced(upsertedItems);
           } else {
             for (const it of upsertedItems) this.callbacks.onItemUpserted?.(it);
             for (const id of deletedItemIds) this.callbacks.onItemDeleted?.(id);

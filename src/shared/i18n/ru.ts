@@ -541,6 +541,13 @@ export const ru = {
   'cards.ctx.addToBoard': 'Добавить на холст',
   'cards.ctx.removeFromBoard': 'Убрать с холста',
   'cards.ctx.copyText': 'Копировать текст',
+  'cards.ctx.refreshPreview': 'Обновить превью',
+  'cards.refreshPreview': 'Обновить превью',
+  'cards.refreshingPreview': 'Обновляю…',
+  'cards.refreshPreviewDone': 'Превью обновлено',
+  'cards.refreshPreviewFailed': 'Не удалось загрузить превью',
+  'cards.privateLinkBadge': 'Закрытый пост',
+  'cards.privateLinkHint': 'Доступно только участникам — открой в приложении',
   'cards.ctx.duplicate': 'Дублировать',
   'cards.ctx.exportMd': 'Экспорт в Markdown',
 

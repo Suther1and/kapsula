@@ -1,6 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { ContextMenu } from '@base-ui/react/context-menu';
-import { useReducedMotion } from 'motion/react';
 import { CaretRight, Check } from '@phosphor-icons/react';
 import { useScopedAccentStyle } from '../../lib/scoped-accent';
 
@@ -60,7 +59,6 @@ const MenuEntryList: React.FC<{
   entries: ContextMenuEntry[];
   scopedAccentStyle?: React.CSSProperties;
 }> = ({ entries, scopedAccentStyle }) => {
-  const prefersReduced = useReducedMotion();
   const [hl, setHl] = useState<HighlightBox | null>(null);
   const itemRefs = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -99,17 +97,16 @@ const MenuEntryList: React.FC<{
       {hl ? (
         <span
           aria-hidden="true"
+          data-menu-highlight="true"
           style={{
-            transform: `translate3d(0, ${hl.top}px, 0)`,
+            top: `${hl.top}px`,
             height: `${hl.height}px`,
             opacity: hl.visible ? 1 : 0,
-            transition: prefersReduced
-              ? 'none'
-              : hl.animatePosition
-                ? 'transform 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1), opacity 80ms ease-out, background-color 90ms ease-out'
-                : 'opacity 80ms ease-out, background-color 90ms ease-out',
+            transition: hl.animatePosition
+              ? 'top 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1), opacity 80ms ease-out, background-color 90ms ease-out'
+              : 'opacity 80ms ease-out, background-color 90ms ease-out',
           }}
-          className={`pointer-events-none absolute top-0 left-0 right-0 z-0 rounded-lg ${
+          className={`pointer-events-none absolute left-0 right-0 z-0 rounded-lg ${
             hl.danger ? 'bg-[var(--k-danger-soft)]' : 'bg-[var(--k-bg-surface-3)]'
           }`}
         />

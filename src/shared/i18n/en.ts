@@ -543,6 +543,13 @@ export const en: TranslationDict = {
   'cards.ctx.addToBoard': 'Add to board',
   'cards.ctx.removeFromBoard': 'Remove from board',
   'cards.ctx.copyText': 'Copy text',
+  'cards.ctx.refreshPreview': 'Refresh preview',
+  'cards.refreshPreview': 'Refresh preview',
+  'cards.refreshingPreview': 'Refreshing…',
+  'cards.refreshPreviewDone': 'Preview updated',
+  'cards.refreshPreviewFailed': 'Could not load preview',
+  'cards.privateLinkBadge': 'Private post',
+  'cards.privateLinkHint': 'Members only — open in app',
   'cards.ctx.duplicate': 'Duplicate',
   'cards.ctx.exportMd': 'Export to Markdown',
 

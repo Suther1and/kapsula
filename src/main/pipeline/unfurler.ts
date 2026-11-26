@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { cleanInstagramText, decodeHtmlEntities, truncateAtWordBoundary } from '@shared/html-entities';
-import { isPrivateOrLocalHostname } from '@shared/url-safety';
+import {
+  isPrivateOrLocalHostname,
+  isSafeExternalUrl,
+  isSafeResolvedIpForPublicDomain,
+} from '@shared/url-safety';
 import type { AppLocale, ExtractedAction } from '@shared/types';
 import {
   domNodeToMarkdown,
@@ -15,7 +19,7 @@ import {
   type DomNodeLike,
 } from './html-cleaner';
 
-export { isPrivateOrLocalHostname };
+export { isPrivateOrLocalHostname, isSafeExternalUrl };
 
 export interface UnfurlResult {
   url: string;
@@ -23,6 +27,8 @@ export interface UnfurlResult {
   domain: string | null;
   platform: string | null;
   pageKind?: 'platform' | 'article' | 'showcase';
+  linkAccess?: 'public' | 'private';
+  hasVideo?: boolean;
   author: string | null;
   publishedAt: string | null;
   title: string | null;
@@ -33,6 +39,29 @@ export interface UnfurlResult {
   videoUrl: string | null;
   videoDurationSec: number | null;
   extractedLinks: ExtractedAction[];
+}
+
+interface ElectronNetLike {
+  app?: { isReady?: () => boolean };
+  net?: { fetch?: typeof fetch };
+}
+
+let cachedElectronModulePromise: Promise<ElectronNetLike | null> | null = null;
+
+async function resolveTransportFetch(explicitFetch?: typeof fetch): Promise<typeof fetch> {
+  if (explicitFetch) return explicitFetch;
+  if (typeof process !== 'undefined' && process.versions?.electron) {
+    if (!cachedElectronModulePromise) {
+      cachedElectronModulePromise = import('electron')
+        .then((mod) => mod as unknown as ElectronNetLike)
+        .catch(() => null);
+    }
+    const electronMod = await cachedElectronModulePromise;
+    if (electronMod?.app?.isReady?.() && typeof electronMod?.net?.fetch === 'function') {
+      return electronMod.net.fetch.bind(electronMod.net) as unknown as typeof fetch;
+    }
+  }
+  return globalThis.fetch;
 }
 
 function emptyUnfurl(rawUrl: string): UnfurlResult {
@@ -63,8 +92,12 @@ function emptyUnfurl(rawUrl: string): UnfurlResult {
 export async function isSafeResolvedHost(hostname: string): Promise<boolean> {
   const cleanHost = (hostname.trim().replace(/^\[|\]$/g, '').split('%')[0] ?? '').trim();
   if (!cleanHost) return false;
+  // Literal IP addresses (including RFC 2544 198.18.0.0/15) must never bypass private/reserved checks
   if (net.isIP(cleanHost) !== 0) {
     return !isPrivateOrLocalHostname(cleanHost);
+  }
+  if (isPrivateOrLocalHostname(cleanHost)) {
+    return false;
   }
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -77,7 +110,8 @@ export async function isSafeResolvedHost(hostname: string): Promise<boolean> {
     });
     const records = await Promise.race([lookupPromise, timeoutPromise]);
     if (!records || records.length === 0) return false;
-    return records.every((rec) => !isPrivateOrLocalHostname(rec.address));
+    // Allow RFC 2544 TUN Fake-IP (198.18.0.0/15) strictly for DNS resolution of validated public domains
+    return records.every((rec) => isSafeResolvedIpForPublicDomain(rec.address));
   } catch {
     return false;
   } finally {
@@ -101,32 +135,40 @@ export async function safeFetchWithRedirects(
   } catch {
     return null;
   }
-  if (currentUrl.protocol !== 'http:' && currentUrl.protocol !== 'https:') return null;
-  if (isPrivateOrLocalHostname(currentUrl.hostname)) return null;
+  if (!isSafeExternalUrl(currentUrl.toString())) return null;
   if (!(await isSafeResolvedHost(currentUrl.hostname))) return null;
 
-  const fetchFn = options.fetchImpl ?? fetch;
+  const fetchFn = await resolveTransportFetch(options.fetchImpl);
   const maxHops = options.maxHops ?? 4;
   for (let hop = 0; hop < maxHops; hop++) {
-    const resp = await fetchFn(currentUrl.toString(), {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Kapsula/6.0',
-        Accept: options.accept ?? 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        ...(options.headers ?? {}),
-      },
-      signal: AbortSignal.timeout(options.timeoutMs ?? 6500),
-      redirect: 'manual',
-    });
+    let resp: Response;
+    try {
+      resp = await fetchFn(currentUrl.toString(), {
+        method: 'GET',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept: options.accept ?? 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+          ...(options.headers ?? {}),
+        },
+        signal: AbortSignal.timeout(options.timeoutMs ?? 6500),
+        redirect: 'manual',
+      });
+    } catch {
+      return null;
+    }
 
     if (resp.status >= 300 && resp.status < 400) {
       const loc = resp.headers.get('location');
       await resp.body?.cancel().catch(() => {});
       if (!loc) return null;
-      currentUrl = new URL(loc, currentUrl);
-      if (currentUrl.protocol !== 'http:' && currentUrl.protocol !== 'https:') return null;
-      if (isPrivateOrLocalHostname(currentUrl.hostname)) return null;
+      try {
+        currentUrl = new URL(loc, currentUrl);
+      } catch {
+        return null;
+      }
+      if (!isSafeExternalUrl(currentUrl.toString())) return null;
       if (!(await isSafeResolvedHost(currentUrl.hostname))) return null;
       continue;
     }
@@ -301,6 +343,10 @@ export function parseTelegramPostHtml(
   const videoUrl = sanitizeSafeExternalUrl(videoEl?.getAttribute('src'), baseUrl);
   const durEl = doc.querySelector('.message_video_duration');
   const videoDurationSec = parseDurationToSeconds(durEl?.textContent);
+  const hasVideo = Boolean(
+    videoUrl ||
+      doc.querySelector('.tgme_widget_message_video_player, .tgme_widget_message_video_thumb, .message_video_duration')
+  );
 
   const postChannelMatch = /^https?:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([a-zA-Z0-9_]{3,})/i.exec(baseUrl.href);
   const postChannel = postChannelMatch?.[1]?.toLowerCase() ?? null;
@@ -367,6 +413,8 @@ export function parseTelegramPostHtml(
   return {
     platform: 'telegram',
     pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo,
     author,
     publishedAt,
     title: title ? truncateAtWordBoundary(title, 120) : null,
@@ -380,6 +428,108 @@ export function parseTelegramPostHtml(
   };
 }
 
+/**
+ * Classifies private Telegram links (`t.me/c/<chatId>/<msgId>` or `t.me/+...` / `t.me/joinchat/...`)
+ * without making useless network calls or emitting raw `t.me` stubs.
+ */
+export function classifyPrivateTelegramUrl(
+  rawUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const hostLower = u.hostname.toLowerCase().replace(/^www\./, '');
+  if (hostLower !== 't.me' && hostLower !== 'telegram.me') return null;
+
+  const trimmedPath = u.pathname.replace(/^\/+/, '');
+  const isPrivatePost = /^c\/\d+(?:\/\d+)?(?:\/|$)/i.test(trimmedPath);
+  const isPrivateInvite = /^(?:\+[a-zA-Z0-9_-]+|joinchat\/[a-zA-Z0-9_-]+)(?:\/|$)/i.test(trimmedPath);
+  if (!isPrivatePost && !isPrivateInvite) return null;
+
+  const isEn = locale === 'en';
+  const title = isPrivateInvite
+    ? isEn
+      ? 'Private Telegram invite'
+      : 'Закрытое приглашение в Telegram'
+    : isEn
+      ? 'Private Telegram post'
+      : 'Закрытый пост в Telegram';
+  const description = isPrivateInvite
+    ? isEn
+      ? 'Private channel or group invite — open in Telegram to join.'
+      : 'Приглашение в закрытый канал или чат — открой ссылку в Telegram.'
+    : isEn
+      ? 'Only visible to channel or chat members — open the link in Telegram.'
+      : 'Доступно только участникам канала или чата — открой ссылку в Telegram.';
+
+  return {
+    canonicalUrl: `${u.origin}${u.pathname.replace(/\/+$/, '')}`,
+    domain: 't.me',
+    platform: 'telegram',
+    pageKind: 'platform',
+    linkAccess: 'private',
+    hasVideo: false,
+    title,
+    description,
+    bodyMarkdown: [description, rawUrl].join('\n\n'),
+    ogImageUrl: null,
+    galleryUrls: [],
+    videoUrl: null,
+    videoDurationSec: null,
+  };
+}
+
+function parseTelegramPlainOgFallback(
+  html: string,
+  postUrl: string,
+  channel: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  const baseUrl = new URL(postUrl);
+  const doc = parseHtmlDocument(html);
+  const meta = extractDocumentMeta(doc, baseUrl, sanitizeSafeExternalUrl);
+  const rawTitle = (meta.title || '').replace(/^Telegram:\s*(?:Contact|View)\s*/i, '').trim();
+  const rawDesc = (meta.description || '')
+    .replace(/^You can view and join\s+@\S+\s+right away\.?$/i, '')
+    .trim();
+  const isGenericTitle =
+    !rawTitle ||
+    /^telegram$/i.test(rawTitle) ||
+    rawTitle.toLowerCase() === `@${channel.toLowerCase()}` ||
+    /^view\s+@/i.test(rawTitle);
+
+  if (isGenericTitle && !rawDesc && !meta.ogImageUrl) return null;
+
+  const isEn = locale === 'en';
+  const title = !isGenericTitle
+    ? truncateAtWordBoundary(rawTitle, 120)
+    : rawDesc
+      ? deriveHeadlineFromText(rawDesc, `@${channel} · ${isEn ? 'post' : 'пост'}`)
+      : `@${channel} · ${isEn ? 'post' : 'пост'}`;
+  const bodyMarkdown = [rawDesc, postUrl].filter(Boolean).join('\n\n');
+
+  return {
+    platform: 'telegram',
+    pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo: Boolean(meta.ogVideoUrl),
+    author: `@${channel}`,
+    publishedAt: meta.publishedAt,
+    title,
+    description: rawDesc ? truncateAtWordBoundary(rawDesc, 220) : null,
+    bodyMarkdown,
+    ogImageUrl: meta.ogImageUrl,
+    galleryUrls: meta.ogImageUrl ? [meta.ogImageUrl] : [],
+    videoUrl: meta.ogVideoUrl,
+    videoDurationSec: null,
+    extractedLinks: [],
+  };
+}
+
 export function parseFxTwitterResponse(
   json: unknown,
   postUrl: string,
@@ -387,17 +537,26 @@ export function parseFxTwitterResponse(
 ): Partial<UnfurlResult> | null {
   const isEn = locale === 'en';
   if (!json || typeof json !== 'object') return null;
+  interface FxTweetLike {
+    text?: string;
+    created_at?: string;
+    author?: { name?: string; screen_name?: string; avatar_url?: string };
+    article?: {
+      title?: string;
+      preview_text?: string;
+      cover_media?: { media_info?: { original_img_url?: string } };
+      content?: { blocks?: Array<{ text?: string }> };
+    };
+    quote?: FxTweetLike;
+    media?: {
+      photos?: Array<{ url?: string }>;
+      videos?: Array<{ url?: string; thumbnail_url?: string; duration?: number }>;
+      all?: Array<{ type?: string; url?: string; thumbnail_url?: string; duration?: number }>;
+    };
+  }
   const root = json as {
     code?: number;
-    tweet?: {
-      text?: string;
-      created_at?: string;
-      author?: { name?: string; screen_name?: string; avatar_url?: string };
-      media?: {
-        photos?: Array<{ url?: string }>;
-        videos?: Array<{ url?: string; thumbnail_url?: string; duration?: number }>;
-      };
-    };
+    tweet?: FxTweetLike;
   };
   const tweet = root.tweet;
   if (!tweet) return null;
@@ -405,37 +564,350 @@ export function parseFxTwitterResponse(
   const authorName = tweet.author?.name?.trim() || '';
   const handle = tweet.author?.screen_name ? `@${tweet.author.screen_name}` : '';
   const author = [authorName, handle].filter(Boolean).join(' ') || null;
-  const text = decodeHtmlEntities(tweet.text || '').trim();
+
+  const articleTitle = decodeHtmlEntities(tweet.article?.title || '').trim();
+  const articleBlocks = (tweet.article?.content?.blocks ?? [])
+    .map((b) => decodeHtmlEntities(b.text || '').trim())
+    .filter(Boolean);
+  const articleBody =
+    articleBlocks.length > 0
+      ? articleBlocks.join('\n\n').slice(0, 4000)
+      : decodeHtmlEntities(tweet.article?.preview_text || '').trim();
+
+  const baseText = decodeHtmlEntities(tweet.text || '').trim();
+  const combinedMainText = articleBody
+    ? baseText && !articleBody.includes(baseText)
+      ? `${baseText}\n\n${articleBody}`
+      : articleBody
+    : baseText;
+
+  const quoteAuthor = tweet.quote?.author?.screen_name
+    ? `@${tweet.quote.author.screen_name}`
+    : tweet.quote?.author?.name?.trim() || '';
+  const quoteText = decodeHtmlEntities(tweet.quote?.text || '').trim();
+  const quoteBlock = quoteText
+    ? `> ${quoteAuthor ? `**${quoteAuthor}**: ` : ''}${quoteText.replace(/\r?\n/g, '\n> ')}`
+    : '';
+
   const galleryUrls: string[] = [];
-  for (const p of tweet.media?.photos ?? []) {
-    const safe = sanitizeSafeExternalUrl(p.url);
-    if (safe) galleryUrls.push(safe);
+  const pushImg = (raw?: string | null) => {
+    const safe = sanitizeSafeExternalUrl(raw);
+    if (safe && !galleryUrls.includes(safe)) galleryUrls.push(safe);
+  };
+  if (tweet.article?.cover_media?.media_info?.original_img_url) {
+    pushImg(tweet.article.cover_media.media_info.original_img_url);
   }
-  const firstVideo = tweet.media?.videos?.[0];
+  for (const p of tweet.media?.photos ?? []) {
+    pushImg(p.url);
+  }
+  let firstVideo = tweet.media?.videos?.[0];
+  if (!firstVideo && Array.isArray(tweet.media?.all)) {
+    for (const m of tweet.media.all) {
+      if (m.type === 'photo') pushImg(m.url);
+      else if ((m.type === 'video' || m.type === 'gif') && !firstVideo) {
+        firstVideo = { url: m.url, thumbnail_url: m.thumbnail_url, duration: m.duration };
+      }
+    }
+  }
+  if (galleryUrls.length === 0 && tweet.quote) {
+    for (const p of tweet.quote.media?.photos ?? []) pushImg(p.url);
+    if (!firstVideo && tweet.quote.media?.videos?.[0]) {
+      firstVideo = tweet.quote.media.videos[0];
+    }
+  }
   const videoUrl = sanitizeSafeExternalUrl(firstVideo?.url);
   if (galleryUrls.length === 0 && firstVideo?.thumbnail_url) {
-    const safeThumb = sanitizeSafeExternalUrl(firstVideo.thumbnail_url);
-    if (safeThumb) galleryUrls.push(safeThumb);
+    pushImg(firstVideo.thumbnail_url);
   }
 
-  const title = deriveHeadlineFromText(
-    text,
-    handle ? (isEn ? `Post by ${handle}` : `Пост ${handle}`) : isEn ? 'Post on X' : 'Пост в X'
+  const hasVideo = Boolean(
+    videoUrl ||
+      (tweet.media?.videos && tweet.media.videos.length > 0) ||
+      (tweet.quote?.media?.videos && tweet.quote.media.videos.length > 0)
   );
-  const bodyMarkdown = [text, author ? `— *${author}*` : '', postUrl].filter(Boolean).join('\n\n');
+
+  const fallbackTitle = handle
+    ? isEn
+      ? `Post by ${handle}`
+      : `Пост ${handle}`
+    : isEn
+      ? 'Post on X'
+      : 'Пост в X';
+  const title = articleTitle
+    ? truncateAtWordBoundary(articleTitle, 120)
+    : deriveHeadlineFromText(combinedMainText || quoteText, fallbackTitle);
+
+  const summarySource = articleBody || combinedMainText || quoteText;
+  const bodyMarkdown = [combinedMainText, quoteBlock, author ? `— *${author}*` : '', postUrl]
+    .filter(Boolean)
+    .join('\n\n');
 
   return {
     platform: 'x',
     pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo,
     author,
     publishedAt: tweet.created_at ?? null,
     title,
-    description: text ? truncateAtWordBoundary(text, 220) : null,
+    description: summarySource ? truncateAtWordBoundary(summarySource, 220) : null,
     bodyMarkdown,
     ogImageUrl: galleryUrls[0] ?? null,
     galleryUrls,
     videoUrl,
     videoDurationSec: typeof firstVideo?.duration === 'number' ? firstVideo.duration : null,
+  };
+}
+
+export function parseTwitterSyndicationResponse(
+  json: unknown,
+  postUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  const isEn = locale === 'en';
+  if (!json || typeof json !== 'object') return null;
+  interface SyndTweet {
+    text?: string;
+    created_at?: string;
+    user?: { name?: string; screen_name?: string };
+    photos?: Array<{ url?: string }>;
+    mediaDetails?: Array<{
+      type?: string;
+      media_url_https?: string;
+      video_info?: {
+        duration_millis?: number;
+        variants?: Array<{ content_type?: string; bitrate?: number; url?: string }>;
+      };
+    }>;
+    video?: {
+      poster?: string;
+      durationMs?: number;
+      variants?: Array<{ type?: string; src?: string }>;
+    };
+    quoted_tweet?: SyndTweet;
+    article?: { title?: string; preview_text?: string };
+  }
+  const t = json as SyndTweet;
+  const text = decodeHtmlEntities(t.text || '').trim();
+  const articleTitle = decodeHtmlEntities(t.article?.title || '').trim();
+  const articlePreview = decodeHtmlEntities(t.article?.preview_text || '').trim();
+  if (!text && !articleTitle && !t.mediaDetails?.length && !t.photos?.length && !t.video) return null;
+
+  const authorName = t.user?.name?.trim() || '';
+  const handle = t.user?.screen_name ? `@${t.user.screen_name}` : '';
+  const author = [authorName, handle].filter(Boolean).join(' ') || null;
+
+  const galleryUrls: string[] = [];
+  const pushImg = (raw?: string | null) => {
+    const safe = sanitizeSafeExternalUrl(raw);
+    if (safe && !galleryUrls.includes(safe)) galleryUrls.push(safe);
+  };
+  for (const p of t.photos ?? []) pushImg(p.url);
+
+  let videoUrl: string | null = null;
+  let videoDurationSec: number | null = null;
+  let hasVideo = false;
+  for (const m of t.mediaDetails ?? []) {
+    if (m.type === 'photo') {
+      pushImg(m.media_url_https);
+    } else if (m.type === 'video' || m.type === 'animated_gif') {
+      hasVideo = true;
+      pushImg(m.media_url_https);
+      const mp4Variants = (m.video_info?.variants ?? [])
+        .filter((v) => (v.content_type || '').includes('mp4') && v.url)
+        .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+      if (!videoUrl && mp4Variants[0]?.url) {
+        videoUrl = sanitizeSafeExternalUrl(mp4Variants[0].url);
+      }
+      if (videoDurationSec === null && typeof m.video_info?.duration_millis === 'number') {
+        videoDurationSec = Math.round(m.video_info.duration_millis / 1000);
+      }
+    }
+  }
+  if (t.video) {
+    hasVideo = true;
+    pushImg(t.video.poster);
+    if (!videoUrl) {
+      const mp4 = (t.video.variants ?? []).find((v) => (v.type || '').includes('mp4') && v.src);
+      if (mp4?.src) {
+        videoUrl = sanitizeSafeExternalUrl(mp4.src);
+      }
+    }
+    if (videoDurationSec === null && typeof t.video.durationMs === 'number') {
+      videoDurationSec = Math.round(t.video.durationMs / 1000);
+    }
+  }
+
+  const quoteAuthor = t.quoted_tweet?.user?.screen_name
+    ? `@${t.quoted_tweet.user.screen_name}`
+    : t.quoted_tweet?.user?.name?.trim() || '';
+  const quoteText = decodeHtmlEntities(t.quoted_tweet?.text || '').trim();
+  const quoteBlock = quoteText
+    ? `> ${quoteAuthor ? `**${quoteAuthor}**: ` : ''}${quoteText.replace(/\r?\n/g, '\n> ')}`
+    : '';
+
+  const mainText = articlePreview && !text.includes(articlePreview) ? [text, articlePreview].filter(Boolean).join('\n\n') : text;
+  const fallbackTitle = handle
+    ? isEn
+      ? `Post by ${handle}`
+      : `Пост ${handle}`
+    : isEn
+      ? 'Post on X'
+      : 'Пост в X';
+  const title = articleTitle
+    ? truncateAtWordBoundary(articleTitle, 120)
+    : deriveHeadlineFromText(mainText || quoteText, fallbackTitle);
+
+  return {
+    platform: 'x',
+    pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo,
+    author,
+    publishedAt: t.created_at ?? null,
+    title,
+    description: (mainText || quoteText) ? truncateAtWordBoundary(mainText || quoteText, 220) : null,
+    bodyMarkdown: [mainText, quoteBlock, author ? `— *${author}*` : '', postUrl]
+      .filter(Boolean)
+      .join('\n\n'),
+    ogImageUrl: galleryUrls[0] ?? null,
+    galleryUrls,
+    videoUrl,
+    videoDurationSec,
+  };
+}
+
+export function parseVxTwitterResponse(
+  json: unknown,
+  postUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  const isEn = locale === 'en';
+  if (!json || typeof json !== 'object') return null;
+  interface VxTweet {
+    text?: string;
+    date?: string;
+    user_name?: string;
+    user_screen_name?: string;
+    mediaURLs?: string[];
+    media_extended?: Array<{
+      type?: string;
+      url?: string;
+      thumbnail_url?: string;
+      duration_millis?: number;
+    }>;
+    qrt?: VxTweet;
+  }
+  const vx = json as VxTweet;
+  const text = decodeHtmlEntities(vx.text || '').trim();
+  if (!text && !vx.media_extended?.length && !vx.mediaURLs?.length) return null;
+
+  const authorName = vx.user_name?.trim() || '';
+  const handle = vx.user_screen_name ? `@${vx.user_screen_name}` : '';
+  const author = [authorName, handle].filter(Boolean).join(' ') || null;
+
+  const galleryUrls: string[] = [];
+  const pushImg = (raw?: string | null) => {
+    const safe = sanitizeSafeExternalUrl(raw);
+    if (safe && !galleryUrls.includes(safe)) galleryUrls.push(safe);
+  };
+  let videoUrl: string | null = null;
+  let videoDurationSec: number | null = null;
+  let hasVideo = false;
+  for (const m of vx.media_extended ?? []) {
+    if (m.type === 'image') {
+      pushImg(m.url);
+    } else if (m.type === 'video' || m.type === 'gif') {
+      hasVideo = true;
+      if (!videoUrl) videoUrl = sanitizeSafeExternalUrl(m.url);
+      pushImg(m.thumbnail_url);
+      if (videoDurationSec === null && typeof m.duration_millis === 'number') {
+        videoDurationSec = Math.round(m.duration_millis / 1000);
+      }
+    }
+  }
+  if (galleryUrls.length === 0) {
+    for (const u of vx.mediaURLs ?? []) {
+      if (/\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(u)) pushImg(u);
+    }
+  }
+
+  const qrtAuthor = vx.qrt?.user_screen_name ? `@${vx.qrt.user_screen_name}` : vx.qrt?.user_name?.trim() || '';
+  const qrtText = decodeHtmlEntities(vx.qrt?.text || '').trim();
+  const quoteBlock = qrtText
+    ? `> ${qrtAuthor ? `**${qrtAuthor}**: ` : ''}${qrtText.replace(/\r?\n/g, '\n> ')}`
+    : '';
+
+  const fallbackTitle = handle
+    ? isEn
+      ? `Post by ${handle}`
+      : `Пост ${handle}`
+    : isEn
+      ? 'Post on X'
+      : 'Пост в X';
+
+  return {
+    platform: 'x',
+    pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo,
+    author,
+    publishedAt: vx.date ?? null,
+    title: deriveHeadlineFromText(text || qrtText, fallbackTitle),
+    description: (text || qrtText) ? truncateAtWordBoundary(text || qrtText, 220) : null,
+    bodyMarkdown: [text, quoteBlock, author ? `— *${author}*` : '', postUrl]
+      .filter(Boolean)
+      .join('\n\n'),
+    ogImageUrl: galleryUrls[0] ?? null,
+    galleryUrls,
+    videoUrl,
+    videoDurationSec,
+  };
+}
+
+export function parseTwitterOembedResponse(
+  json: unknown,
+  postUrl: string,
+  locale: AppLocale = 'ru'
+): Partial<UnfurlResult> | null {
+  const isEn = locale === 'en';
+  if (!json || typeof json !== 'object') return null;
+  const oe = json as { author_name?: string; author_url?: string; html?: string };
+  if (!oe.html && !oe.author_name) return null;
+
+  let text = '';
+  if (oe.html) {
+    const doc = parseHtmlDocument(oe.html);
+    const pEl = doc.querySelector('blockquote p') ?? doc.querySelector('p');
+    text = normalizeMetaText(pEl?.textContent || '');
+  }
+  const handleMatch = /\/([a-zA-Z0-9_]{1,32})\/?$/.exec(oe.author_url || '');
+  const handle = handleMatch?.[1] ? `@${handleMatch[1]}` : '';
+  const author = [oe.author_name?.trim() || '', handle].filter(Boolean).join(' ') || null;
+  if (!text && !author) return null;
+
+  const fallbackTitle = handle
+    ? isEn
+      ? `Post by ${handle}`
+      : `Пост ${handle}`
+    : isEn
+      ? 'Post on X'
+      : 'Пост в X';
+
+  return {
+    platform: 'x',
+    pageKind: 'platform',
+    linkAccess: 'public',
+    hasVideo: false,
+    author,
+    publishedAt: null,
+    title: deriveHeadlineFromText(text, fallbackTitle),
+    description: text ? truncateAtWordBoundary(text, 220) : null,
+    bodyMarkdown: [text, author ? `— *${author}*` : '', postUrl].filter(Boolean).join('\n\n'),
+    ogImageUrl: null,
+    galleryUrls: [],
+    videoUrl: null,
+    videoDurationSec: null,
   };
 }
 
@@ -540,75 +1012,176 @@ export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promi
     const initial = new URL(rawUrl);
     if (initial.protocol !== 'http:' && initial.protocol !== 'https:') return fallback;
     if (isPrivateOrLocalHostname(initial.hostname)) return fallback;
-    if (!(await isSafeResolvedHost(initial.hostname))) return fallback;
 
     const hostLower = initial.hostname.toLowerCase().replace(/^www\./, '');
 
-    // 1. Telegram Public Post (`t.me/<channel>/<postId>` or `t.me/s/<channel>/<postId>`)
-    const tgMatch = /^(?:s\/)?([a-zA-Z0-9_]{3,})\/(\d+)(?:\/|$)/.exec(
-      initial.pathname.replace(/^\/+/, '')
-    );
-    if ((hostLower === 't.me' || hostLower === 'telegram.me') && tgMatch && tgMatch[1] !== 'c') {
-      const channel = tgMatch[1]!;
-      const postId = tgMatch[2]!;
-      const embedUrl = `https://t.me/${channel}/${postId}?embed=1&mode=tme`;
-      const embedFetch = await safeFetchWithRedirects(embedUrl, { timeoutMs: 7000 });
-      if (embedFetch && embedFetch.resp.ok) {
-        const html = await readUpToBytes(embedFetch.resp, 260_000);
-        const parsed = parseTelegramPostHtml(html, rawUrl, locale);
-        if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
-          return {
-            ...fallback,
-            ...parsed,
-            canonicalUrl: `https://t.me/${channel}/${postId}`,
-            domain: 't.me',
-          };
-        }
+    // 1. Telegram Private (`t.me/c/<chatId>/<msgId>` or invite) & Public 3-tier fallback
+    if (hostLower === 't.me' || hostLower === 'telegram.me') {
+      const privateTg = classifyPrivateTelegramUrl(rawUrl, locale);
+      if (privateTg) {
+        return {
+          ...fallback,
+          ...privateTg,
+        };
       }
-      // Secondary fallback: public channel feed `t.me/s/<channel>/<postId>` via DOM selector
-      const pubFetch = await safeFetchWithRedirects(`https://t.me/s/${channel}/${postId}`, { timeoutMs: 7000 });
-      if (pubFetch && pubFetch.resp.ok) {
-        const html = await readUpToBytes(pubFetch.resp, 320_000);
-        const feedDoc = parseHtmlDocument(html);
-        const expectedDataPost = `${channel}/${postId}`.toLowerCase();
-        const postNodes = feedDoc.querySelectorAll('[data-post]');
-        let targetOuterHtml = html;
-        for (let i = 0; i < postNodes.length; i++) {
-          const el = postNodes[i]!;
-          if ((el.getAttribute('data-post') || '').toLowerCase() === expectedDataPost) {
-            targetOuterHtml = el.outerHTML || html;
-            break;
+      const tgMatch = /^(?:s\/)?([a-zA-Z0-9_]{3,})\/(\d+)(?:\/|$)/.exec(
+        initial.pathname.replace(/^\/+/, '')
+      );
+      if (tgMatch && tgMatch[1] !== 'c') {
+        const channel = tgMatch[1]!;
+        const postId = tgMatch[2]!;
+        const canonicalTgUrl = `https://t.me/${channel}/${postId}`;
+
+        // Tier 1: Telegram embed widget
+        const embedUrl = `https://t.me/${channel}/${postId}?embed=1&mode=tme`;
+        const embedFetch = await safeFetchWithRedirects(embedUrl, { timeoutMs: 7000 });
+        if (embedFetch && embedFetch.resp.ok) {
+          const html = await readUpToBytes(embedFetch.resp, 260_000);
+          const parsed = parseTelegramPostHtml(html, rawUrl, locale);
+          if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
+            return {
+              ...fallback,
+              ...parsed,
+              canonicalUrl: canonicalTgUrl,
+              domain: 't.me',
+            };
           }
         }
-        const parsed = parseTelegramPostHtml(targetOuterHtml, rawUrl, locale);
-        if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
-          return {
-            ...fallback,
-            ...parsed,
-            canonicalUrl: `https://t.me/${channel}/${postId}`,
-            domain: 't.me',
-          };
+
+        // Tier 2: Public channel feed `t.me/s/<channel>/<postId>` via exact `data-post` selector
+        const pubFetch = await safeFetchWithRedirects(`https://t.me/s/${channel}/${postId}`, {
+          timeoutMs: 7000,
+        });
+        if (pubFetch && pubFetch.resp.ok) {
+          const html = await readUpToBytes(pubFetch.resp, 320_000);
+          const feedDoc = parseHtmlDocument(html);
+          const expectedDataPost = `${channel}/${postId}`.toLowerCase();
+          const postNodes = feedDoc.querySelectorAll('[data-post]');
+          let targetOuterHtml: string | null = null;
+          for (let i = 0; i < postNodes.length; i++) {
+            const el = postNodes[i]!;
+            if ((el.getAttribute('data-post') || '').toLowerCase() === expectedDataPost) {
+              targetOuterHtml = el.outerHTML || null;
+              break;
+            }
+          }
+          if (targetOuterHtml) {
+            const parsed = parseTelegramPostHtml(targetOuterHtml, rawUrl, locale);
+            if (parsed.bodyMarkdown || parsed.ogImageUrl || parsed.videoUrl) {
+              return {
+                ...fallback,
+                ...parsed,
+                canonicalUrl: canonicalTgUrl,
+                domain: 't.me',
+              };
+            }
+          }
         }
+
+        // Tier 3: Plain OG page fallback (`https://t.me/<channel>/<postId>`)
+        const plainFetch = await safeFetchWithRedirects(canonicalTgUrl, { timeoutMs: 6500 });
+        if (plainFetch && plainFetch.resp.ok) {
+          const html = await readUpToBytes(plainFetch.resp, 240_000);
+          const parsedOg = parseTelegramPlainOgFallback(html, rawUrl, channel, locale);
+          if (parsedOg) {
+            return {
+              ...fallback,
+              ...parsedOg,
+              canonicalUrl: canonicalTgUrl,
+              domain: 't.me',
+            };
+          }
+        }
+        return fallback;
       }
     }
 
-    // 2. X / Twitter (`x.com/<user>/status/<id>` or `twitter.com/...`)
+    // 2. X / Twitter (`x.com/<user>/status/<id>` or `twitter.com/...`) — 4-tier fallback chain
+    const isXHost =
+      hostLower === 'x.com' ||
+      hostLower === 'twitter.com' ||
+      hostLower === 'mobile.x.com' ||
+      hostLower === 'mobile.twitter.com' ||
+      hostLower === 'fxtwitter.com' ||
+      hostLower === 'vxtwitter.com';
     const xMatch = /^([a-zA-Z0-9_]{1,32})\/status\/(\d+)/.exec(initial.pathname.replace(/^\/+/, ''));
-    if ((hostLower === 'x.com' || hostLower === 'twitter.com') && xMatch) {
-      const apiUrl = `https://api.fxtwitter.com/${xMatch[1]}/status/${xMatch[2]}`;
-      const fx = await safeFetchWithRedirects(apiUrl, { accept: 'application/json', timeoutMs: 6500 });
+    if (isXHost && xMatch) {
+      const xUser = xMatch[1]!;
+      const xStatusId = xMatch[2]!;
+      const canonicalXUrl = `https://x.com/${xUser}/status/${xStatusId}`;
+
+      // Tier 1: FxTwitter JSON API (supports tweets, media, quotes, and X Articles)
+      const fx = await safeFetchWithRedirects(
+        `https://api.fxtwitter.com/${xUser}/status/${xStatusId}`,
+        { accept: 'application/json', timeoutMs: 6500 }
+      );
       if (fx && fx.resp.ok) {
         const json = await fx.resp.json().catch(() => null);
-        const parsed = parseFxTwitterResponse(json, rawUrl, locale);
+        const parsed = parseFxTwitterResponse(json, canonicalXUrl, locale);
         if (parsed) {
           return {
             ...fallback,
             ...parsed,
-            canonicalUrl: rawUrl,
-            domain: hostLower,
+            canonicalUrl: canonicalXUrl,
+            domain: 'x.com',
           };
         }
       }
+
+      // Tier 2: Twitter Syndication CDN
+      const synd = await safeFetchWithRedirects(
+        `https://cdn.syndication.twimg.com/tweet-result?id=${xStatusId}&lang=${locale}&token=4a`,
+        { accept: 'application/json', timeoutMs: 6500 }
+      );
+      if (synd && synd.resp.ok) {
+        const json = await synd.resp.json().catch(() => null);
+        const parsed = parseTwitterSyndicationResponse(json, canonicalXUrl, locale);
+        if (parsed) {
+          return {
+            ...fallback,
+            ...parsed,
+            canonicalUrl: canonicalXUrl,
+            domain: 'x.com',
+          };
+        }
+      }
+
+      // Tier 3: VxTwitter JSON API
+      const vx = await safeFetchWithRedirects(
+        `https://api.vxtwitter.com/${xUser}/status/${xStatusId}`,
+        { accept: 'application/json', timeoutMs: 6500 }
+      );
+      if (vx && vx.resp.ok) {
+        const json = await vx.resp.json().catch(() => null);
+        const parsed = parseVxTwitterResponse(json, canonicalXUrl, locale);
+        if (parsed) {
+          return {
+            ...fallback,
+            ...parsed,
+            canonicalUrl: canonicalXUrl,
+            domain: 'x.com',
+          };
+        }
+      }
+
+      // Tier 4: Official Twitter oEmbed
+      const oe = await safeFetchWithRedirects(
+        `https://publish.twitter.com/oembed?url=${encodeURIComponent(canonicalXUrl)}&omit_script=true`,
+        { accept: 'application/json', timeoutMs: 6500 }
+      );
+      if (oe && oe.resp.ok) {
+        const json = await oe.resp.json().catch(() => null);
+        const parsed = parseTwitterOembedResponse(json, canonicalXUrl, locale);
+        if (parsed) {
+          return {
+            ...fallback,
+            ...parsed,
+            canonicalUrl: canonicalXUrl,
+            domain: 'x.com',
+          };
+        }
+      }
+      return fallback;
     }
 
     // 3. YouTube (`youtube.com/watch`, `youtu.be/<id>`, `/shorts/<id>`)
@@ -645,6 +1218,8 @@ export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promi
             ...fallback,
             platform: 'youtube',
             pageKind: 'platform',
+            linkAccess: 'public',
+            hasVideo: true,
             domain: 'youtube.com',
             author: oe.author_name ?? null,
             title: truncateAtWordBoundary(decodeHtmlEntities(oe.title), 120),
@@ -820,6 +1395,8 @@ export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promi
                 ...fallback,
                 platform: 'reddit',
                 pageKind: 'platform',
+                linkAccess: 'public',
+                hasVideo: Boolean(redditVideoUrl),
                 domain: 'reddit.com',
                 author,
                 title: truncateAtWordBoundary(cleanTitle, 120),
@@ -836,7 +1413,99 @@ export async function unfurlUrl(rawUrl: string, locale: AppLocale = 'ru'): Promi
       }
     }
 
-    // 6. Generic HTML (Instagram, Articles/Docs Mode B, Showcases/Directories/Landings Mode C)
+    // 5.5. Instagram public Reel / Post (`instagram.com/reel/...`, `/p/...`, `/tv/...`)
+    // Instagram serves public OG metadata to crawler UAs while redirecting desktop browser UAs to a login shell.
+    if (hostLower === 'instagram.com' || hostLower.endsWith('.instagram.com')) {
+      const isIgVideoKind = /^\/(?:reel|reels|tv)\//i.test(initial.pathname);
+      const isGenericIgTitle = (t?: string | null) =>
+        !t ||
+        /^(?:instagram|log\s*in\s*[•·-]\s*instagram|войти\s*[•·-]\s*instagram|войдите\s+в\s+instagram)$/i.test(
+          t.trim()
+        );
+      const isIgLoginPath = (p: string) => /\/accounts\/login|\/login(?:\/|$)/i.test(p);
+      const isIgLoginBoilerplate = (d?: string | null) =>
+        Boolean(
+          d &&
+            /create an account or log in to instagram|sign up for instagram|log in to instagram|войдите в instagram|создайте аккаунт или войдите в instagram/i.test(
+              d
+            )
+        );
+
+      const crawlerFetch = await safeFetchWithRedirects(rawUrl, {
+        timeoutMs: 7500,
+        headers: {
+          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        },
+      });
+      if (crawlerFetch && crawlerFetch.resp.ok && !isIgLoginPath(crawlerFetch.finalUrl.pathname)) {
+        const html = await readUpToBytes(crawlerFetch.resp, 320_000);
+        const parsed = parseGenericHtmlPage(html, crawlerFetch.finalUrl);
+        const hitLoginWall =
+          (isGenericIgTitle(parsed.title) && isIgLoginBoilerplate(parsed.description)) ||
+          (!parsed.title && !parsed.description && !parsed.author);
+        if (!hitLoginWall && (!isGenericIgTitle(parsed.title) || parsed.description || parsed.ogImageUrl)) {
+          return {
+            ...fallback,
+            ...parsed,
+            canonicalUrl: parsed.canonicalUrl || crawlerFetch.finalUrl.toString(),
+            domain: 'instagram.com',
+            platform: 'instagram',
+            linkAccess: 'public',
+            hasVideo: Boolean(parsed.videoUrl || isIgVideoKind),
+          };
+        }
+      }
+
+      const igPostMatch = /^\/(reel|reels|p|tv)\/([a-zA-Z0-9_-]+)/i.exec(initial.pathname);
+      if (igPostMatch) {
+        const kindNorm = igPostMatch[1]!.toLowerCase() === 'reels' ? 'reel' : igPostMatch[1]!.toLowerCase();
+        const embedUrl = `https://www.instagram.com/${kindNorm}/${igPostMatch[2]}/embed/captioned/`;
+        const embedFetch = await safeFetchWithRedirects(embedUrl, { timeoutMs: 7500 });
+        if (embedFetch && embedFetch.resp.ok && !isIgLoginPath(embedFetch.finalUrl.pathname)) {
+          const html = await readUpToBytes(embedFetch.resp, 320_000);
+          const doc = parseHtmlDocument(html);
+          const meta = extractDocumentMeta(doc, embedFetch.finalUrl, sanitizeSafeExternalUrl);
+          const captionText = normalizeMetaText(doc.querySelector('.Caption')?.textContent || '');
+          const userText = normalizeMetaText(doc.querySelector('.UsernameText')?.textContent || '').replace(/^@/, '');
+          const embedImg = sanitizeSafeExternalUrl(
+            doc.querySelector('.EmbeddedMediaImage')?.getAttribute('src') || meta.ogImageUrl,
+            embedFetch.finalUrl
+          );
+          if (captionText || userText || embedImg) {
+            const escapedUser = userText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const cleanCap = captionText
+              .replace(escapedUser ? new RegExp(`^${escapedUser}\\s+`, 'i') : /^$/, '')
+              .replace(/\s*view all \d+ comments.*$/i, '')
+              .trim();
+            const title = cleanCap
+              ? deriveHeadlineFromText(cleanCap, userText ? `@${userText}` : 'Instagram')
+              : userText
+                ? `@${userText} · Instagram`
+                : null;
+            return {
+              ...fallback,
+              canonicalUrl: `https://www.instagram.com/${kindNorm}/${igPostMatch[2]}/`,
+              domain: 'instagram.com',
+              platform: 'instagram',
+              pageKind: 'platform',
+              linkAccess: 'public',
+              hasVideo: Boolean(meta.ogVideoUrl || isIgVideoKind),
+              author: userText ? `@${userText}` : null,
+              title,
+              description: cleanCap ? truncateAtWordBoundary(cleanCap, 220) : null,
+              bodyMarkdown: [cleanCap, userText ? `— *@${userText}*` : '', rawUrl].filter(Boolean).join('\n\n'),
+              ogImageUrl: embedImg,
+              galleryUrls: embedImg ? [embedImg] : [],
+              videoUrl: meta.ogVideoUrl,
+            };
+          }
+        }
+      }
+      return fallback;
+    }
+
+    // 6. Generic HTML (Articles/Docs Mode B, Showcases/Directories/Landings Mode C)
     const fetched = await safeFetchWithRedirects(rawUrl, { timeoutMs: 7500 });
     if (!fetched) return fallback;
 

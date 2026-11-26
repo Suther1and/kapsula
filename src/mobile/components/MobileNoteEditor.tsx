@@ -7,6 +7,7 @@ import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Typography from '@tiptap/extension-typography';
 import {
+  HIGHLIGHT_SWATCHES,
   KapsulaHighlight,
   KapsulaHorizontalRule,
   TEXT_COLOR_SWATCHES,
@@ -32,6 +33,7 @@ import {
   Lightbulb,
   LinkSimple,
   ListBullets,
+  Minus,
   PushPin,
   Quotes,
   RocketLaunch,
@@ -264,6 +266,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
   const itemIdRef = useRef(item.id);
   const materializedIdRef = useRef<string | null>(isDraftMode ? null : item.id);
+  const promotedFromDraftIdRef = useRef<string | null>(null);
   const materializingPromiseRef = useRef<Promise<string | null> | null>(null);
   const materializedSnapRef = useRef<{ title: string; body: string } | null>(null);
   const sessionGenRef = useRef(0);
@@ -274,8 +277,12 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   const deletedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bodySnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDraftEmitRef = useRef(false);
+  const pendingExternalSyncRef = useRef<{ itemId: string; title: string; body: string } | null>(null);
   const syncingEditorRef = useRef(false);
   const titleAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<ReturnType<typeof useEditor>>(null);
 
   const metaRef = useRef({
     orbit: localOrbit,
@@ -296,6 +303,8 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   onSaveRef.current = onSave;
   const onMaterializeRef = useRef(onMaterializeDraft);
   onMaterializeRef.current = onMaterializeDraft;
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
   const onDraftSavedRef = useRef(onDraftSaved);
   onDraftSavedRef.current = onDraftSaved;
   const allItemsRef = useRef(allItems);
@@ -306,6 +315,37 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   ensureMediaUrlRef.current = ensureMediaUrl;
   const onOpenImageRef = useRef(onOpenImage);
   onOpenImageRef.current = onOpenImage;
+
+  const flushPendingDraftEmit = useCallback(() => {
+    if (draftSyncTimerRef.current) {
+      clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = null;
+    }
+    if (!pendingDraftEmitRef.current) return;
+    pendingDraftEmitRef.current = false;
+    const activeKey = materializedIdRef.current ?? DRAFT_NOTE_ID;
+    onDraftChangeRef.current(activeKey, {
+      title: titleRef.current,
+      body: bodyRef.current,
+      rev: draftRevRef.current,
+    });
+  }, []);
+
+  const scheduleDraftEmit = useCallback(() => {
+    pendingDraftEmitRef.current = true;
+    if (draftSyncTimerRef.current) clearTimeout(draftSyncTimerRef.current);
+    draftSyncTimerRef.current = setTimeout(() => {
+      draftSyncTimerRef.current = null;
+      if (!pendingDraftEmitRef.current) return;
+      pendingDraftEmitRef.current = false;
+      const activeKey = materializedIdRef.current ?? DRAFT_NOTE_ID;
+      onDraftChangeRef.current(activeKey, {
+        title: titleRef.current,
+        body: bodyRef.current,
+        rev: draftRevRef.current,
+      });
+    }, 220);
+  }, []);
 
   const effOrbit = isDraftMode && !materializedIdRef.current ? localOrbit : item.orbit || '';
   const effBoardId =
@@ -376,6 +416,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         });
         if (sessionGenRef.current === expectedGen) {
           materializedIdRef.current = created.id;
+          promotedFromDraftIdRef.current = created.id;
           itemIdRef.current = created.id;
         }
         return created.id;
@@ -403,6 +444,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       clearTimeout(bodySnapTimerRef.current);
       bodySnapTimerRef.current = null;
     }
+    flushPendingDraftEmit();
     setBodySnapshot(bodyRef.current);
 
     while (
@@ -464,7 +506,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       }
     }
     clearSlowPersist();
-  }, [ensureMaterializedId, armSlowPersist, clearSlowPersist]);
+  }, [ensureMaterializedId, armSlowPersist, clearSlowPersist, flushPendingDraftEmit]);
 
   useEffect(() => {
     if (!flushRef) return;
@@ -570,17 +612,13 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     []
   );
 
-  const editor = useEditor({
-    extensions,
-    content: initialBody,
-    contentType: 'markdown',
-    immediatelyRender: false,
-    editorProps: {
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class: 'k-prose',
         'data-testid': 'mobile-note-editor-body',
       },
-      handleClick: (_view, _pos, event) => {
+      handleClick: (_view: unknown, _pos: number, event: MouseEvent) => {
         const target = event.target as HTMLElement | null;
         const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
         if (anchor) {
@@ -593,6 +631,82 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         }
         return false;
       },
+      handleDOMEvents: {
+        beforeinput: (_view: unknown, event: Event) => {
+          const inputEvent = event as InputEvent;
+          if (inputEvent.defaultPrevented || inputEvent.isComposing) return false;
+          const inputType = inputEvent.inputType;
+          if (inputType !== 'insertParagraph' && inputType !== 'insertLineBreak') {
+            return false;
+          }
+          const ed = editorRef.current;
+          if (!ed || ed.isDestroyed) return false;
+
+          inputEvent.preventDefault();
+          if (inputType === 'insertLineBreak') {
+            return ed.commands.setHardBreak();
+          }
+          if (ed.isActive('codeBlock')) {
+            return ed.commands.newlineInCode();
+          }
+          const { $from } = ed.state.selection;
+          const isEmptyBlock = $from.parent.content.size === 0;
+          if (ed.isActive('taskItem')) {
+            if (isEmptyBlock && ed.commands.liftListItem('taskItem')) return true;
+            if (ed.commands.splitListItem('taskItem')) return true;
+          }
+          if (ed.isActive('listItem')) {
+            if (isEmptyBlock && ed.commands.liftListItem('listItem')) return true;
+            if (ed.commands.splitListItem('listItem')) return true;
+          }
+          return ed.commands.enter() || ed.commands.splitBlock({ keepMarks: false });
+        },
+      },
+    }),
+    []
+  );
+
+  const reconcilePendingExternalSync = useCallback((blurred?: 'title' | 'body') => {
+    const pending = pendingExternalSyncRef.current;
+    if (!pending || dirtyRef.current || deletedRef.current) return;
+    if (pending.itemId !== itemIdRef.current) {
+      pendingExternalSyncRef.current = null;
+      return;
+    }
+    const titleFocused =
+      blurred === 'title'
+        ? false
+        : typeof document !== 'undefined' && document.activeElement === titleAreaRef.current;
+    const ed = editorRef.current;
+    const bodyFocused = blurred === 'body' ? false : Boolean(ed?.isFocused);
+
+    if (!titleFocused && pending.title !== titleRef.current) {
+      titleRef.current = pending.title;
+      setTitle(pending.title);
+    }
+    if (!bodyFocused && ed && !ed.isDestroyed && pending.body !== bodyRef.current) {
+      bodyRef.current = pending.body;
+      setBodySnapshot(pending.body);
+      syncingEditorRef.current = true;
+      ed.commands.setContent(pending.body, { contentType: 'markdown', emitUpdate: false });
+      syncingEditorRef.current = false;
+    }
+    if (pending.title === titleRef.current && pending.body === bodyRef.current) {
+      pendingExternalSyncRef.current = null;
+    }
+  }, []);
+
+  const reconcilePendingExternalSyncRef = useRef(reconcilePendingExternalSync);
+  reconcilePendingExternalSyncRef.current = reconcilePendingExternalSync;
+
+  const editor = useEditor({
+    extensions,
+    content: initialBody,
+    contentType: 'markdown',
+    immediatelyRender: false,
+    editorProps,
+    onBlur: () => {
+      reconcilePendingExternalSyncRef.current('body');
     },
     onSelectionUpdate: ({ editor: ed }) => {
       if (!syncingEditorRef.current) {
@@ -601,6 +715,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     },
     onUpdate: ({ editor: ed }) => {
       if (syncingEditorRef.current) return;
+      pendingExternalSyncRef.current = null;
       const md =
         typeof (ed as unknown as { getMarkdown?: () => string }).getMarkdown === 'function'
           ? (ed as unknown as { getMarkdown: () => string }).getMarkdown()
@@ -614,16 +729,12 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         setBodySnapshot(bodyRef.current);
       }, 180);
       draftRevRef.current += 1;
-      const activeKey = materializedIdRef.current ?? DRAFT_NOTE_ID;
-      onDraftChange(activeKey, {
-        title: titleRef.current,
-        body: md,
-        rev: draftRevRef.current,
-      });
+      scheduleDraftEmit();
       detectDockedTrigger(ed);
       scheduleSave();
     },
   });
+  editorRef.current = editor;
 
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
@@ -632,6 +743,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   }, [editor, locale]);
 
   const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
+  const [highlightPaletteOpen, setHighlightPaletteOpen] = useState(false);
 
   const activeFormat = useEditorState({
     editor,
@@ -642,6 +754,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       bold: Boolean(ed?.isActive('bold')),
       italic: Boolean(ed?.isActive('italic')),
       highlight: Boolean(ed?.isActive('highlight')),
+      highlightColor: (ed?.getAttributes('highlight')?.color as string | null) ?? null,
       textColor: (ed?.getAttributes('textColor')?.color as string | null) ?? null,
       taskList: Boolean(ed?.isActive('taskList')),
       bulletList: Boolean(ed?.isActive('bulletList')),
@@ -652,12 +765,45 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
 
   // Switch note OR sync external updates
   useEffect(() => {
+    if (promotedFromDraftIdRef.current && item.id === promotedFromDraftIdRef.current) {
+      promotedFromDraftIdRef.current = null;
+    }
+
     const idChanged = itemIdRef.current !== item.id;
+    const isPendingDraftPromotionRender = Boolean(
+      idChanged &&
+        item.id === DRAFT_NOTE_ID &&
+        promotedFromDraftIdRef.current !== null &&
+        itemIdRef.current === promotedFromDraftIdRef.current
+    );
+    if (isPendingDraftPromotionRender) {
+      return;
+    }
+    const isSamePromotedDraft = Boolean(
+      idChanged &&
+        ((materializedIdRef.current && materializedIdRef.current === item.id) ||
+          (promotedFromDraftIdRef.current && promotedFromDraftIdRef.current === item.id) ||
+          (itemIdRef.current === DRAFT_NOTE_ID &&
+            materializingPromiseRef.current !== null &&
+            item.id !== DRAFT_NOTE_ID &&
+            item.title === (materializedSnapRef.current?.title ?? '') &&
+            item.body === (materializedSnapRef.current?.body ?? '')))
+    );
+
+    if (isSamePromotedDraft) {
+      itemIdRef.current = item.id;
+      materializedIdRef.current = item.id;
+      promotedFromDraftIdRef.current = null;
+      return;
+    }
+
     if (idChanged) {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
+      flushPendingDraftEmit();
+      pendingExternalSyncRef.current = null;
       const outDirty = dirtyRef.current && !deletedRef.current;
       const outId = materializedIdRef.current;
       const outTitle = titleRef.current.trim();
@@ -669,6 +815,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       sessionGenRef.current += 1;
       materializingPromiseRef.current = null;
       materializedSnapRef.current = null;
+      promotedFromDraftIdRef.current = null;
       deletedRef.current = false;
       itemIdRef.current = item.id;
       materializedIdRef.current = item.id === DRAFT_NOTE_ID ? null : item.id;
@@ -721,7 +868,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       setSaveState(item.id === DRAFT_NOTE_ID ? 'draft' : 'saved');
       if (editor) {
         syncingEditorRef.current = true;
-        editor.commands.setContent(nextB, { contentType: 'markdown' });
+        editor.commands.setContent(nextB, { contentType: 'markdown', emitUpdate: false });
         syncingEditorRef.current = false;
       }
       return;
@@ -730,16 +877,37 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     if (!dirtyRef.current && !draft && item.id !== DRAFT_NOTE_ID) {
       const nextT = item.title ?? '';
       const nextB = item.body ?? '';
+      const titleFocused =
+        typeof document !== 'undefined' && document.activeElement === titleAreaRef.current;
+      let deferredTitle: string | null = null;
+      let deferredBody: string | null = null;
       if (nextT !== titleRef.current) {
-        titleRef.current = nextT;
-        setTitle(nextT);
+        if (titleFocused) {
+          deferredTitle = nextT;
+        } else {
+          titleRef.current = nextT;
+          setTitle(nextT);
+        }
       }
       if (nextB !== bodyRef.current && editor) {
-        bodyRef.current = nextB;
-        setBodySnapshot(nextB);
-        syncingEditorRef.current = true;
-        editor.commands.setContent(nextB, { contentType: 'markdown' });
-        syncingEditorRef.current = false;
+        if (editor.isFocused) {
+          deferredBody = nextB;
+        } else {
+          bodyRef.current = nextB;
+          setBodySnapshot(nextB);
+          syncingEditorRef.current = true;
+          editor.commands.setContent(nextB, { contentType: 'markdown', emitUpdate: false });
+          syncingEditorRef.current = false;
+        }
+      }
+      if (deferredTitle !== null || deferredBody !== null) {
+        pendingExternalSyncRef.current = {
+          itemId: item.id,
+          title: deferredTitle ?? titleRef.current,
+          body: deferredBody ?? bodyRef.current,
+        };
+      } else {
+        pendingExternalSyncRef.current = null;
       }
     }
   }, [
@@ -754,6 +922,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     item.remindAt,
     draft,
     editor,
+    flushPendingDraftEmit,
   ]);
 
   useEffect(() => {
@@ -762,24 +931,35 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         clearTimeout(bodySnapTimerRef.current);
         bodySnapTimerRef.current = null;
       }
+      if (draftSyncTimerRef.current) {
+        clearTimeout(draftSyncTimerRef.current);
+        draftSyncTimerRef.current = null;
+      }
       if (dirtyRef.current && !deletedRef.current) {
+        flushPendingDraftEmit();
         void flushSave();
       }
     };
-  }, [flushSave]);
+  }, [flushSave, flushPendingDraftEmit]);
 
   const handleTitleChange = (val: string) => {
-    const clean = val.replace(/\r?\n/g, ' ');
+    const hadNewline = /[\r\n]/.test(val);
+    const clean = val.replace(/\r?\n+$/g, '').replace(/\r?\n/g, ' ');
+    if (clean === titleRef.current) {
+      if (hadNewline) {
+        editor?.commands.focus('start');
+      }
+      return;
+    }
+    pendingExternalSyncRef.current = null;
     setTitle(clean);
     titleRef.current = clean;
     draftRevRef.current += 1;
-    const activeKey = materializedIdRef.current ?? DRAFT_NOTE_ID;
-    onDraftChange(activeKey, {
-      title: clean,
-      body: bodyRef.current,
-      rev: draftRevRef.current,
-    });
+    scheduleDraftEmit();
     scheduleSave();
+    if (hadNewline) {
+      editor?.commands.focus('start');
+    }
   };
 
   const handleUpdateMeta = async (
@@ -811,7 +991,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     setBodySnapshot(tpl.body);
     if (editor) {
       syncingEditorRef.current = true;
-      editor.commands.setContent(tpl.body, { contentType: 'markdown' });
+      editor.commands.setContent(tpl.body, { contentType: 'markdown', emitUpdate: false });
       syncingEditorRef.current = false;
       editor.commands.focus('end');
     }
@@ -981,6 +1161,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       { id: 'bullet', label: t('editor.slashList'), keywords: `bullet list ${t('editor.slashList').toLowerCase()}`, run: () => editor?.chain().focus().toggleBulletList().run() },
       { id: 'quote', label: t('editor.slashQuote'), keywords: `quote ${t('editor.slashQuote').toLowerCase()}`, run: () => editor?.chain().focus().toggleBlockquote().run() },
       { id: 'code', label: t('editor.slashCode'), keywords: `code block ${t('editor.slashCode').toLowerCase()}`, run: () => editor?.chain().focus().toggleCodeBlock().run() },
+      { id: 'hr', label: t('editor.slashDivider'), keywords: `hr divider line separator ${t('editor.slashDivider').toLowerCase()}`, run: () => editor?.chain().focus().setHorizontalRule().run() },
       { id: 'image', label: t('editor.slashPhoto'), keywords: `image photo picture ${t('editor.slashPhoto').toLowerCase()}`, run: () => setPhotoSheetOpen(true) },
       ...noteTemplates.map((tpl) => ({
         id: `tpl-${tpl.id}`,
@@ -1014,7 +1195,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
   const backlinks = useMemo(() => {
     const currentId = materializedIdRef.current ?? item.id;
     if (!currentId || currentId === DRAFT_NOTE_ID) return [];
-    const normTitle = (title || item.title || '').trim().toLowerCase();
+    const normTitle = (item.title || '').trim().toLowerCase();
     return allItems.filter((other) => {
       if (other.id === currentId || other.dna === 'secret') return false;
       if (other.linksOut?.includes(currentId)) return true;
@@ -1024,7 +1205,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       }
       return false;
     });
-  }, [allItems, item.id, item.title, title]);
+  }, [allItems, item.id, item.title]);
 
   const revisions = useMemo(() => {
     if (!historyOpen || !listRevisions || !materializedIdRef.current) return [];
@@ -1088,10 +1269,14 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
     },
     {
       label: t('editor.toolHighlight'),
-      active: Boolean(activeFormat?.highlight),
+      testId: 'note-toolbar-highlight',
+      active: Boolean(activeFormat?.highlight) || highlightPaletteOpen,
       disabled: false,
       icon: Highlighter,
-      run: () => editor?.chain().focus().toggleHighlight().run(),
+      run: () => {
+        setColorPaletteOpen(false);
+        setHighlightPaletteOpen((v) => !v);
+      },
     },
     {
       label: t('editor.toolChecklist'),
@@ -1120,6 +1305,14 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
       disabled: false,
       icon: Code,
       run: () => editor?.chain().focus().toggleCodeBlock().run(),
+    },
+    {
+      label: t('editor.toolDivider'),
+      testId: 'note-toolbar-hr',
+      active: false,
+      disabled: false,
+      icon: Minus,
+      run: () => editor?.chain().focus().setHorizontalRule().run(),
     },
     ...(onInsertInlinePhoto || onAttachPhoto
       ? [
@@ -1498,6 +1691,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
             data-testid="mobile-note-editor-title"
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
+            onBlur={() => reconcilePendingExternalSync('title')}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
@@ -1741,7 +1935,90 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
         </div>
       ) : null}
 
-      {/* Formatting Toolbar with Undo / Redo, Text Color & Inline Photo */}
+      {/* Inline Highlight Color Swatches Row (toggled from toolbar Highlighter button) */}
+      {editor && highlightPaletteOpen ? (
+        <div
+          data-testid="mobile-highlight-color-bar"
+          className="flex items-center gap-1.5 px-3 py-1.5 border-t border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-1)] overflow-x-auto k-no-scrollbar shrink-0"
+        >
+          <button
+            type="button"
+            data-testid="mobile-highlight-clear"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              mobileBridge.haptic('light');
+              editor.chain().focus().unsetHighlight().run();
+              setHighlightPaletteOpen(false);
+            }}
+            aria-label={t('editor.clearHighlight')}
+            className={`k-tap h-7 px-2 rounded-lg border text-[11px] font-medium shrink-0 ${
+              !activeFormat?.highlight
+                ? 'border-[var(--k-accent)] bg-[var(--k-accent-soft)] text-[var(--k-accent)]'
+                : 'border-[var(--k-border-hairline)] bg-[var(--k-bg-surface-2)] text-[var(--k-ink-secondary)]'
+            }`}
+          >
+            {t('editor.clearHighlight')}
+          </button>
+          <button
+            type="button"
+            data-testid="mobile-highlight-swatch-accent"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              mobileBridge.haptic('light');
+              if (activeFormat?.highlight && !activeFormat?.highlightColor) {
+                editor.chain().focus().unsetHighlight().run();
+              } else {
+                editor.chain().focus().setHighlight().run();
+              }
+              setHighlightPaletteOpen(false);
+            }}
+            aria-label={t('editor.toolHighlight')}
+            className={`k-tap w-7 h-7 rounded-lg flex items-center justify-center border shrink-0 ${
+              activeFormat?.highlight && !activeFormat?.highlightColor
+                ? 'border-[var(--k-ink-primary)] bg-[var(--k-bg-surface-2)]'
+                : 'border-transparent hover:bg-[var(--k-bg-surface-2)]'
+            }`}
+          >
+            <span
+              className="w-4 h-4 rounded-md ring-1 ring-black/15"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--k-accent) 42%, transparent)' }}
+            />
+          </button>
+          {HIGHLIGHT_SWATCHES.map((sw) => {
+            const active = activeFormat?.highlight && activeFormat?.highlightColor === sw.key;
+            return (
+              <button
+                key={sw.key}
+                type="button"
+                data-testid={`mobile-highlight-swatch-${sw.key}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  mobileBridge.haptic('light');
+                  if (active) {
+                    editor.chain().focus().unsetHighlight().run();
+                  } else {
+                    editor.chain().focus().setHighlight({ color: sw.key }).run();
+                  }
+                  setHighlightPaletteOpen(false);
+                }}
+                aria-label={locale === 'en' ? sw.labelEn : sw.labelRu}
+                className={`k-tap w-7 h-7 rounded-lg flex items-center justify-center border shrink-0 ${
+                  active
+                    ? 'border-[var(--k-ink-primary)] bg-[var(--k-bg-surface-2)]'
+                    : 'border-transparent hover:bg-[var(--k-bg-surface-2)]'
+                }`}
+              >
+                <span
+                  className="w-4 h-4 rounded-md ring-1 ring-black/15"
+                  style={{ backgroundColor: sw.dot }}
+                />
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {/* Formatting Toolbar with Undo / Redo, Text Color, Highlight & Inline Photo */}
       {editor ? (
         <div
           ref={toolbarRef}
@@ -1762,6 +2039,7 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       mobileBridge.haptic('light');
+                      setHighlightPaletteOpen(false);
                       setColorPaletteOpen((v) => !v);
                     }}
                     aria-label={t('editor.toolTextColor')}
@@ -1927,7 +2205,10 @@ export const MobileNoteEditor: React.FC<MobileNoteEditorProps> = ({
                           setBodySnapshot(reverted.body);
                           if (editor) {
                             syncingEditorRef.current = true;
-                            editor.commands.setContent(reverted.body, { contentType: 'markdown' });
+                            editor.commands.setContent(reverted.body, {
+                              contentType: 'markdown',
+                              emitUpdate: false,
+                            });
                             syncingEditorRef.current = false;
                           }
                           setHistoryOpen(false);

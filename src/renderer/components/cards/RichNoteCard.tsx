@@ -62,7 +62,10 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
 }) => {
   const { t, locale, pluralNoun } = useI18n();
   const tasks = useMemo(() => extractCardTasks(item.body), [item.body]);
-  const cleanTitle = cleanBrokenTextArtifacts(item.title || t('dna.note'), true);
+  const cleanTitle = useMemo(
+    () => cleanBrokenTextArtifacts(item.title || t('dna.note'), true),
+    [item.title, t]
+  );
 
   const inlineMediaFiles = useMemo(
     () => (!item.thumbPath && !item.imagePath ? extractInlineMediaFilenames(item.body) : []),
@@ -87,7 +90,10 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
     return cleanBrokenTextArtifacts(text, true);
   }, [item.body, item.summary, cleanTitle, tasks.length]);
 
-  const compactSubline = cleanPreview || tasks.map((t) => t.text).join(' · ');
+  const compactSubline = useMemo(
+    () => cleanPreview || tasks.map((task) => task.text).join(' · '),
+    [cleanPreview, tasks]
+  );
 
   if (compactList) {
     return (
@@ -114,6 +120,8 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
             <img
               src={inlineThumbUrl}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="w-full h-full object-cover block"
             />
           </div>
@@ -145,6 +153,8 @@ export const RichNoteCard: React.FC<RichNoteCardProps> = React.memo(({
           <img
             src={inlineThumbUrl}
             alt=""
+            loading="lazy"
+            decoding="async"
             className="w-full h-[132px] object-cover block"
           />
           {inlineMediaFiles.length > 1 ? (

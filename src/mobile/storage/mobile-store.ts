@@ -2189,6 +2189,8 @@ export class MobileVaultStore {
     mediaType?: string | null;
     mediaDurationSec?: number | null;
     mediaMeta?: MediaMeta | null;
+    ogImageUrl?: string | null;
+    extractedActions?: VaultItem['extractedActions'];
     isPinned?: boolean;
     isMuted?: boolean;
     preserveEmptyTitle?: boolean;
@@ -2230,9 +2232,9 @@ export class MobileVaultStore {
       mediaType: input.mediaType ?? null,
       mediaDurationSec: input.mediaDurationSec ?? null,
       mediaMeta: input.mediaMeta ?? null,
-      ogImageUrl: null,
+      ogImageUrl: input.ogImageUrl ?? null,
       ocrText: '',
-      extractedActions: [],
+      extractedActions: input.extractedActions ?? [],
       colorPalette: [],
       hasEncryptedPayload: false,
       encryptedSecretPayload: null,
@@ -2281,6 +2283,10 @@ export class MobileVaultStore {
         | 'body'
         | 'summary'
         | 'url'
+        | 'domain'
+        | 'platform'
+        | 'ogImageUrl'
+        | 'extractedActions'
         | 'orbit'
         | 'focusBoardId'
         | 'tags'
@@ -2310,6 +2316,7 @@ export class MobileVaultStore {
       bodyChanged ||
       patch.summary !== undefined ||
       patch.url !== undefined ||
+      patch.ogImageUrl !== undefined ||
       patch.mediaMeta !== undefined ||
       patch.imagePath !== undefined ||
       patch.mediaPath !== undefined;
@@ -2343,8 +2350,18 @@ export class MobileVaultStore {
       ...existing,
       ...patch,
       url: nextUrl,
-      domain: patch.url !== undefined ? extractUrlDomain(nextUrl) : existing.domain,
-      platform: patch.url !== undefined ? detectLinkPlatform(nextUrl) : existing.platform,
+      domain:
+        patch.domain !== undefined
+          ? patch.domain
+          : patch.url !== undefined
+            ? extractUrlDomain(nextUrl)
+            : existing.domain,
+      platform:
+        patch.platform !== undefined
+          ? patch.platform
+          : patch.url !== undefined
+            ? detectLinkPlatform(nextUrl)
+            : existing.platform,
       linksOut: nextLinksOut,
       contentHash:
         existing.dna === 'secret'
